@@ -13,7 +13,7 @@ Sprint 0 — engineering foundation. **No application code yet.**
 
 | | |
 |---|---|
-| Current ticket | LL-000 — Architecture Decisions (in progress) |
+| Current ticket | LL-000 — Architecture Decisions ✅ |
 | Next ticket | LL-001 — Repository Bootstrap |
 | Gate | Gate 0 not yet reached |
 
