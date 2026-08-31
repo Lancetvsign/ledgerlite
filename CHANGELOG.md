@@ -12,3 +12,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the pull request template, and the 25 ticket definitions for Sprints 0–3.
   ADR-001 and ADR-004 were verified empirically against `drizzle-orm@0.45.2` and
   `@neondatabase/serverless@1.1.0` rather than asserted.
+- **LL-001** — Next.js 16 App Router application with React 19, Tailwind 4, and strict
+  TypeScript. Type-aware ESLint with the ADR-001 ledger import boundary enforced.
+  `npm run ci` chains lint, typecheck, test, and build.
+- **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
+  `typescript-eslint` support, which would silently disable every type-aware rule
+  including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

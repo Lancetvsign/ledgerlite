@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ledger-ink: #16211c;
+  --color-ledger-paper: #f6f8f5;
+  --color-ledger-accent: #0e6b50;
+}
+
+:root {
+  color-scheme: light dark;
+}

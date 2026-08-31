@@ -9,12 +9,13 @@ A slow correct ledger is a product. A fast incorrect ledger is a liability.
 
 ## Status
 
-Sprint 0 — engineering foundation. **No application code yet.**
+Sprint 0 — engineering foundation. The application shell exists; **no accounting
+functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-000 — Architecture Decisions ✅ |
-| Next ticket | LL-001 — Repository Bootstrap |
+| Current ticket | LL-001 — Repository Bootstrap ✅ |
+| Next ticket | LL-002 — Neon + Drizzle Foundation |
 | Gate | Gate 0 not yet reached |
 
 ## Start here
@@ -68,9 +69,20 @@ cp .env.example .env.local   # then fill in YOUR OWN Neon dev branch URL
 npm run dev
 ```
 
-Commands arrive with the tickets that need them: `db:generate`, `db:migrate`,
-`db:studio` in LL-002; `test`, `test:unit`, `test:integration`, `test:e2e` in LL-003;
-`lint`, `typecheck`, `ci` in LL-001.
+| Command | Does |
+|---|---|
+| `npm run dev` | Dev server on :3000 |
+| `npm run lint` | ESLint, type-aware |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run build` | Production build; type errors fail it |
+| `npm run ci` | lint → typecheck → test → build |
+
+Still to arrive: `db:generate` / `db:migrate` / `db:studio` in LL-002, and the real
+`test:unit` / `test:integration` / `test:e2e` in LL-003.
+
+**Toolchain versions are pinned deliberately** — TypeScript 6.0.3 and ESLint 9.x, both
+one major behind. Read [ADR-009](docs/DECISIONS.md#adr-009) before upgrading either:
+TypeScript 7 silently disables every type-aware lint rule rather than failing loudly.
 
 ## Working on a ticket
 

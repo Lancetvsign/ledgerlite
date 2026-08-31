@@ -16,8 +16,10 @@ the original is never edited or deleted, so the reasoning trail survives.
 | [006](#adr-006) | Records are deactivated, never deleted; `status` is the vocabulary | Accepted |
 | [007](#adr-007) | Reversal date is caller-supplied, defaults to today, must be open | Accepted |
 | [008](#adr-008) | No row-level security; composite FKs plus the authorization layer | Accepted |
+| [009](#adr-009) | TypeScript pinned below 7.x and ESLint below 10.x to keep type-aware linting | Accepted |
 
-Decided 2026-08-31. Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 22.
+ADR-001 through ADR-008 decided 2026-08-31 (LL-000); ADR-009 added 2026-08-31 (LL-001).
+Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 22.
 
 ---
 
@@ -493,3 +495,76 @@ LedgerLite exposes direct SQL access — an analytics connection, a customer-fac
 API, a BI integration — to anything that is not the application itself. At that point the
 authorization layer is no longer in the path and RLS becomes necessary rather than
 redundant.
+
+---
+
+<a id="adr-009"></a>
+## ADR-009 — Toolchain version pinning
+
+**Status** Accepted · **Added by** LL-001
+
+### Context
+
+At the time of LL-001 the newest published versions were TypeScript 7.0.2 and
+ESLint 10.9.1. Neither is usable here, and both failures were found by attempting the
+upgrade rather than by reading changelogs.
+
+**TypeScript 7.** `typescript-eslint@8.69.0` — including its `canary` build — declares
+`peerDependencies.typescript: >=4.8.4 <6.1.0`. No release supports TypeScript 7. Adopting
+TS 7 therefore means giving up **type-aware linting entirely**, since those rules require
+typescript-eslint's type information.
+
+The rules lost would include `no-floating-promises`. In an accounting application that is
+not a style rule. An un-awaited `dbTx.transaction(...)` returns immediately, the caller
+observes success, and the posting may never commit — a silent financial defect of exactly
+the kind this project exists to prevent, and one no test reliably catches because it is
+timing dependent.
+
+**ESLint 10.** `eslint-config-next@16.3.4` declares `peerDependencies.eslint: >=9.0.0`,
+which is optimistic rather than accurate. Under ESLint 10 the observed failures were:
+
+```
+src/app/page.tsx     TypeError: Error while loading rule 'react/display-name':
+                     contextOrFilename.getFilename is not a function
+eslint.config.mjs    TypeError: scopeManager.addGlobals is not a function
+```
+
+`eslint-plugin-react`, reached transitively through `eslint-config-next`, still calls the
+ESLint 8 context API that ESLint 10 removed. Linting cannot run at all.
+
+### Decision
+
+| Package | Pinned | Newest available | Reason |
+|---|---|---|---|
+| `typescript` | `6.0.3` (exact) | 7.0.2 | typescript-eslint supports `<6.1.0`; type-aware lint is non-negotiable |
+| `eslint` | `^9.39.5` | 10.9.1 | `eslint-config-next@16` is not ESLint 10 compatible |
+| `next` | `16.3.4` (exact) | 16.3.4 | current |
+| `react` / `react-dom` | `19.2.8` (exact) | 19.2.8 | current |
+
+TypeScript and Next are pinned **exactly**, not with a caret. A minor TypeScript bump
+can change type inference, and in this codebase type inference is a correctness control.
+Upgrades are deliberate, reviewed changes, not something a `npm install` performs.
+
+`baseUrl` is deliberately absent from `tsconfig.json`. It is deprecated in TypeScript 6
+and removed in 7; `paths` resolves relative to the config file without it. This keeps the
+eventual TS 7 upgrade unblocked by our own configuration.
+
+### Consequences
+
+- Type-aware linting works: `no-floating-promises`, `no-misused-promises`,
+  `await-thenable`, `switch-exhaustiveness-check`, and the `no-unsafe-*` family are all
+  active and were each verified to fire against a deliberately bad file.
+- LedgerLite runs one major version behind on TypeScript and ESLint. This is accepted.
+- **A future agent will see "outdated" dependencies and try to upgrade them.** That is
+  the specific failure this ADR exists to prevent. Upgrading TypeScript past 6.0.x
+  silently disables every type-aware rule, because typescript-eslint degrades rather than
+  erroring loudly. Do not upgrade without re-verifying that the rules still fire.
+- `npm outdated` will report these as behind. That is expected, not a defect.
+
+### Revisit if
+
+`typescript-eslint` ships TypeScript 7 support (check
+`npm view typescript-eslint peerDependencies.typescript`), or `eslint-config-next` ships
+genuine ESLint 10 compatibility. In both cases, upgrade and then **re-run the rule proof**
+— confirm `no-floating-promises` still reports against a floating promise before trusting
+the result. A green lint run proves nothing if the rules silently stopped applying.
