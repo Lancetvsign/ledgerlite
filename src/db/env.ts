@@ -45,3 +45,50 @@ export function getDatabaseUrl(): string {
 
   return url;
 }
+
+/**
+ * Connection string for work that needs a real, stable PostgreSQL session:
+ * migrations, advisory locks, anything using session-level state.
+ *
+ * WHY THIS EXISTS. Neon's pooled endpoint (hostname contains `-pooler`) is
+ * PgBouncer in TRANSACTION pooling mode. A client "session" there is not pinned
+ * to one server backend — between statements the backend can be handed to
+ * someone else. Session-level state does not survive that, and
+ * `pg_advisory_lock()` is session-level.
+ *
+ * So a migration runner on the pooled endpoint can acquire its lock on one
+ * backend, run migrations on another, and release on a third. It does not fail
+ * loudly; it just stops protecting anything, which is the worst way for a lock
+ * to be wrong.
+ *
+ * Prefers DATABASE_URL_UNPOOLED (the name Neon and Vercel both use), falling
+ * back to DATABASE_URL only when it is already a direct endpoint.
+ */
+export function getDirectDatabaseUrl(): string {
+  const unpooled = process.env['DATABASE_URL_UNPOOLED'];
+  if (unpooled !== undefined && unpooled.trim() !== '') return unpooled;
+
+  const fallback = getDatabaseUrl();
+
+  if (isPooledEndpoint(fallback)) {
+    throw new Error(
+      'This operation needs a direct (unpooled) connection, but DATABASE_URL points at\n' +
+        `a pooled endpoint:\n\n  ${describeConnection(fallback)}\n\n` +
+        'Neon pooled endpoints run PgBouncer in transaction pooling mode, where\n' +
+        'session-level advisory locks silently stop protecting anything.\n\n' +
+        'Set DATABASE_URL_UNPOOLED in .env.local to the same branch WITHOUT "-pooler"\n' +
+        'in the hostname. See docs/DATABASE.md.',
+    );
+  }
+
+  return fallback;
+}
+
+/** True when the host is a Neon connection-pooler endpoint. */
+export function isPooledEndpoint(connectionString: string): boolean {
+  try {
+    return new URL(connectionString).hostname.includes('-pooler');
+  } catch {
+    return /-pooler/.test(connectionString);
+  }
+}
