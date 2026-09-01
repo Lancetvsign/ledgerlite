@@ -37,6 +37,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`npm run db:target`** — reports which database `DATABASE_URL` points at with
   credentials stripped, whether the safety guard approves it, and the exact
   `TEST_DATABASE_ALLOWLIST` line to add if not.
+- **`db:mark-test` now requires `-- --host <endpoint-id>`** and refuses on mismatch. It is
+  the one command that cannot rely on the marker check (it creates it), so it is the one
+  able to arm the safety system on the wrong database — a risk that grows when
+  `DATABASE_URL` is injected by tooling rather than chosen.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

@@ -64,6 +64,16 @@ Layer 3 is decisive: production will never carry the marker, because nobody ever
 `db:mark-test` against it. Layers 1 and 2 reason about a string a person typed; layer 3
 asks the database what it is.
 
+**`db:mark-test` is the weak point, by construction.** It cannot rely on layer 3 — layer 3
+is what it creates — so it is the one command capable of arming the safety system on the
+wrong database. It therefore requires the operator to name the host explicitly
+(`-- --host ep-…`) and refuses if that does not match `DATABASE_URL`.
+
+Naming the host matters most when `DATABASE_URL` was *injected* rather than chosen: the
+Vercel/Neon integration writes it for you, and an allowlist entry pasted from whatever
+happened to be in `.env.local` proves only that the two agree, not that either is right.
+Typing the endpoint id forces one deliberate look at which branch it actually is.
+
 The marker is deliberately **not** a migration. A migration would install it everywhere,
 including production, defeating the entire mechanism.
 
@@ -76,7 +86,7 @@ including production, defeating the entire mechanism.
 npm run db:target
 # 3. Add those lines to .env.local, then:
 npm run db:migrate
-npm run db:mark-test                 # NEVER against production
+npm run db:mark-test -- --host <endpoint-id>   # NEVER against production
 npm run test:integration
 ```
 
