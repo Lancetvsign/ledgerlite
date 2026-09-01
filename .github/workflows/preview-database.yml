@@ -66,12 +66,18 @@ jobs:
       - run: npm ci
 
       - name: Create schema-only Neon branch
+        id: branch
         run: |
           set -euo pipefail
           # Re-creating on every synchronize would discard a reviewer's manual test
           # data mid-review, so an existing branch is reused.
+          #
+          # Whether it was CREATED matters downstream: the emptiness assertion is
+          # only meaningful on a fresh branch. On a reused one it would fail on our
+          # own seed data, which is what happened the first time this ran twice.
           if npx --yes "$NEONCTL" branches get "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" >/dev/null 2>&1; then
             echo "Reusing existing branch $NEON_BRANCH"
+            echo "created=false" >> "$GITHUB_OUTPUT"
           else
             # --schema-only is the guarantee. Without it this branch would be a
             # copy-on-write clone of production, data included.
@@ -79,6 +85,7 @@ jobs:
               --project-id "$NEON_PROJECT_ID" \
               --name "$NEON_BRANCH" \
               --schema-only
+            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Resolve connection strings
@@ -95,6 +102,9 @@ jobs:
           echo "TEST_DATABASE_ALLOWLIST=$(printf '%s' "$HOST" | cut -d. -f1 | sed -E 's/-pooler$//')" >> "$GITHUB_ENV"
 
       - name: Prove the branch carries no production data
+        # Only on a freshly created branch. A reused one legitimately holds the
+        # seed data this workflow put there on a previous run.
+        if: steps.branch.outputs.created == 'true'
         # A schema-only branch must contain no rows. If this ever finds any, the
         # --schema-only guarantee has silently regressed and production data is
         # about to be served from a Preview URL. Fail before that happens.
@@ -113,6 +123,7 @@ jobs:
       # Destructive, so the script re-verifies emptiness itself rather than
       # trusting the step above to have run.
       - name: Reset schema so migrations apply from scratch
+        if: steps.branch.outputs.created == 'true'
         env:
           APP_ENV: test
         run: npm run db:reset-preview
@@ -122,14 +133,18 @@ jobs:
           APP_ENV: test
         run: npm run db:migrate
 
-      - name: Mark disposable and seed synthetic data
+      - name: Mark disposable
+        if: steps.branch.outputs.created == 'true'
         env:
           APP_ENV: test
-        run: |
-          set -euo pipefail
-          ENDPOINT_ID="$TEST_DATABASE_ALLOWLIST"
-          npm run db:mark-test -- --host "$ENDPOINT_ID"
-          npm run db:seed
+        run: npm run db:mark-test -- --host "$TEST_DATABASE_ALLOWLIST"
+
+      # Always: db:seed is idempotent, and a reused branch may need data a newly
+      # added migration expects.
+      - name: Seed synthetic data
+        env:
+          APP_ENV: test
+        run: npm run db:seed
 
       - name: Point this PR's Preview deployment at it
         run: |
