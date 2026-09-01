@@ -21,33 +21,15 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/neon-serverless';
 
 import { describeConnection, getDatabaseUrl } from '../src/db/env';
+import { assertSafeForDestructiveUse, TEST_MARKER_TABLE } from '../src/db/safety';
 
 config({ path: '.env.local', quiet: true });
-
-const PRODUCTION_MARKERS = ['prod', 'production', 'live', 'main'];
 
 let failures = 0;
 
 function check(label: string, passed: boolean, detail = ''): void {
   if (!passed) failures += 1;
   console.info(`  ${passed ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
-}
-
-function assertNotProduction(connectionString: string): void {
-  const target = describeConnection(connectionString).toLowerCase();
-  const appEnv = process.env['APP_ENV'] ?? 'development';
-
-  const looksProduction = PRODUCTION_MARKERS.some((marker) =>
-    new RegExp(`(^|[^a-z])${marker}([^a-z]|$)`).test(target),
-  );
-
-  if (looksProduction || appEnv === 'production') {
-    throw new Error(
-      `Refusing to run destructive verification against ${describeConnection(connectionString)} ` +
-        `(APP_ENV=${appEnv}). This script drops and recreates tables. ` +
-        `Point DATABASE_URL at your own development branch.`,
-    );
-  }
 }
 
 async function run(command: string, args: readonly string[]): Promise<number> {
@@ -64,9 +46,6 @@ async function main(): Promise<void> {
   const connectionString = getDatabaseUrl();
   console.info(`Verifying against ${describeConnection(connectionString)}\n`);
 
-  assertNotProduction(connectionString);
-  check('target is not production', true);
-
   const globalWebSocket: unknown = globalThis.WebSocket;
   neonConfig.webSocketConstructor = globalWebSocket as typeof neonConfig.webSocketConstructor;
 
@@ -74,6 +53,25 @@ async function main(): Promise<void> {
   const db = drizzle(pool);
 
   try {
+    // The same three-layer guard the integration tests use. See src/db/safety.ts.
+    await assertSafeForDestructiveUse(
+      {
+        connectionString,
+        appEnv: process.env['APP_ENV'],
+        allowlist: process.env['TEST_DATABASE_ALLOWLIST'],
+      },
+      async () => {
+        const r = await db.execute<{ exists: boolean }>(
+          sql`select exists (
+                select 1 from information_schema.tables
+                where table_schema = 'public' and table_name = ${TEST_MARKER_TABLE}
+              ) as exists`,
+        );
+        return r.rows[0]?.exists === true;
+      },
+    );
+    check('target is a marked, allowlisted test database', true);
+
     // --- clean slate ------------------------------------------------------
     await db.execute(sql`drop table if exists "_health"`);
     await db.execute(sql`drop table if exists "drizzle"."__drizzle_migrations"`);
