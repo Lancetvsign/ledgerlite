@@ -180,12 +180,11 @@ directly, which would test a state the application cannot actually produce.
 
 | Suite | Tests | Status |
 |---|---|---|
-| Unit — safety guard | 25 | passing |
-| Unit — fixtures and redaction | 10 | passing |
-| Integration — database smoke | 6 | **written, never executed** — no database available |
+| Unit | 44 | passing |
+| Integration — database smoke | 6 | passing against a real Neon branch |
 | E2E — application shell | 3 | passing |
 
-The integration suite is delivered and typechecked but has never run. It proves
+The integration suite now runs against a real Neon development branch. It proves
 connection, applied migrations, transaction commit, **transaction rollback leaving
-nothing behind**, and that `NUMERIC` returns a string. Until it executes against a real
-database, those properties are asserted but unverified.
+nothing behind**, and that `NUMERIC` returns a string — the four properties Sprint 3
+depends on most.
