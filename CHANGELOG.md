@@ -34,6 +34,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that the clients are accessor functions, not constants, and why. DATABASE.md's setup
   workflow corrected — it omitted `db:mark-test`, so following it would fail at
   `db:verify`.
+- **`npm run db:target`** — reports which database `DATABASE_URL` points at with
+  credentials stripped, whether the safety guard approves it, and the exact
+  `TEST_DATABASE_ALLOWLIST` line to add if not.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

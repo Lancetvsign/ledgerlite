@@ -188,11 +188,18 @@ Order matters — `db:verify` requires the marker, and `db:mark-test` requires t
 to exist:
 
 ```bash
-# .env.local: DATABASE_URL + TEST_DATABASE_ALLOWLIST (your own dev branch only)
+# 1. Put YOUR OWN Neon dev branch URL in .env.local as DATABASE_URL
+# 2. Ask which database that is, and what the guard still needs:
+npm run db:target                    # redacted output only, safe to paste anywhere
+# 3. Add the APP_ENV and TEST_DATABASE_ALLOWLIST lines it prints, then:
 npm run db:migrate
-APP_ENV=test npm run db:mark-test    # NEVER against production
-APP_ENV=test npm run db:verify
+npm run db:mark-test                 # NEVER against production
+npm run db:verify
 ```
+
+`db:target` answers "which database am I actually pointed at?" — the question whose wrong
+answer is most expensive here. It strips credentials, so its output is safe to paste into
+an issue or a chat.
 
 `db:mark-test` is deliberately not a migration. A migration would install the marker
 everywhere, production included, defeating the guard entirely.

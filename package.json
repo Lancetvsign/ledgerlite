@@ -23,7 +23,8 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
-    "test:watch": "vitest --project unit"
+    "test:watch": "vitest --project unit",
+    "db:target": "tsx scripts/db-target.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
