@@ -146,9 +146,14 @@ fails; on 3200 it passes with the dev server still up.
 
 | Port | Used by |
 |---|---|
-| 3000 | `npm run dev` default |
-| 3100 | dev server when launched from the Browser pane (avoids Seatboard on 3000) |
+| 3000 | `npm run dev` with no arguments |
+| 3100 | the `ledgerlite-dev` launch config, from either working directory |
 | 3200 | Playwright's production build — never shared |
+
+`ledgerlite-dev` is defined twice: in this repo's `.claude/launch.json`, and in the parent
+workspace's, because the Browser pane resolves launch configs against the session's
+working directory. Both pin 3100 so the name means one thing either way — and so neither
+collides with Seatboard, which owns 3000 in the parent workspace.
 
 ### Authentication
 
