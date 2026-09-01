@@ -16,6 +16,21 @@
 | Validation | Zod | all external input, server side |
 | Tests | Vitest + Playwright | LL-003 |
 
+## Why each component
+
+Recorded because "why is this here" is the question a future session actually has, and
+the answer is rarely obvious from the dependency list.
+
+| Component | Why this one |
+|---|---|
+| **Neon PostgreSQL** | Branching is the feature. Every PR gets an isolated database, and CI gets a throwaway one per run — impractical with a conventional managed Postgres. PostgreSQL itself because `NUMERIC`, deferred constraint triggers and composite foreign keys are what make the accounting invariants enforceable rather than merely intended. |
+| **Drizzle** | Migrations are plain reviewable SQL files, not an opaque migration DSL. In a financial schema the generated SQL must be readable by a human before it runs. |
+| **decimal.js** | `NUMERIC` is authoritative, but any arithmetic that reaches JavaScript needs exact decimals. See [ADR-004](DECISIONS.md#adr-004). |
+| **Better Auth** | Authentication only. Authorization is ours, because company membership and capabilities are domain concepts no auth library models correctly. |
+| **Zod** | Parsed output types make "this data was validated" a fact the type system carries, not a convention. |
+| **Vitest + Playwright** | Unit and integration in one runner with one config; a real browser for the flows that matter. |
+| **Next.js / Vercel** | Server Components keep financial data server-side by default, and the deployment story is short enough that the interesting risk stays in the ledger rather than the infrastructure. |
+
 ## Directory structure
 
 ```
@@ -24,6 +39,7 @@ src/components/   React components
 src/server/       domain services — LedgerService lives in src/server/ledger/
 src/db/           Drizzle schema, the two clients, migrations
 src/lib/          shared utilities — decimal config, logging, redaction
+src/lib/logging/  structured logger, redaction, request context
 src/validation/   Zod schemas
 tests/unit/       pure logic, no database
 tests/integration/database-backed
