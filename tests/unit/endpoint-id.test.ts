@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { endpointIdFromConnectionString } from '@/db/env';
 
-const ID = 'ep-weathered-night-avdagtxl';
+// Synthetic, per the fixture rules in docs/TESTING.md. This originally used a
+// real endpoint id copied from .env.local while debugging — harmless in itself
+// (an endpoint id is a hostname, not a credential) but exactly the habit that
+// puts real infrastructure identifiers into a repo that may later go public.
+const ID = 'ep-synthetic-fixture-0000';
 const POOLED = `postgresql://u:p@${ID}-pooler.c-11.us-east-1.aws.neon.tech/neondb`;
 const DIRECT = `postgresql://u:p@${ID}.c-11.us-east-1.aws.neon.tech/neondb`;
 
