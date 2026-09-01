@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tests and 3 E2E tests pass; the 6 integration tests are written but unexecuted pending
   a database. E2E runs against a production build so "no console errors" is a real
   assertion.
+- **Follow-ups to LL-001–003** — Playwright moved to a dedicated port (3200) after
+  confirming a running dev server on the shared port silently caused the
+  no-console-errors test to fail. Node pinned to 24 (current LTS, and the version every
+  ticket was actually tested on) instead of an uninstalled 22. ADR-001 amended to record
+  that the clients are accessor functions, not constants, and why. DATABASE.md's setup
+  workflow corrected — it omitted `db:mark-test`, so following it would fail at
+  `db:verify`.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

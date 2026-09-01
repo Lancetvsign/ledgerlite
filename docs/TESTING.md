@@ -138,6 +138,18 @@ empty array.
 
 Retries are off locally so flakiness surfaces immediately rather than being absorbed.
 
+E2E binds port **3200**, deliberately not the dev server's port. `reuseExistingServer`
+would otherwise latch onto a running dev server and silently test a dev build — which is
+exactly the HMR-console-error failure this configuration exists to avoid. Verified: with
+E2E pointed at the dev server's port and a dev server running, the no-console-errors test
+fails; on 3200 it passes with the dev server still up.
+
+| Port | Used by |
+|---|---|
+| 3000 | `npm run dev` default |
+| 3100 | dev server when launched from the Browser pane (avoids Seatboard on 3000) |
+| 3200 | Playwright's production build — never shared |
+
 ### Authentication
 
 `tests/e2e/global-setup.ts` prepares browser storage state once and specs reuse it.

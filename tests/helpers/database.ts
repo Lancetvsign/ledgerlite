@@ -28,7 +28,14 @@ import { closeDbTx, getDbTx, type PoolDatabase } from '@/db';
 import { getDatabaseUrl } from '@/db/env';
 import { assertSafeForDestructiveUse, TEST_MARKER_TABLE } from '@/db/safety';
 
-/** Never truncated: Drizzle's ledger of applied migrations, and the safety marker. */
+/**
+ * Never truncated.
+ *
+ * `__drizzle_migrations` lives in the `drizzle` schema, not `public`, so the query
+ * below never returns it anyway — it is listed as belt-and-braces in case a future
+ * drizzle.config change relocates it to `public`. Removing the marker would make the
+ * safety guard fail on the next run.
+ */
 const PRESERVED_TABLES = new Set([TEST_MARKER_TABLE, '__drizzle_migrations']);
 
 let guardChecked = false;

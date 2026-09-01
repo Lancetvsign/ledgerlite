@@ -85,6 +85,7 @@ READ THE GENERATED SQL, LINE BY LINE          ← not optional
 npm run db:migrate          (your own dev branch)
         ↓
 npm run db:verify           (proves it applies cleanly and is idempotent)
+                            requires a database marked by db:mark-test — see below
         ↓
 commit the migration WITH the schema change
         ↓
@@ -173,10 +174,28 @@ Neon branch, performed deliberately by a human, not an automated down-migration.
 | `npm run db:check` | Validate migration consistency | no |
 | `npm run db:migrate` | Apply migrations under the advisory lock | yes |
 | `npm run db:studio` | Drizzle Studio browser | yes |
-| `npm run db:verify` | Prove migrations apply, are idempotent, and the lock serialises | yes |
+| `npm run db:verify` | Prove migrations apply, are idempotent, and the lock serialises | yes, marked |
+| `npm run db:mark-test` | Mark a database disposable, enabling destructive tests | yes |
 
-`db:verify` is destructive — it drops and recreates `_health`. It refuses to run when the
-connection target or `APP_ENV` looks like production.
+`db:verify` and the integration suite are destructive — they drop and truncate tables. Both
+refuse to run unless **all three** safety layers pass: `APP_ENV=test`, the host appears in
+`TEST_DATABASE_ALLOWLIST`, and the database carries the marker table. See
+[TESTING.md](TESTING.md#the-safety-guard).
+
+### First-time setup for a development branch
+
+Order matters — `db:verify` requires the marker, and `db:mark-test` requires the database
+to exist:
+
+```bash
+# .env.local: DATABASE_URL + TEST_DATABASE_ALLOWLIST (your own dev branch only)
+npm run db:migrate
+APP_ENV=test npm run db:mark-test    # NEVER against production
+APP_ENV=test npm run db:verify
+```
+
+`db:mark-test` is deliberately not a migration. A migration would install the marker
+everywhere, production included, defeating the guard entirely.
 
 ## Environment
 
