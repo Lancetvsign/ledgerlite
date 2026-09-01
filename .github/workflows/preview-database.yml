@@ -147,16 +147,11 @@ jobs:
         run: npm run db:seed
 
       - name: Point this PR's Preview deployment at it
-        run: |
-          set -euo pipefail
-          BRANCH="${{ github.head_ref }}"
-          # Branch-scoped Preview variables override nothing else: production
-          # credentials are not in the Preview scope at all.
-          for VAR in DATABASE_URL DATABASE_URL_UNPOOLED; do
-            npx --yes vercel@54.21.1 env rm "$VAR" preview "$BRANCH" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
-            printf '%s' "${!VAR}" | npx --yes vercel@54.21.1 env add "$VAR" preview "$BRANCH" --token "$VERCEL_TOKEN" >/dev/null
-            echo "set $VAR for preview branch $BRANCH"
-          done
+        # Vercel REST API, not `vercel env add`. The CLI resolves the project from
+        # a .vercel/project.json link file, which is gitignored and absent in CI;
+        # supplying the identifiers only gets as far as "Could not retrieve
+        # Project Settings". The API takes them directly.
+        run: npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}"
 
   teardown:
     name: Destroy preview database
@@ -164,6 +159,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
       - name: Delete Neon branch and Vercel variables
         run: |
           if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
@@ -173,7 +175,6 @@ jobs:
           npx --yes "$NEONCTL" branches delete "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" \
             || echo "::warning title=Branch not deleted::$NEON_BRANCH may still exist"
           if [ -n "$VERCEL_TOKEN" ]; then
-            for VAR in DATABASE_URL DATABASE_URL_UNPOOLED; do
-              npx --yes vercel@54.21.1 env rm "$VAR" preview "${{ github.head_ref }}" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
-            done
+            npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}" --remove \
+              || echo "::warning title=Teardown::preview variables for ${{ github.head_ref }} may remain"
           fi
