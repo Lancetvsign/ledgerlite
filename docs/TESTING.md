@@ -82,6 +82,25 @@ resolve to the destructive answer.
 
 Concurrency groups cancel superseded runs on feature branches but never on `main`.
 
+## Guardrail hooks — scope matters
+
+`.claude/settings.json` installs PreToolUse hooks that block pushes to `main`, bare force
+pushes, `gh pr merge`, `drizzle-kit push`, destructive SQL against accounting tables, and
+`.env.local` access.
+
+**They only load when this repository is the project root.** Claude Code reads
+`.claude/settings.json` from the directory the session was opened in. A session opened in
+a *parent* directory — with `ledgerlite/` as a subfolder — loads nothing, and the hooks
+are silently inert.
+
+This was discovered the hard way in LL-007: an entire session ran believing the guard was
+active when it never loaded. The script had been tested by piping JSON into it, which
+proves the script works and says nothing about whether the hook fires.
+
+**Open Claude Code with `ledgerlite/` as the working directory.** To confirm the hooks are
+live in a session, run a command that should be blocked and check that it actually is —
+testing the script directly does not answer the question.
+
 ## The safety guard
 
 Integration tests truncate tables. `db:verify` drops them. Both are correct against a

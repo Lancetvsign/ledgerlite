@@ -65,6 +65,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-007** — Engineering documentation. `ACCOUNTING_RULES.md` states the eight
+  invariants with the layer that enforces each; `API.md` records service and route
+  conventions before any surface exists; `docs/README.md` orients a session with no prior
+  context. Adds an ADR authoring format.
+- **Guardrail corrections.** The hooks were never loading — they live in
+  `ledgerlite/.claude/settings.json` but a session opened in a parent directory reads
+  nothing. Documented. Two rules were also over-broad: `git merge` blocked merging `main`
+  INTO a feature branch (routine and safe), and the force-push rule blocked
+  `--force-with-lease` on feature branches. Both now key on the actual risk.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

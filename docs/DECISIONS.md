@@ -29,6 +29,36 @@ unverified. LL-004 has no dependency on LL-005 or vice versa — unlike LL-030 �
 this part of the order was not load-bearing.
 Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 24.
 
+## How to add an ADR
+
+Keep it short. An ADR that takes an hour to write does not get written, and the decision
+gets made in a commit message nobody finds later.
+
+```markdown
+<a id="adr-0NN"></a>
+## ADR-0NN — Short title
+
+**Status** Accepted · **Added by** LL-0XX
+
+### Context
+What forced a decision. Include evidence you actually gathered — a command you ran, an
+error you reproduced — not what you recall being true.
+
+### Decision
+One decision, stated plainly. Name the rejected alternative and why it lost.
+
+### Consequences
+What this costs, including what it makes harder. If a future reader will be tempted to
+undo it, say so explicitly and say what breaks.
+
+### Revisit if
+The specific condition under which this should be reopened.
+```
+
+**Never edit or delete an accepted ADR.** Append an amendment (see ADR-001) or write a
+new ADR that supersedes it. The reasoning trail is the point; a tidy file that has lost
+the record of why a decision changed is worth less than a messy one that kept it.
+
 ---
 
 <a id="adr-001"></a>
