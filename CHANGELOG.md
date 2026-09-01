@@ -55,6 +55,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runs the integration suite and `db:verify`, then deletes the branch with
   `if: always()`. A daily reaper removes leaked `test/*` branches. The integration job
   **fails rather than skips** when secrets are missing.
+- **LL-006** — Vercel and Neon environments. Production database credentials removed from
+  Vercel's Preview scope (they targeted both). Preview deployments now get a `--schema-only`
+  Neon branch per PR — schema, zero rows — with an emptiness assertion that fails rather
+  than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
+  disabled in `vercel.json`; production is promoted by a workflow that runs migrations
+  first and stops if they fail. Adds `npm run db:seed`.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.
