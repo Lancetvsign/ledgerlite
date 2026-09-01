@@ -19,7 +19,7 @@
 | 9 | No secrets committed | ✅ | Full history scanned; only synthetic fixtures. Push protection enabled |
 | 10 | All ADRs decided | ✅ | ADR-001…ADR-009 in [DECISIONS.md](DECISIONS.md) |
 | 11 | Feature branches produce Preview deployments | ✅ | Vercel connected to the GitHub repo |
-| 12 | Preview uses an isolated database with no production data | ⏳ | Verified by this PR — see below |
+| 12 | Preview uses an isolated database with no production data | ✅ | Verified by this PR — see below |
 
 ## Item 12 — the one that matters
 
@@ -36,7 +36,21 @@ Three mechanisms now stand between a Preview URL and production data:
 3. production credentials removed from Vercel's Preview scope entirely, so failed
    provisioning yields no `DATABASE_URL` rather than a fallback
 
-This PR is the first execution of that workflow.
+This PR was the first execution of that workflow, and it took five runs to go green —
+each failure a real defect that reading the code had not surfaced:
+
+| Run | Failed at | Cause |
+|---|---|---|
+| 1 | credentials gate | `VERCEL_TOKEN` did not exist yet (deliberate fail-not-skip) |
+| 2 | emptiness assertion | inline `tsx -e` with top-level await never compiled — the check had silently not run |
+| 3 | migrations | a schema-only branch copies the schema but an **empty** `__drizzle_migrations`, so Drizzle re-creates existing tables |
+| 4 | emptiness assertion | on a re-run the branch is reused and legitimately holds our own seed data — the assertion is only meaningful on a fresh branch |
+| 5 | Vercel env step | the CLI resolves projects from a gitignored link file; switched to the REST API |
+
+Final state, verified: schema-only branch created → **emptiness proven by `count(*)` per
+table** → schema reset → migrations applied from committed files → marked disposable →
+seeded → this PR's Preview pointed at it via branch-scoped variables. Confirmed in the
+Vercel dashboard: `DATABASE_URL` scoped to `Preview (docs/gate-0-verification)` only.
 
 ## What Sprint 0 found by running things
 
@@ -59,4 +73,6 @@ says nothing if the lock it exercises is inert.
 
 - **Production deploy gate** — `production-deploy.yml` has never run. Needs
   `PRODUCTION_DATABASE_URL` / `_UNPOOLED`, and there is nothing to promote yet.
-- **`preview/*` teardown on PR close** — runs when this PR closes.
+- **`preview/*` teardown on PR close** — runs when this PR closes or merges. Closing this
+  PR is therefore the final verification step, and whoever merges it should glance at the
+  `Destroy preview database` job afterwards.
