@@ -1,0 +1,128 @@
+import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
+import tseslint from 'typescript-eslint';
+
+/**
+ * LedgerLite ESLint configuration.
+ *
+ * Rules here are chosen for CORRECTNESS and SECURITY, not style. We deliberately
+ * do not add stylistic rules — formatting noise trains reviewers to skim, and this
+ * codebase needs reviewers who read.
+ *
+ * Type-aware linting is enabled (`projectService`). It is the reason TypeScript is
+ * pinned below 7.x — see docs/DECISIONS.md ADR-009.
+ */
+export default tseslint.config(
+  {
+    ignores: [
+      '.next/**',
+      'node_modules/**',
+      'coverage/**',
+      'test-results/**',
+      'playwright-report/**',
+      'next-env.d.ts',
+      'drizzle/migrations/**',
+    ],
+  },
+
+  ...nextCoreWebVitals,
+
+  // Type-aware rules for our own TypeScript source.
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    extends: [...tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      /* --- Async correctness. ---------------------------------------------
+         The highest-value rules in this file. An un-awaited transaction returns
+         before the posting completes while the caller believes it succeeded —
+         exactly the class of silent financial defect this project exists to
+         prevent. These are errors, never warnings. */
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+      '@typescript-eslint/await-thenable': 'error',
+      '@typescript-eslint/require-await': 'error',
+      '@typescript-eslint/return-await': ['error', 'always'],
+
+      /* --- Type honesty. --------------------------------------------------
+         `any` disables every other guarantee in this file. Where it is genuinely
+         unavoidable, disable the rule inline WITH a reason on the line above. */
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unsafe-assignment': 'error',
+      '@typescript-eslint/no-unsafe-member-access': 'error',
+      '@typescript-eslint/no-unsafe-call': 'error',
+      '@typescript-eslint/no-unsafe-return': 'error',
+      '@typescript-eslint/no-unsafe-argument': 'error',
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        { 'ts-expect-error': 'allow-with-description', minimumDescriptionLength: 10 },
+      ],
+
+      /* --- Exhaustiveness. ------------------------------------------------
+         Account types, entry statuses, and source types are unions. Adding a
+         variant must break the build everywhere it is handled, not default
+         silently to some fallback branch. */
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+
+      /* --- Dead code. ----------------------------------------------------- */
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+
+      /* --- Import hygiene, paired with verbatimModuleSyntax. --------------- */
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { fixStyle: 'separate-type-imports' },
+      ],
+    },
+  },
+
+  /* --- ADR-001 boundary. -------------------------------------------------
+     The Neon HTTP driver's `.transaction()` exists and typechecks, then throws
+     at runtime. The type system cannot catch its misuse, so lint does.
+     Financial write paths use `dbTx` (Pool) exclusively.
+
+     This rule is active before src/server/ledger/ exists, so the boundary holds
+     from the first line written there rather than being retrofitted. */
+  {
+    files: ['src/server/ledger/**/*.ts', 'src/server/ledger/**/*.tsx'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'drizzle-orm/neon-http',
+              message:
+                'Financial write paths must use the Pool client (drizzle-orm/neon-serverless). ' +
+                'The HTTP driver does not support interactive transactions — it throws at ' +
+                'runtime, not compile time. See docs/DECISIONS.md ADR-001.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['**/db/http', '**/db/http.*'],
+              message:
+                'Import { dbTx } from the database module, not the HTTP client. See ADR-001.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  /* Config files run in Node and are not part of the app's type program. */
+  {
+    files: ['*.mjs', '*.js', '*.config.ts'],
+    extends: [tseslint.configs.disableTypeChecked],
+  },
+);

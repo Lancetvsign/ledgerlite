@@ -12,13 +12,12 @@ next-env.d.ts
 # vercel
 .vercel
 
-# environment — NEVER commit real values
-.env
-.env.local
-.env.*.local
-.env.development
-.env.preview
-.env.production
+# environment — NEVER commit real values.
+# Broad by design: any new .env variant is ignored by default rather than needing
+# a rule added for it. The single negation must stay LAST, or it is overridden.
+# `vercel link` appends its own `.env*` line; consolidated here so the negation
+# cannot end up above it.
+.env*
 !.env.example
 
 # testing
@@ -27,6 +26,7 @@ coverage/
 test-results/
 playwright-report/
 playwright/.cache/
+tests/e2e/.auth/
 blob-report/
 
 # typescript

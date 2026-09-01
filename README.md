@@ -9,12 +9,13 @@ A slow correct ledger is a product. A fast incorrect ledger is a liability.
 
 ## Status
 
-Sprint 0 — engineering foundation. **No application code yet.**
+Sprint 0 — engineering foundation. The application shell exists; **no accounting
+functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-000 — Architecture Decisions (in progress) |
-| Next ticket | LL-001 — Repository Bootstrap |
+| Current ticket | LL-005 — GitHub Actions CI ✅ |
+| Next ticket | LL-004 — Structured Logging |
 | Gate | Gate 0 not yet reached |
 
 ## Start here
@@ -62,15 +63,35 @@ scripts/          guardrail hooks
 ## Development
 
 ```bash
-nvm use          # Node 22, pinned in .nvmrc
+nvm use          # Node 24 (current LTS), pinned in .nvmrc
 npm install
 cp .env.example .env.local   # then fill in YOUR OWN Neon dev branch URL
 npm run dev
 ```
 
-Commands arrive with the tickets that need them: `db:generate`, `db:migrate`,
-`db:studio` in LL-002; `test`, `test:unit`, `test:integration`, `test:e2e` in LL-003;
-`lint`, `typecheck`, `ci` in LL-001.
+| Command | Does |
+|---|---|
+| `npm run dev` | Dev server on :3000 |
+| `npm run lint` | ESLint, type-aware |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run build` | Production build; type errors fail it |
+| `npm run ci` | lint → typecheck → test → build |
+
+Database: `npm run db:generate -- --name=x`, `db:migrate`, `db:check`, `db:studio`,
+and `db:verify` (proves migrations apply, are idempotent, and the advisory lock
+serialises concurrent runners). There is deliberately **no `db:push`**.
+
+Tests: `npm test` (unit, no database), `test:integration` (requires a marked test
+database — see [TESTING.md](docs/TESTING.md)), `test:e2e` (builds and serves production
+on port 3200, then drives Chromium).
+
+Destructive database work refuses to run unless `APP_ENV=test`, the host is on
+`TEST_DATABASE_ALLOWLIST`, **and** the database carries a marker table created by
+`npm run db:mark-test`. All three, all failing closed.
+
+**Toolchain versions are pinned deliberately** — TypeScript 6.0.3 and ESLint 9.x, both
+one major behind. Read [ADR-009](docs/DECISIONS.md#adr-009) before upgrading either:
+TypeScript 7 silently disables every type-aware lint rule rather than failing loudly.
 
 ## Working on a ticket
 
