@@ -59,6 +59,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cannot skip it, matching both by key name and by value shape, walking nested
   structures and `Error.cause` chains. Correlation ids via `AsyncLocalStorage`. JSON in
   deployed environments, readable output locally. 78 tests, verified by mutation.
+- **LL-006** — Vercel and Neon environments. Production database credentials removed from
+  Vercel's Preview scope (they targeted both). Preview deployments now get a `--schema-only`
+  Neon branch per PR — schema, zero rows — with an emptiness assertion that fails rather
+  than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
+  disabled in `vercel.json`; production is promoted by a workflow that runs migrations
+  first and stops if they fail. Adds `npm run db:seed`.
 - **LL-007** — Engineering documentation. `ACCOUNTING_RULES.md` states the eight
   invariants with the layer that enforces each; `API.md` records service and route
   conventions before any surface exists; `docs/README.md` orients a session with no prior
