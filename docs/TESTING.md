@@ -71,13 +71,13 @@ including production, defeating the entire mechanism.
 
 ```bash
 # 1. Put YOUR OWN Neon dev branch URL in .env.local (never production)
-# 2. Add its host to TEST_DATABASE_ALLOWLIST in .env.local
-# 3. Apply migrations
+# 2. Ask what the guard still needs — prints redacted output plus the exact
+#    APP_ENV / TEST_DATABASE_ALLOWLIST lines to add
+npm run db:target
+# 3. Add those lines to .env.local, then:
 npm run db:migrate
-# 4. Mark the database disposable — never run this against production
-APP_ENV=test npm run db:mark-test
-# 5. Run
-APP_ENV=test npm run test:integration
+npm run db:mark-test                 # NEVER against production
+npm run test:integration
 ```
 
 ## Isolation: truncate, not transaction rollback
