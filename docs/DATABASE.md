@@ -1,11 +1,62 @@
-# DATABASE
+# Database
 
-> **Status: skeleton.** Populated by **LL-007 — Engineering Documentation**.
-> Tickets before LL-007 append to this file as they establish facts; LL-007 consolidates
-> and completes it.
->
 > Binding decisions live in [DECISIONS.md](DECISIONS.md). Where this file and an ADR
 > disagree, the ADR wins and this file is wrong.
+
+Neon PostgreSQL, accessed through Drizzle ORM. PostgreSQL is authoritative for all
+financial data and arithmetic.
+
+## Two clients. Use the right one.
+
+See [ADR-001](DECISIONS.md#adr-001). This is the single most consequential thing in this
+document.
+
+| Client | Driver | For | Transactions |
+|---|---|---|---|
+| `getDb()` | `drizzle-orm/neon-http` | reads, reports, single-statement writes | **no** |
+| `getDbTx()` | `drizzle-orm/neon-serverless` (Pool) | **every financial write** | yes |
+
+```ts
+import { getDb, getDbTx } from '@/db';
+
+const accounts = await getDb().select().from(accountsTable);      // read
+
+await getDbTx().transaction(async (tx) => {                        // financial write
+  await tx.insert(journalEntries).values(header);
+  await tx.insert(journalLines).values(lines);
+});
+```
+
+### The trap
+
+The HTTP client exposes `.transaction()`. It is fully typed. It compiles. It passes
+review and CI. Then at runtime it throws:
+
+```
+Error: No transactions support in neon-http driver
+```
+
+The type system cannot catch this, so two other mechanisms do:
+
+1. ESLint forbids importing `drizzle-orm/neon-http` anywhere under `src/server/ledger/**`.
+2. `src/db/index.ts` documents the split at the top of the file.
+
+Inside a transaction, **every statement must run on `tx`**, not on the outer client. A
+statement issued on `getDbTx()` while inside a `tx` callback executes on a different
+connection, outside the transaction, and will not roll back.
+
+Never simulate a transaction with sequential statements plus compensating deletes. A
+compensating delete cannot undo work another connection already observed, and does not
+run at all if the process dies between statements.
+
+### Lazy initialisation
+
+Both clients are memoized and created on first use, not at import. Importing `@/db` must
+never throw — only *using* it without a `DATABASE_URL` should. This is what allows
+`next build` and `npm run ci` to succeed with no database configured.
+
+`src/db/index.ts` imports `server-only`. A Client Component that imports it fails the
+build rather than leaking `DATABASE_URL` into the browser bundle. Verified in LL-002.
 
 ## Standing requirements
 
@@ -18,7 +69,128 @@ These apply to every table added from LL-011 onward. They are not per-table choi
    `(company_id, ref_id)`, never a bare `id` reference.
 3. **Money is `NUMERIC(19,4)`.** See [ADR-004](DECISIONS.md#adr-004).
 4. **Calendar dates are `DATE`; instants are `TIMESTAMPTZ`.** See [ADR-005](DECISIONS.md#adr-005).
-5. **Every schema change is a committed migration.** `drizzle-kit push` is prohibited in
-   every environment and is blocked by the guardrail hook.
-6. **Migrations run under a PostgreSQL advisory lock** so concurrent runners serialize.
+5. **Every schema change is a committed migration.**
+6. **Migrations run under a PostgreSQL advisory lock** so concurrent runners serialise.
 7. **Nothing is hard-deleted.** `status` is the vocabulary. See [ADR-006](DECISIONS.md#adr-006).
+
+## Migration workflow
+
+```
+edit src/db/schema/*.ts
+        ↓
+npm run db:generate -- --name=short_snake_case_description
+        ↓
+READ THE GENERATED SQL, LINE BY LINE          ← not optional
+        ↓
+npm run db:migrate          (your own dev branch)
+        ↓
+npm run db:verify           (proves it applies cleanly and is idempotent)
+        ↓
+commit the migration WITH the schema change
+        ↓
+CI applies it to an ephemeral Neon branch
+        ↓
+human review
+        ↓
+merge → gated production migration job → deploy
+```
+
+### Naming
+
+Always pass `--name`. Without it Drizzle invents a random codename
+(`0000_milky_silver_sable`), which tells a reviewer nothing:
+
+```bash
+npm run db:generate -- --name=journal_entries_and_lines
+```
+
+Files land in `drizzle/migrations/` as `NNNN_name.sql`, with `meta/_journal.json`
+recording the order. All three are source code.
+
+### Migrations are immutable once committed
+
+A committed migration may already be applied in CI, Preview, or Production. Editing it
+desynchronises environments and leaves no record of what actually ran. Fix a mistake with
+a **new** migration. The `guard-write.sh` hook blocks edits to committed migration files.
+
+### `drizzle-kit push` is prohibited
+
+In every environment, including your own development branch. It diffs and mutates the
+schema directly, producing:
+
+- no reviewable artifact — nothing for a human to read before it runs
+- no shared history — your database and CI's diverge silently
+- no ordering guarantee — nothing records what ran when
+- **no safe path to production** — the schema becomes whatever was last pushed
+
+`push` is convenient exactly when you are in a hurry, which is exactly when an accounting
+schema should not change without review. It appears in no npm script, and the
+`guard-bash.sh` hook blocks it.
+
+Use `db:generate` + `db:migrate`.
+
+### The advisory lock
+
+`scripts/migrate.ts` takes `pg_advisory_lock(8312004771002119)` on a dedicated connection
+held for the whole run, released in a `finally`.
+
+This is not theoretical. Vercel can retry or parallelise builds, and CI can start a job
+while another is mid-deploy. Two runners applying the same migration simultaneously is
+how a schema ends up half-applied. With the lock, the second runner waits and then finds
+the work already done.
+
+The lock connection stays checked out deliberately — returning it to the pool early would
+drop the lock while migrations were still applying.
+
+**The lock key is a shared namespace.** Do not reuse `8312004771002119` for anything else.
+
+### Rollback philosophy
+
+Drizzle does not generate down-migrations, and LedgerLite does not add them. This is
+deliberate.
+
+An automatic reverse migration against live financial data is more dangerous than the
+problem it claims to solve: dropping a column that new code stopped writing does not
+restore the data it held, and a reversal that runs unattended during an incident can
+destroy records that were the only remaining evidence of a transaction.
+
+Instead, follow **expand → migrate → contract** ([AGENTS.md](../AGENTS.md) §5):
+
+1. Add the new structure as nullable or additive. Deploy.
+2. Backfill. Validate.
+3. Deploy code that uses the new structure while tolerating the old.
+4. Only once nothing reads the old structure, remove it — in a separate, later migration.
+
+Every step is independently reversible by deploying the previous code, because the schema
+stays compatible with both. Recovery from a genuinely bad migration is a restore from a
+Neon branch, performed deliberately by a human, not an automated down-migration.
+
+## Commands
+
+| Command | Does | Needs a database |
+|---|---|---|
+| `npm run db:generate -- --name=x` | Diff schema → new migration file | no |
+| `npm run db:check` | Validate migration consistency | no |
+| `npm run db:migrate` | Apply migrations under the advisory lock | yes |
+| `npm run db:studio` | Drizzle Studio browser | yes |
+| `npm run db:verify` | Prove migrations apply, are idempotent, and the lock serialises | yes |
+
+`db:verify` is destructive — it drops and recreates `_health`. It refuses to run when the
+connection target or `APP_ENV` looks like production.
+
+## Environment
+
+`DATABASE_URL` is read from `.env.local` locally and from the environment in CI and
+deployment. It is never committed, never logged, and never included in an error message —
+`describeConnection()` strips credentials before anything is printed.
+
+Every developer and AI workspace uses its **own** Neon branch (`dev/lance`, `dev/claude`).
+Never point local development, tests, or Preview at the production branch.
+
+## Current schema
+
+One table, `_health`, created by `0000_initial_health_probe`. It is a connectivity probe
+and deliberately not an accounting entity — it exists so LL-002 could prove the migration
+path before any real schema was designed.
+
+Accounting entities begin at LL-020 (accounts) and LL-030 (the ledger).

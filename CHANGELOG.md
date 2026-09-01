@@ -15,6 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **LL-001** — Next.js 16 App Router application with React 19, Tailwind 4, and strict
   TypeScript. Type-aware ESLint with the ADR-001 ledger import boundary enforced.
   `npm run ci` chains lint, typecheck, test, and build.
+- **LL-002** — Neon + Drizzle foundation. Two memoized clients per ADR-001: `getDb()`
+  (HTTP, reads) and `getDbTx()` (WebSocket Pool, financial writes). `server-only` keeps
+  `DATABASE_URL` out of the browser bundle. Migration runner holds a PostgreSQL advisory
+  lock for the whole run. `db:generate` / `db:migrate` / `db:studio` / `db:check` /
+  `db:verify`; no `db:push`, ever. First migration creates `_health`, a connectivity
+  probe and deliberately not an accounting entity.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

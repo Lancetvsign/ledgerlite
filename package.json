@@ -13,21 +13,32 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "test": "node -e \"console.error('No test runner yet. Vitest arrives in LL-003.'); process.exit(0)\"",
-    "ci": "npm run lint && npm run typecheck && npm test && npm run build"
+    "ci": "npm run lint && npm run typecheck && npm test && npm run build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "db:check": "drizzle-kit check",
+    "db:verify": "tsx scripts/verify-db.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "drizzle-orm": "^0.45.2",
     "next": "16.3.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.13",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.69.0"
   }

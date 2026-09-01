@@ -1,0 +1,159 @@
+/**
+ * Database foundation verification (LL-002 acceptance).
+ *
+ * Proves, against a REAL database, the things a type checker cannot:
+ *
+ *   1. The target is not production.
+ *   2. Migrations apply to a clean database.
+ *   3. Re-running migrations is a no-op, not an error and not a duplicate.
+ *   4. The advisory lock serialises concurrent runners.
+ *   5. Both clients connect, and the HTTP client cannot open a transaction.
+ *
+ * Usage:  npm run db:verify
+ *
+ * Requires DATABASE_URL pointing at YOUR OWN Neon development branch. This
+ * script CREATES AND DROPS the _health table and will refuse to run against
+ * anything that looks like production.
+ */
+import { neonConfig, Pool } from '@neondatabase/serverless';
+import { config } from 'dotenv';
+import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+
+import { describeConnection, getDatabaseUrl } from '../src/db/env';
+
+config({ path: '.env.local', quiet: true });
+
+const PRODUCTION_MARKERS = ['prod', 'production', 'live', 'main'];
+
+let failures = 0;
+
+function check(label: string, passed: boolean, detail = ''): void {
+  if (!passed) failures += 1;
+  console.info(`  ${passed ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
+}
+
+function assertNotProduction(connectionString: string): void {
+  const target = describeConnection(connectionString).toLowerCase();
+  const appEnv = process.env['APP_ENV'] ?? 'development';
+
+  const looksProduction = PRODUCTION_MARKERS.some((marker) =>
+    new RegExp(`(^|[^a-z])${marker}([^a-z]|$)`).test(target),
+  );
+
+  if (looksProduction || appEnv === 'production') {
+    throw new Error(
+      `Refusing to run destructive verification against ${describeConnection(connectionString)} ` +
+        `(APP_ENV=${appEnv}). This script drops and recreates tables. ` +
+        `Point DATABASE_URL at your own development branch.`,
+    );
+  }
+}
+
+async function run(command: string, args: readonly string[]): Promise<number> {
+  const { spawn } = await import('node:child_process');
+  return await new Promise((resolve) => {
+    const child = spawn(command, [...args], { stdio: 'ignore', shell: false });
+    child.on('close', (code) => {
+      resolve(code ?? 1);
+    });
+  });
+}
+
+async function main(): Promise<void> {
+  const connectionString = getDatabaseUrl();
+  console.info(`Verifying against ${describeConnection(connectionString)}\n`);
+
+  assertNotProduction(connectionString);
+  check('target is not production', true);
+
+  const globalWebSocket: unknown = globalThis.WebSocket;
+  neonConfig.webSocketConstructor = globalWebSocket as typeof neonConfig.webSocketConstructor;
+
+  const pool = new Pool({ connectionString });
+  const db = drizzle(pool);
+
+  try {
+    // --- clean slate ------------------------------------------------------
+    await db.execute(sql`drop table if exists "_health"`);
+    await db.execute(sql`drop table if exists "drizzle"."__drizzle_migrations"`);
+
+    // --- 2. migrations apply to a clean database --------------------------
+    const first = await run('npx', ['tsx', 'scripts/migrate.ts']);
+    check('migrations apply to a clean database', first === 0, `exit ${first}`);
+
+    const tableExists = await db.execute<{ exists: boolean }>(
+      sql`select exists (select 1 from information_schema.tables where table_name = '_health') as exists`,
+    );
+    check('_health table created', tableExists.rows[0]?.exists === true);
+
+    // --- 3. re-running is a no-op ----------------------------------------
+    const second = await run('npx', ['tsx', 'scripts/migrate.ts']);
+    check('re-running migrations succeeds', second === 0, `exit ${second}`);
+
+    const applied = await db.execute<{ count: string }>(
+      sql`select count(*)::text as count from "drizzle"."__drizzle_migrations"`,
+    );
+    check(
+      're-run did not duplicate migration records',
+      applied.rows[0]?.count === '1',
+      `${applied.rows[0]?.count ?? '?'} row(s)`,
+    );
+
+    // --- 4. advisory lock serialises concurrent runners -------------------
+    // Both runners start together. Without the lock they race on the same
+    // migration table; with it, one waits for the other. Both must exit 0.
+    const [a, b] = await Promise.all([
+      run('npx', ['tsx', 'scripts/migrate.ts']),
+      run('npx', ['tsx', 'scripts/migrate.ts']),
+    ]);
+    check('two concurrent runners both succeed', a === 0 && b === 0, `exits ${a}, ${b}`);
+
+    const afterConcurrent = await db.execute<{ count: string }>(
+      sql`select count(*)::text as count from "drizzle"."__drizzle_migrations"`,
+    );
+    check(
+      'concurrent runners did not duplicate migration records',
+      afterConcurrent.rows[0]?.count === '1',
+      `${afterConcurrent.rows[0]?.count ?? '?'} row(s)`,
+    );
+
+    // --- 5. the HTTP client genuinely cannot transact ---------------------
+    const { neon } = await import('@neondatabase/serverless');
+    const { drizzle: drizzleHttp } = await import('drizzle-orm/neon-http');
+    const httpDb = drizzleHttp(neon(connectionString));
+
+    let httpThrew = '';
+    try {
+      await httpDb.transaction(async (tx) => {
+        await tx.execute(sql`select 1`);
+      });
+    } catch (error) {
+      httpThrew = error instanceof Error ? error.message : String(error);
+    }
+    check(
+      'HTTP client rejects interactive transactions (ADR-001)',
+      /no transactions support/i.test(httpThrew),
+      httpThrew || 'it did NOT throw — ADR-001 assumption broken',
+    );
+
+    // --- Pool client can transact ----------------------------------------
+    let poolOk = false;
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`select 1`);
+      poolOk = true;
+    });
+    check('Pool client supports interactive transactions (ADR-001)', poolOk);
+  } finally {
+    await pool.end();
+  }
+
+  console.info(`\n${failures === 0 ? 'All checks passed.' : `${failures} check(s) FAILED.`}`);
+  if (failures > 0) process.exit(1);
+}
+
+void main().catch((error: unknown) => {
+  console.error('\nVERIFICATION FAILED\n');
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});

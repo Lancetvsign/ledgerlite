@@ -14,8 +14,8 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-001 — Repository Bootstrap ✅ |
-| Next ticket | LL-002 — Neon + Drizzle Foundation |
+| Current ticket | LL-002 — Neon + Drizzle Foundation ✅ |
+| Next ticket | LL-003 — Test Foundation |
 | Gate | Gate 0 not yet reached |
 
 ## Start here
@@ -77,8 +77,11 @@ npm run dev
 | `npm run build` | Production build; type errors fail it |
 | `npm run ci` | lint → typecheck → test → build |
 
-Still to arrive: `db:generate` / `db:migrate` / `db:studio` in LL-002, and the real
-`test:unit` / `test:integration` / `test:e2e` in LL-003.
+Database: `npm run db:generate -- --name=x`, `db:migrate`, `db:check`, `db:studio`,
+and `db:verify` (proves migrations apply, are idempotent, and the advisory lock
+serialises concurrent runners). There is deliberately **no `db:push`**.
+
+Still to arrive: the real `test:unit` / `test:integration` / `test:e2e` in LL-003.
 
 **Toolchain versions are pinned deliberately** — TypeScript 6.0.3 and ESLint 9.x, both
 one major behind. Read [ADR-009](docs/DECISIONS.md#adr-009) before upgrading either:

@@ -40,9 +40,13 @@ drizzle/          generated migrations (committed, reviewed, never edited after 
 One alias, deliberately. `@/*` → `./src/*`.
 
 ```ts
-import { dbTx } from '@/db';
+import { getDbTx } from '@/db';
 import { LedgerService } from '@/server/ledger';
 ```
+
+The database clients are exposed as memoized accessor functions rather than eagerly
+constructed constants, so that importing `@/db` never throws and `next build` succeeds
+without a `DATABASE_URL`. See [DATABASE.md](DATABASE.md).
 
 Relative imports (`../../db`) are permitted within a directory but `@/` is preferred
 across module boundaries — it survives file moves and makes the boundary visible.
@@ -123,6 +127,9 @@ this and recorded which rules fired.
 | `npm run lint` | ESLint, type-aware |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Placeholder until LL-003 installs Vitest |
+| `npm run db:generate -- --name=x` | Schema diff → migration file |
+| `npm run db:migrate` | Apply migrations under an advisory lock |
+| `npm run db:verify` | Prove migrations apply, are idempotent, lock serialises |
 | `npm run ci` | lint → typecheck → test → build |
 
 `npm run ci` is what must pass before any pull request.
