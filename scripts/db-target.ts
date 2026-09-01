@@ -13,7 +13,7 @@
  */
 import { config } from 'dotenv';
 
-import { describeConnection } from '../src/db/env';
+import { describeConnection, endpointIdFromConnectionString } from '../src/db/env';
 import { assertNotProductionByConfig, UnsafeDatabaseError } from '../src/db/safety';
 
 config({ path: '.env.local', quiet: true });
@@ -53,13 +53,31 @@ try {
   /* keep the placeholder; describeConnection already reported what it could */
 }
 
-// The endpoint id is the leading label of a Neon hostname and is the part that
-// identifies the branch, so it is the right granularity for the allowlist:
-// specific enough not to approve a sibling branch, stable across restarts.
-const suggested = host.split('.')[0] ?? host;
+const suggested = endpointIdFromConnectionString(url);
+
+const unpooled = process.env['DATABASE_URL_UNPOOLED'];
+const directHost = (() => {
+  if (unpooled === undefined || unpooled.trim() === '') return undefined;
+  try {
+    return new URL(unpooled).hostname;
+  } catch {
+    return '(unparseable)';
+  }
+})();
 
 console.info(`Target        ${target}`);
 console.info(`Host          ${host}`);
+console.info(
+  `Direct host   ${directHost ?? 'DATABASE_URL_UNPOOLED not set — migrations will refuse to run'}`,
+);
+
+// Both hostnames must name the SAME branch. A mismatched pair means the
+// application and the migration runner would operate on different databases,
+// which no later check would catch.
+if (directHost !== undefined && directHost !== '(unparseable)') {
+  const sameBranch = host.replace('-pooler', '') === directHost;
+  console.info(`Same branch   ${sameBranch ? 'yes' : 'NO — pooled and direct name DIFFERENT branches'}`);
+}
 console.info(`APP_ENV       ${process.env['APP_ENV'] ?? '(not set)'}`);
 console.info(`Allowlist     ${process.env['TEST_DATABASE_ALLOWLIST'] ?? '(not set)'}`);
 console.info('');

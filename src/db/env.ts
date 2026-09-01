@@ -92,3 +92,26 @@ export function isPooledEndpoint(connectionString: string): boolean {
     return /-pooler/.test(connectionString);
   }
 }
+
+/**
+ * The Neon endpoint id for a connection string — the leading hostname label with
+ * any `-pooler` suffix removed.
+ *
+ * This is the correct granularity for TEST_DATABASE_ALLOWLIST because ONE branch
+ * has TWO hostnames: pooled (`ep-foo-pooler.…`) for the application and direct
+ * (`ep-foo.…`) for migrations. The stripped id is a substring of both, so a
+ * single allowlist entry approves the branch rather than one of its endpoints.
+ *
+ * Keeping the suffix was a real bug: the entry matched the app's connection and
+ * not the migration runner's, so setup looked complete and `db:migrate` failed
+ * later for reasons that pointed nowhere near the allowlist.
+ */
+export function endpointIdFromConnectionString(connectionString: string): string {
+  let host: string;
+  try {
+    host = new URL(connectionString).hostname;
+  } catch {
+    host = connectionString;
+  }
+  return (host.split('.')[0] ?? host).replace(/-pooler$/, '');
+}
