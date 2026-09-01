@@ -50,6 +50,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unverified debt carried since LL-002: migration idempotency, the advisory lock under
   two concurrent runners, transaction rollback leaving no partial state, `NUMERIC`
   returning a string, and ADR-001's driver split confirmed end to end.
+- **LL-005** — GitHub Actions CI. `verify` (lint, typecheck, unit, build) and `e2e` run
+  without secrets; `integration` provisions an ephemeral Neon branch, migrates, marks it,
+  runs the integration suite and `db:verify`, then deletes the branch with
+  `if: always()`. A daily reaper removes leaked `test/*` branches. The integration job
+  **fails rather than skips** when secrets are missing.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

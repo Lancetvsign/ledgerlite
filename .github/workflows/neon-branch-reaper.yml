@@ -1,0 +1,91 @@
+name: Neon branch reaper
+
+# Ephemeral CI branches are deleted by the job that creates them, but that
+# cleanup can itself fail — a cancelled run, a timeout, a Neon API blip. Each
+# leak is harmless; the accumulation is not. Neon projects have a finite branch
+# limit, and hitting it takes CI down for a reason that looks nothing like its
+# cause.
+on:
+  schedule:
+    - cron: '17 4 * * *' # daily, off the hour to avoid the scheduling stampede
+  workflow_dispatch: # so it can be run by hand when CI is already wedged
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-branch-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    name: Delete stale test/* branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+      MAX_AGE_HOURS: '24'
+    steps:
+      - name: Require Neon credentials
+        run: |
+          if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
+            echo "::error title=Missing GitHub secrets::NEON_API_KEY and NEON_PROJECT_ID are required"
+            exit 1
+          fi
+
+      - name: Delete test branches older than 24 hours
+        run: |
+          set -euo pipefail
+
+          npx --yes neonctl@2.15.0 branches list \
+            --project-id "$NEON_PROJECT_ID" --output json > /tmp/branches.json
+
+          # Only ever touches names beginning "test/". Development branches and
+          # anything that looks like production are never candidates, regardless
+          # of age — deleting a branch is not recoverable.
+          mapfile -t STALE < <(node -e '
+            const fs = require("node:fs");
+            const maxAgeMs = Number(process.env.MAX_AGE_HOURS) * 3600 * 1000;
+            const now = Date.now();
+            const branches = JSON.parse(fs.readFileSync("/tmp/branches.json", "utf8"));
+            for (const b of branches) {
+              if (!b.name || !b.name.startsWith("test/")) continue;
+              if (b.primary || b.default) continue;
+
+              // A branch whose age cannot be established is NOT deleted.
+              // Note the trap avoided here: Date.parse(undefined ?? 0) coerces to
+              // Date.parse("0") = year 2000, which is finite and ancient, so a
+              // missing timestamp would read as "very old" and be deleted. Missing
+              // data must never resolve to the destructive answer.
+              const rawCreated = b.created_at ?? b.createdAt;
+              if (typeof rawCreated !== "string" || rawCreated === "") {
+                console.error(`  skipping ${b.name}: no creation timestamp`);
+                continue;
+              }
+              const created = Date.parse(rawCreated);
+              if (!Number.isFinite(created)) {
+                console.error(`  skipping ${b.name}: unparseable timestamp`);
+                continue;
+              }
+
+              if (now - created > maxAgeMs) console.log(b.name);
+            }
+          ')
+
+          if [ ${#STALE[@]} -eq 0 ]; then
+            echo "No stale test branches."
+            exit 0
+          fi
+
+          echo "Deleting ${#STALE[@]} stale branch(es):"
+          failed=0
+          for name in "${STALE[@]}"; do
+            echo "  $name"
+            npx --yes neonctl@2.15.0 branches delete "$name" \
+              --project-id "$NEON_PROJECT_ID" || failed=$((failed + 1))
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::warning title=Reaper::$failed branch(es) could not be deleted"
+          fi
