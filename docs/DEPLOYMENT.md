@@ -37,7 +37,7 @@ This is a correctness question, not a convenience one.
 | Environment | When migrations run |
 |---|---|
 | Local | manually, `npm run db:migrate`, against your own branch |
-| CI | in the GitHub Actions job, against the ephemeral branch, **before** tests |
+| CI | in the GitHub Actions job, against the ephemeral branch, **before** tests (`.github/workflows/ci.yml`) |
 | Preview | in the workflow that provisions the Preview branch, before the app is used |
 | Production | a **discrete, gated job** that must succeed **before** the deployment is promoted |
 

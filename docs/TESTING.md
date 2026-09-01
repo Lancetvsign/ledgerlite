@@ -38,8 +38,49 @@ npm run test:watch
 
 `npm run ci` runs lint → typecheck → **unit** → build. It deliberately does **not** run
 integration tests: including a database-dependent step would make `npm run ci` fail on
-any machine without one, which trains people to ignore CI failures. CI runs the
-integration project separately against an ephemeral Neon branch (LL-005).
+any machine without one, which trains people to ignore CI failures. GitHub Actions runs
+the integration project separately against an ephemeral Neon branch.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`.
+
+| Job | Does | Needs secrets |
+|---|---|---|
+| `verify` | lint, typecheck, unit tests, build | no |
+| `e2e` | Playwright against a production build | no |
+| `integration` | ephemeral Neon branch → migrate → mark → integration tests → `db:verify` → delete | yes |
+
+**The integration job fails rather than skips when secrets are absent.** A skipped job
+renders as a grey tick that reads like success, and "the integration tests never actually
+ran" is exactly the thing that must not pass unnoticed in an accounting codebase. The
+failure message names the two secrets and where to find them.
+
+Required repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Where to find it |
+|---|---|
+| `NEON_API_KEY` | Neon console → Account settings → API keys |
+| `NEON_PROJECT_ID` | Neon console → Project settings → General |
+
+Their values are masked with `::add-mask::` before use, so a later step cannot echo a
+connection string into the log.
+
+**Forked pull requests skip the integration job by design.** Secrets are unavailable
+there, and exposing a database credential to code from an untrusted fork would cost more
+than the lost coverage.
+
+Each run creates `test/pr-<number>-run-<run_id>`, unique per run so a re-run never
+collides with itself, and deletes it with `if: always()` so a red build does not leak a
+branch. `.github/workflows/neon-branch-reaper.yml` runs daily as a backstop: cleanup
+itself can fail on a cancelled run or an API blip, and Neon's branch limit is finite —
+hitting it takes CI down for a reason that looks nothing like its cause.
+
+The reaper only ever considers names beginning `test/`, never primary or default
+branches, and **skips any branch whose age it cannot establish**. Missing data must not
+resolve to the destructive answer.
+
+Concurrency groups cancel superseded runs on feature branches but never on `main`.
 
 ## The safety guard
 

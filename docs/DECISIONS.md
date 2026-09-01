@@ -19,6 +19,14 @@ the original is never edited or deleted, so the reasoning trail survives.
 | [009](#adr-009) | TypeScript pinned below 7.x and ESLint below 10.x to keep type-aware linting | Accepted |
 
 ADR-001 through ADR-008 decided 2026-08-31 (LL-000); ADR-009 added 2026-08-31 (LL-001).
+
+**Sequencing note (2026-09-01).** LL-005 (CI) is taken before LL-004 (structured
+logging), departing from the documented ticket order. Nothing enforces lint, types, or
+tests on a pull request yet, so every ticket merged before CI exists rests on a local
+`npm run ci` and a human remembering to run it. Gate 0 already requires passing checks
+before Sprint 1, so CI is needed regardless; moving it earlier means less code lands
+unverified. LL-004 has no dependency on LL-005 or vice versa — unlike LL-030 → LL-031,
+this part of the order was not load-bearing.
 Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 24.
 
 ---
