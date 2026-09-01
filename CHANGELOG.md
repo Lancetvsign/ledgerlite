@@ -45,6 +45,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   PgBouncer in transaction pooling mode, where session-level advisory locks silently stop
   protecting anything. `DATABASE_URL_UNPOOLED` is now required for migrations and
   `db:verify`; the runner refuses a `-pooler` host rather than appearing to work.
+- **Database foundation verified against a real Neon branch.** The integration suite (6
+  tests) and `db:verify` (9 checks) had never executed. Both now pass, clearing the
+  unverified debt carried since LL-002: migration idempotency, the advisory lock under
+  two concurrent runners, transaction rollback leaving no partial state, `NUMERIC`
+  returning a string, and ADR-001's driver split confirmed end to end.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.

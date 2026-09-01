@@ -235,10 +235,35 @@ deployment. It is never committed, never logged, and never included in an error 
 Every developer and AI workspace uses its **own** Neon branch (`dev/lance`, `dev/claude`).
 Never point local development, tests, or Preview at the production branch.
 
+## Verified behaviour
+
+`npm run db:verify` was run against a real Neon development branch and passed every check:
+
+```
+PASS  target is a marked, allowlisted test database
+PASS  migrations apply to a clean database
+PASS  _health table created
+PASS  re-running migrations succeeds
+PASS  re-run did not duplicate migration records — 1 row
+PASS  two concurrent runners both succeed — exits 0, 0
+PASS  concurrent runners did not duplicate migration records — 1 row
+PASS  HTTP client rejects interactive transactions (ADR-001)
+      → "No transactions support in neon-http driver"
+PASS  Pool client supports interactive transactions (ADR-001)
+```
+
+ADR-001's central claim is now confirmed end to end against a live database, not merely
+against a non-resolving host: the HTTP driver genuinely cannot open a transaction, and
+the Pool driver genuinely can. The advisory lock has been exercised under real
+concurrency rather than only reasoned about.
+
 ## Current schema
 
 One table, `_health`, created by `0000_initial_health_probe`. It is a connectivity probe
 and deliberately not an accounting entity — it exists so LL-002 could prove the migration
 path before any real schema was designed.
+
+`_ledgerlite_test_marker` is present in development branches only. It is created by
+`db:mark-test`, never by a migration, and is what layer 3 of the safety guard checks for.
 
 Accounting entities begin at LL-020 (accounts) and LL-030 (the ledger).

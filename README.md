@@ -14,7 +14,7 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-003 — Test Foundation ✅ |
+| Current ticket | LL-003 — Test Foundation ✅ (verified against a live database) |
 | Next ticket | LL-004 — Structured Logging |
 | Gate | Gate 0 not yet reached |
 
