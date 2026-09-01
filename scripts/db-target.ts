@@ -21,7 +21,27 @@ config({ path: '.env.local', quiet: true });
 const url = process.env['DATABASE_URL'];
 
 if (url === undefined || url.trim() === '') {
-  console.error('DATABASE_URL is not set. Create .env.local from .env.example first.');
+  // Listing the names that ARE present turns "not set" into a diagnosis. The
+  // Vercel/Neon integration provisions Preview and Production but often leaves
+  // Development empty, so `vercel env pull --environment=development` succeeds
+  // and yields nothing — a silent no-op that looks like a broken script.
+  const interesting = Object.keys(process.env)
+    .filter((k) => /^(DATABASE|POSTGRES|PG|NEON|VERCEL|APP_ENV|TEST_DATABASE)/.test(k))
+    .sort();
+
+  console.error('DATABASE_URL is not set.\n');
+  console.error(
+    interesting.length > 0
+      ? `Related variables that ARE set (names only):\n  ${interesting.join('\n  ')}\n`
+      : 'No database-related variables are set at all.\n',
+  );
+  console.error('If you provisioned Neon through Vercel, check which environments got');
+  console.error('variables:  vercel env ls');
+  console.error('');
+  console.error('That integration commonly populates Preview and Production but NOT');
+  console.error('Development, so pulling development is a silent no-op. Do NOT pull');
+  console.error('production as a workaround — create a Neon development branch and put');
+  console.error('its connection string in .env.local. See docs/TESTING.md.');
   process.exit(1);
 }
 
