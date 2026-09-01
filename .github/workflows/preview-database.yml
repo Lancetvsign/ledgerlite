@@ -88,29 +88,14 @@ jobs:
           echo "TEST_DATABASE_ALLOWLIST=$(printf '%s' "$HOST" | cut -d. -f1 | sed -E 's/-pooler$//')" >> "$GITHUB_ENV"
 
       - name: Prove the branch carries no production data
-        run: |
-          set -euo pipefail
-          # A schema-only branch must be empty. If this ever finds rows, the
-          # --schema-only guarantee has silently regressed and production data is
-          # about to be served from a Preview URL. Fail before that happens.
-          npx tsx -e "
-            import { neonConfig, Pool } from '@neondatabase/serverless';
-            import { sql } from 'drizzle-orm';
-            import { drizzle } from 'drizzle-orm/neon-serverless';
-            neonConfig.webSocketConstructor = globalThis.WebSocket;
-            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-            const db = drizzle(pool);
-            const r = await db.execute(sql\`
-              select coalesce(sum(n_live_tup), 0)::text as rows
-              from pg_stat_user_tables where schemaname = 'public'\`);
-            const rows = Number(r.rows[0]?.rows ?? 0);
-            console.log('rows in public schema: ' + rows);
-            await pool.end();
-            if (rows > 0) {
-              console.error('::error title=Preview database is not empty::A schema-only branch must contain no rows. Refusing to expose it.');
-              process.exit(1);
-            }
-          "
+        # A schema-only branch must contain no rows. If this ever finds any, the
+        # --schema-only guarantee has silently regressed and production data is
+        # about to be served from a Preview URL. Fail before that happens.
+        #
+        # A real script, not `tsx -e`: tsx transpiles to CJS, where top-level
+        # await does not compile. The inline version failed to compile at all,
+        # which meant this check silently did not run the first time it deployed.
+        run: npm run db:assert-empty
 
       - name: Apply migrations
         env:

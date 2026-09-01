@@ -25,7 +25,8 @@
     "test:e2e": "playwright test",
     "test:watch": "vitest --project unit",
     "db:target": "tsx scripts/db-target.ts",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "db:assert-empty": "tsx scripts/assert-empty-database.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
