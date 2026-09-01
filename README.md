@@ -14,8 +14,8 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-002 — Neon + Drizzle Foundation ✅ |
-| Next ticket | LL-003 — Test Foundation |
+| Current ticket | LL-003 — Test Foundation ✅ |
+| Next ticket | LL-004 — Structured Logging |
 | Gate | Gate 0 not yet reached |
 
 ## Start here
@@ -81,7 +81,13 @@ Database: `npm run db:generate -- --name=x`, `db:migrate`, `db:check`, `db:studi
 and `db:verify` (proves migrations apply, are idempotent, and the advisory lock
 serialises concurrent runners). There is deliberately **no `db:push`**.
 
-Still to arrive: the real `test:unit` / `test:integration` / `test:e2e` in LL-003.
+Tests: `npm test` (unit, no database), `test:integration` (requires a marked test
+database — see [TESTING.md](docs/TESTING.md)), `test:e2e` (builds and serves production,
+then drives Chromium).
+
+Destructive database work refuses to run unless `APP_ENV=test`, the host is on
+`TEST_DATABASE_ALLOWLIST`, **and** the database carries a marker table created by
+`npm run db:mark-test`. All three, all failing closed.
 
 **Toolchain versions are pinned deliberately** — TypeScript 6.0.3 and ESLint 9.x, both
 one major behind. Read [ADR-009](docs/DECISIONS.md#adr-009) before upgrading either:
