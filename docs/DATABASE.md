@@ -193,7 +193,7 @@ to exist:
 npm run db:target                    # redacted output only, safe to paste anywhere
 # 3. Add the APP_ENV and TEST_DATABASE_ALLOWLIST lines it prints, then:
 npm run db:migrate
-npm run db:mark-test                 # NEVER against production
+npm run db:mark-test -- --host <endpoint-id>   # NEVER against production
 npm run db:verify
 ```
 
