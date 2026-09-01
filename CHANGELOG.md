@@ -55,6 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runs the integration suite and `db:verify`, then deletes the branch with
   `if: always()`. A daily reaper removes leaked `test/*` branches. The integration job
   **fails rather than skips** when secrets are missing.
+- **LL-004** — Structured logging. Redaction applied at the logger boundary so callers
+  cannot skip it, matching both by key name and by value shape, walking nested
+  structures and `Error.cause` chains. Correlation ids via `AsyncLocalStorage`. JSON in
+  deployed environments, readable output locally. 78 tests, verified by mutation.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.
