@@ -97,6 +97,19 @@ jobs:
         # which meant this check silently did not run the first time it deployed.
         run: npm run db:assert-empty
 
+      # A --schema-only branch has the parent's tables but an EMPTY
+      # drizzle.__drizzle_migrations, so Drizzle sees an unmigrated database whose
+      # tables already exist and fails on CREATE TABLE. Dropping the schema lets
+      # migrations rebuild it, which also means the preview schema provably came
+      # from the committed migration files rather than being asserted to match.
+      #
+      # Destructive, so the script re-verifies emptiness itself rather than
+      # trusting the step above to have run.
+      - name: Reset schema so migrations apply from scratch
+        env:
+          APP_ENV: test
+        run: npm run db:reset-preview
+
       - name: Apply migrations
         env:
           APP_ENV: test
