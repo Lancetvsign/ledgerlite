@@ -55,6 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runs the integration suite and `db:verify`, then deletes the branch with
   `if: always()`. A daily reaper removes leaked `test/*` branches. The integration job
   **fails rather than skips** when secrets are missing.
+- **LL-004** — Structured logging. Redaction applied at the logger boundary so callers
+  cannot skip it, matching both by key name and by value shape, walking nested
+  structures and `Error.cause` chains. Correlation ids via `AsyncLocalStorage`. JSON in
+  deployed environments, readable output locally. 78 tests, verified by mutation.
 - **LL-006** — Vercel and Neon environments. Production database credentials removed from
   Vercel's Preview scope (they targeted both). Preview deployments now get a `--schema-only`
   Neon branch per PR — schema, zero rows — with an emptiness assertion that fails rather
