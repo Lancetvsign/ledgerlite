@@ -19,7 +19,7 @@ the original is never edited or deleted, so the reasoning trail survives.
 | [009](#adr-009) | TypeScript pinned below 7.x and ESLint below 10.x to keep type-aware linting | Accepted |
 
 ADR-001 through ADR-008 decided 2026-08-31 (LL-000); ADR-009 added 2026-08-31 (LL-001).
-Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 22.
+Verified against `drizzle-orm@0.45.2`, `@neondatabase/serverless@1.1.0`, Node 24.
 
 ---
 
@@ -101,6 +101,23 @@ between statements.
 Neon ships interactive transaction support over HTTP, or LedgerLite adopts a driver
 that supports transactions over a stateless connection. Verify empirically before
 changing this ADR — the failure mode is invisible to the type system.
+
+### Amendment — LL-002: accessor form
+
+The decision above says the module "exports exactly two clients: `db` and `dbTx`". The
+implementation exports **`getDb()` and `getDbTx()`** — memoized accessor functions rather
+than eagerly constructed constants.
+
+The substance is unchanged: two clients, the Pool one for every financial write, enforced
+by lint. Only the call shape differs, and it differs for a concrete reason. Eager
+construction runs `getDatabaseUrl()` at import time, so merely importing `@/db` throws
+when `DATABASE_URL` is absent. That breaks `next build` and therefore `npm run ci` on any
+machine or CI job without a database — including every run before LL-006 provisions one.
+
+Importing the module must never throw. Only *using* it without configuration should.
+
+Read `db`/`dbTx` in this ADR as `getDb()`/`getDbTx()`.
+
 
 ---
 

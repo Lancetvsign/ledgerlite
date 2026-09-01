@@ -1,6 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 3100;
+// Deliberately NOT the dev server's port. `reuseExistingServer` would otherwise
+// latch onto a running dev server, silently testing a dev build — which emits
+// HMR console errors and would fail the strict no-console-errors assertion for
+// reasons that have nothing to do with the application.
+const PORT = 3200;
 const BASE_URL = process.env['E2E_BASE_URL'] ?? `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({

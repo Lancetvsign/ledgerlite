@@ -40,7 +40,7 @@ async function main(): Promise<void> {
 
   const globalWebSocket: unknown = globalThis.WebSocket;
   if (globalWebSocket === undefined) {
-    throw new Error('Node 22.4 or newer is required (global WebSocket missing).');
+    throw new Error('Node 24 is required (see .nvmrc); no global WebSocket found.');
   }
   neonConfig.webSocketConstructor = globalWebSocket as typeof neonConfig.webSocketConstructor;
 

@@ -63,7 +63,7 @@ scripts/          guardrail hooks
 ## Development
 
 ```bash
-nvm use          # Node 22, pinned in .nvmrc
+nvm use          # Node 24 (current LTS), pinned in .nvmrc
 npm install
 cp .env.example .env.local   # then fill in YOUR OWN Neon dev branch URL
 npm run dev
@@ -82,8 +82,8 @@ and `db:verify` (proves migrations apply, are idempotent, and the advisory lock
 serialises concurrent runners). There is deliberately **no `db:push`**.
 
 Tests: `npm test` (unit, no database), `test:integration` (requires a marked test
-database — see [TESTING.md](docs/TESTING.md)), `test:e2e` (builds and serves production,
-then drives Chromium).
+database — see [TESTING.md](docs/TESTING.md)), `test:e2e` (builds and serves production
+on port 3200, then drives Chromium).
 
 Destructive database work refuses to run unless `APP_ENV=test`, the host is on
 `TEST_DATABASE_ALLOWLIST`, **and** the database carries a marker table created by

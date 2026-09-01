@@ -76,7 +76,13 @@ runtime. Every route that posts financially declares:
 export const runtime = 'nodejs';
 ```
 
-Node is pinned to 22 (`.nvmrc`, `engines`). Keep local, CI, and Vercel on the same major.
+Node is pinned to **24**, the current LTS (`lts/krypton`) and the version every ticket so
+far was actually built and tested on. Keep local, CI, and Vercel on the same major.
 
-> **Open item for LL-006:** confirm Node 22 against Vercel's currently supported runtimes
-> and bump if 24 is available, so all three environments match exactly.
+An earlier pin of 22 was wrong on two counts: it sat *below* the current LTS, and it named
+a version that was not installed and had therefore never run this code. A pin describing a
+configuration nobody exercises is worse than no pin.
+
+> **Open item for LL-006:** confirm Node 24 is selectable in the Vercel project settings
+> and set it explicitly there, so local, CI, and Vercel match exactly rather than by
+> coincidence.

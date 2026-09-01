@@ -45,9 +45,9 @@ export type HttpDatabase = NeonHttpDatabase<Schema>;
 export type PoolDatabase = NeonDatabase<Schema>;
 
 /**
- * Neon's Pool speaks WebSocket. Node has had a global WebSocket since 22.4, but
- * the driver does not wire it up itself, so we do it explicitly rather than
- * depending on undocumented fallback behaviour.
+ * Neon's Pool speaks WebSocket. Node exposes a global WebSocket (since 22.4; we
+ * pin 24), but the driver does not wire it up itself, so we do it explicitly
+ * rather than depending on undocumented fallback behaviour.
  */
 type WebSocketConstructor = NonNullable<typeof neonConfig.webSocketConstructor>;
 
@@ -59,7 +59,7 @@ function configureWebSocket(): void {
   if (globalWebSocket === undefined) {
     throw new Error(
       'No WebSocket implementation available for the Neon Pool client. ' +
-        'LedgerLite requires Node 22.4 or newer (see .nvmrc and package.json engines).',
+        'LedgerLite requires Node 24 (see .nvmrc and package.json engines).',
     );
   }
 
