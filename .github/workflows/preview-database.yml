@@ -28,6 +28,11 @@ env:
   NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
   NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
   VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  # .vercel/project.json is gitignored, so CI has no link file. The Vercel CLI
+  # reads these from the environment instead; without them it reports
+  # "Your codebase isn't linked to a project on Vercel".
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
   NEON_BRANCH: preview/pr-${{ github.event.pull_request.number }}
   NEONCTL: neonctl@2.15.0
 
@@ -44,6 +49,8 @@ jobs:
           [ -z "$NEON_API_KEY" ] && missing+=("NEON_API_KEY")
           [ -z "$NEON_PROJECT_ID" ] && missing+=("NEON_PROJECT_ID")
           [ -z "$VERCEL_TOKEN" ] && missing+=("VERCEL_TOKEN")
+          [ -z "$VERCEL_ORG_ID" ] && missing+=("VERCEL_ORG_ID")
+          [ -z "$VERCEL_PROJECT_ID" ] && missing+=("VERCEL_PROJECT_ID")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error title=Missing GitHub secrets::${missing[*]}"
             echo "Preview deployments cannot get an isolated database without these."
