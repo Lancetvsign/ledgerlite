@@ -20,7 +20,7 @@ import { config } from 'dotenv';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/neon-serverless';
 
-import { describeConnection, getDatabaseUrl } from '../src/db/env';
+import { describeConnection, getDirectDatabaseUrl } from '../src/db/env';
 import { assertSafeForDestructiveUse, TEST_MARKER_TABLE } from '../src/db/safety';
 
 config({ path: '.env.local', quiet: true });
@@ -43,7 +43,7 @@ async function run(command: string, args: readonly string[]): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  const connectionString = getDatabaseUrl();
+  const connectionString = getDirectDatabaseUrl();
   console.info(`Verifying against ${describeConnection(connectionString)}\n`);
 
   const globalWebSocket: unknown = globalThis.WebSocket;

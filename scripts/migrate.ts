@@ -16,7 +16,7 @@ import { config } from 'dotenv';
 import { drizzle } from 'drizzle-orm/neon-serverless';
 import { migrate } from 'drizzle-orm/neon-serverless/migrator';
 
-import { describeConnection, getDatabaseUrl } from '../src/db/env';
+import { describeConnection, getDirectDatabaseUrl } from '../src/db/env';
 
 config({ path: '.env.local', quiet: true });
 
@@ -33,7 +33,8 @@ const MIGRATION_LOCK_ID = '8312004771002119';
 const MIGRATIONS_FOLDER = 'drizzle/migrations';
 
 async function main(): Promise<void> {
-  const connectionString = getDatabaseUrl();
+  // Direct connection, never pooled: the advisory lock below is session-level.
+  const connectionString = getDirectDatabaseUrl();
 
   // Safe to print: credentials stripped.
   console.info(`Applying migrations to ${describeConnection(connectionString)}`);

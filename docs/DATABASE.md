@@ -130,10 +130,32 @@ schema should not change without review. It appears in no npm script, and the
 
 Use `db:generate` + `db:migrate`.
 
+### Pooled vs direct connections
+
+Neon exposes two endpoints per branch. Both are needed, and using the wrong one for
+migrations fails silently rather than loudly.
+
+| Variable | Endpoint | Used by |
+|---|---|---|
+| `DATABASE_URL` | pooled (`-pooler` in the host) | the application at runtime — both clients |
+| `DATABASE_URL_UNPOOLED` | direct | migrations, advisory locks, `db:verify` |
+
+The pooled endpoint is PgBouncer in **transaction pooling mode**: a client session is not
+pinned to one server backend, and the backend can change between statements. Session-level
+state does not survive that — and `pg_advisory_lock()` is session-level.
+
+On the pooled endpoint a migration runner can therefore acquire its lock on one backend,
+apply migrations on another, and release on a third. Nothing errors. The lock simply stops
+protecting anything, which is the worst way for a lock to be wrong.
+
+`getDirectDatabaseUrl()` prefers `DATABASE_URL_UNPOOLED` and **refuses** to fall back to a
+`DATABASE_URL` whose host contains `-pooler`.
+
 ### The advisory lock
 
 `scripts/migrate.ts` takes `pg_advisory_lock(8312004771002119)` on a dedicated connection
-held for the whole run, released in a `finally`.
+held for the whole run, released in a `finally`. It runs over the **direct** endpoint, for
+the reason above.
 
 This is not theoretical. Vercel can retry or parallelise builds, and CI can start a job
 while another is mid-deploy. Two runners applying the same migration simultaneously is

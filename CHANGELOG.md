@@ -41,6 +41,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the one command that cannot rely on the marker check (it creates it), so it is the one
   able to arm the safety system on the wrong database — a risk that grows when
   `DATABASE_URL` is injected by tooling rather than chosen.
+- **Migrations now require a direct (unpooled) connection.** Neon's pooled endpoint is
+  PgBouncer in transaction pooling mode, where session-level advisory locks silently stop
+  protecting anything. `DATABASE_URL_UNPOOLED` is now required for migrations and
+  `db:verify`; the runner refuses a `-pooler` host rather than appearing to work.
 - **ADR-009** — TypeScript pinned to 6.0.3 and ESLint to 9.x. TypeScript 7 has no
   `typescript-eslint` support, which would silently disable every type-aware rule
   including `no-floating-promises`; `eslint-config-next@16` cannot run under ESLint 10.
