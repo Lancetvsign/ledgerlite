@@ -11,6 +11,36 @@ import tseslint from 'typescript-eslint';
  * Type-aware linting is enabled (`projectService`). It is the reason TypeScript is
  * pinned below 7.x — see docs/DECISIONS.md ADR-009.
  */
+/**
+ * no-restricted-syntax selectors for src/** — composed in ONE place because a
+ * later flat-config block REPLACES this rule rather than merging it; two blocks
+ * configuring it for overlapping files silently drop one set of selectors
+ * (which is exactly how the dynamic-import fence shipped inert the first time).
+ */
+const RESTRICTED_SYNTAX = [
+  {
+    selector:
+      "BinaryExpression[operator=/^[!=]==?$/] > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
+    message:
+      'Do not compare role names in business code. Ask about a capability instead: ' +
+      "roleHasCapability(role, 'journal.post'). See src/server/rbac.",
+  },
+  {
+    selector:
+      "SwitchCase > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
+    message:
+      'Do not switch on role names in business code. Ask about a capability instead. ' +
+      'See src/server/rbac.',
+  },
+  {
+    // The static no-restricted-imports fence misses dynamic import(); closed
+    // after the Gate 1 security review flagged the gap.
+    selector: 'ImportExpression > Literal[value=/internal/]',
+    message:
+      'Dynamic import of repository internals is fenced — use the authorized wrapper. See LL-014.',
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -140,6 +170,17 @@ export default tseslint.config(
           ],
         },
       ],
+      // The static rule above misses dynamic import(). Closed after the Gate 1
+      // security review flagged the gap.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "ImportExpression > Literal[value=/server\u002f[^\u002f]+\u002finternal/]",
+          message:
+            'Dynamic import of repository internals from routes/pages is fenced. See LL-014.',
+        },
+      ],
     },
   },
 
@@ -151,23 +192,7 @@ export default tseslint.config(
   {
     files: ['src/**/*.ts', 'src/**/*.tsx'],
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector:
-            "BinaryExpression[operator=/^[!=]==?$/] > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
-          message:
-            'Do not compare role names in business code. Ask about a capability instead: ' +
-            "roleHasCapability(role, 'journal.post'). See src/server/rbac.",
-        },
-        {
-          selector:
-            "SwitchCase > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
-          message:
-            'Do not switch on role names in business code. Ask about a capability instead. ' +
-            'See src/server/rbac.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...RESTRICTED_SYNTAX],
     },
   },
   {
