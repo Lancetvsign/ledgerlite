@@ -15,8 +15,9 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 | | |
 |---|---|
 | Sprint 0 | **Complete** — Gate 0 closed |
-| Sprint 1 | LL-010 ✅ · LL-011 ✅ · LL-012 ✅ · LL-013 ✅ · LL-014 ✅ |
-| Next | **Gate 1** — tenant security review, then Sprint 2 |
+| Sprint 1 | complete · Gate 1 closed |
+| Sprint 2 | LL-020 chart of accounts ✅ |
+| Next | LL-021 — audit events |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

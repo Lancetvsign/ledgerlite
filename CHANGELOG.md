@@ -65,6 +65,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-020** — Chart of accounts. `accounts` table with **no balance column** (boxed
+  comment; ADR-gated), a composite parent FK making cross-company parents structurally
+  impossible (proven in raw SQL), a self-parent CHECK, and service-level transitive-cycle
+  detection. System accounts protected; deactivate-only, no hard delete. Registered in
+  the isolation harness. Also fixed a shared-pool test-lifecycle bug (a guard flag
+  outliving its pool) that would have flaked every future integration suite.
 - **LL-014** — Tenant-isolation harness. Table-driven descriptors attacked uniformly as
   a foreign user; failures must be correct IN KIND (uniform denial or provably-empty —
   a raw driver error fails the suite). Completeness is structural: any table with a

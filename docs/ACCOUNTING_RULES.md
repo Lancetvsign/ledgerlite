@@ -20,9 +20,9 @@ enforced only by a test is a rule a future change can quietly remove.
 | # | Invariant | Enforced by | Ticket | Status |
 |---|---|---|---|---|
 | 1 | Debits equal credits on every posted entry | DB — deferred constraint trigger | LL-030 | pending |
-| 2 | No table stores an account balance | schema review + derivation | LL-020 / LL-034 | pending |
+| 2 | No table stores an account balance | schema review + derivation | LL-020 / LL-034 | **accounts table has no balance column (LL-020)**; full derivation LL-034 |
 | 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 | pending |
-| 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | pending |
+| 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **pattern proven on `accounts.parent` (LL-020)**; journal lines LL-030 |
 | 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | pending |
 | 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | pending |
 | 7 | Posting is atomic | Pool driver + one transaction | LL-031 | pending |
@@ -242,3 +242,21 @@ The single most valuable habit: **push each invariant down to the strongest laye
 can hold it.** A database constraint outlives every refactor, every new feature module,
 and every agent that will touch this codebase. Application code and tests are the second
 and third lines, not the first.
+
+## Protected accounts (LL-020)
+
+The chart of accounts enforces, in order of strength:
+
+- **No balance column exists** on `accounts`, by construction. The schema file carries a
+  boxed comment; adding one requires an ADR. Balances derive from journal lines (LL-034).
+- **A parent account cannot cross companies** — a composite foreign key
+  `(company_id, parent_account_id) → accounts(company_id, id)` makes it structurally
+  impossible, verified by a raw-SQL insert that the database rejects. An account cannot be
+  its own parent (CHECK), and transitive cycles (A→B→A) are refused by the service's
+  walk with a visited-set.
+- **System accounts** (`system_account_type` set) cannot be deactivated and cannot be
+  created through general account creation — only the default-COA installer (LL-041) mints
+  them, and the value cannot be reassigned.
+- **No hard delete exists.** The service exposes deactivation only; the parent FK is
+  `ON DELETE RESTRICT`. Inactive accounts stay queryable — history is never destroyed
+  (ADR-006).
