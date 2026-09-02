@@ -23,7 +23,7 @@ enforced only by a test is a rule a future change can quietly remove.
 | 2 | No table stores an account balance | schema review + derivation | LL-020 / LL-034 | **accounts table has no balance column (LL-020)**; full derivation LL-034 |
 | 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 | pending |
 | 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **pattern proven on `accounts.parent` (LL-020)**; journal lines LL-030 |
-| 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | pending |
+| 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | **`assertPeriodOpen` built and tested (LL-022)**; wired into posting LL-031 |
 | 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | pending |
 | 7 | Posting is atomic | Pool driver + one transaction | LL-031 | pending |
 | 8 | Money is never a float | ADR-004 + Zod boundary rejection | LL-031 | pending |
@@ -283,3 +283,22 @@ The chart of accounts enforces, in order of strength:
 - **No hard delete exists.** The service exposes deactivation only; the parent FK is
   `ON DELETE RESTRICT`. Inactive accounts stay queryable — history is never destroyed
   (ADR-006).
+
+## Accounting periods (LL-022)
+
+- **Resolved by posting date** ([ADR-002](DECISIONS.md#adr-002)); dates are `YYYY-MM-DD`
+  strings, never `Date`, so server-local time cannot shift a boundary
+  ([ADR-005](DECISIONS.md#adr-005)).
+- **Overlap is impossible at the database** — a GiST exclusion constraint
+  (`company_id WITH =`, `daterange && `) rejects two overlapping periods in one company
+  even under concurrent inserts. Verified in raw SQL, and three concurrent lookups of one
+  month yield exactly one period.
+- **`assertPeriodOpen(companyId, date)` is the single home of the closed-period rule** —
+  LL-031's posting path calls it; it is never duplicated in a UI check. Throws typed
+  `PERIOD_CLOSED`.
+- Periods are monthly, generated **lazily** on first lookup. Close/reopen require
+  `period.close`, record who and when, and write `ACCOUNTING_PERIOD_CLOSED` /
+  `_REOPENED` audit events in the same transaction — a rolled-back transition leaves no
+  event.
+- Period date ranges freeze once financial activity exists (`assertPeriodEditable`, a
+  documented hook that always passes until LL-030 wires the journal-line check into it).
