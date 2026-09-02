@@ -65,6 +65,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-022** — Accounting periods. Monthly, generated lazily on first lookup, resolved by
+  posting date (ADR-002) with dates as `YYYY-MM-DD` strings (ADR-005). Overlap impossible
+  via a GiST exclusion constraint — proven in raw SQL and under three concurrent lookups
+  yielding one period. `assertPeriodOpen` is the single closed-period gate (throws
+  `PERIOD_CLOSED`), built now for LL-031. Close/reopen need `period.close`, record
+  who/when, and emit audit events transactionally. Periods UI with confirm-before-close.
 - **LL-021** — Append-only audit events. Immutable in the database via a BEFORE
   UPDATE/DELETE trigger that blocks every role including the table owner (verified in raw
   SQL). `recordAuditEvent` takes the caller's transaction by default, so an audit row

@@ -14,6 +14,7 @@ import { requireCompanyMembership, requirePermission } from '@/server/authorizat
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { recordAuditEvent } from '@/server/audit';
+import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
@@ -159,6 +160,25 @@ const REGISTRY: IsolationDescriptor[] = [
           );
           return rows.rows; // attacker's company ≠ victim's, so always empty
         },
+      },
+    ],
+  },
+  {
+    table: 'accounting_periods',
+    seed: async (victim) => {
+      const period = await getAccountingPeriod(victim.companyId, '2026-01-15');
+      return { recordId: period.id };
+    },
+    attempts: [
+      {
+        operation: 'list periods (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listPeriods(attacker, victim.companyId),
+      },
+      {
+        operation: 'close a period (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => closePeriod(attacker, victim.companyId, recordId),
       },
     ],
   },
