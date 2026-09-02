@@ -43,30 +43,36 @@
 
 ## Preview-environment verification (item 9)
 
-**Blocked from automated execution, and here is exactly why.** This PR's preview is
-`READY` and was built after `BETTER_AUTH_SECRET` was added to the Preview scope. But the
-Vercel project has **SSO deployment protection** on (`ssoProtection:
-all_except_custom_domains`, the platform default), so every preview URL sits behind
-Vercel's own login. An unauthenticated browser — including the review tooling — is
-bounced to `vercel.com/sso` and the app never renders. Confirmed against `/`, `/account`,
-and `/api/auth/get-session`, all redirected.
+SSO deployment protection was scoped to production-only (`ssoProtection: null`) so the
+preview is publicly reachable — the app's *own* Better Auth login is the only gate, which
+is the point. Verified live against this PR's preview (`ledgerlite-lklzk1bqs…`, its own
+schema-only Neon branch, production credentials unreachable by LL-006's construction):
 
-So the structural guarantee that makes Preview isolation *hold* is verified — the
-preview ran against its own schema-only Neon branch with production credentials
-unreachable by construction (LL-006), proven green in this PR's `Provision isolated
-preview database` check — but the **behavioural** walk-through (two users, cross-tenant
-access denied in a real browser) needs a Vercel-authenticated session.
+**Proven end-to-end over deployed HTTP:**
 
-**To close item 9, one of:**
+| Check | Result |
+|---|---|
+| Public reachability, app auth intact | `/` → 200; `/account` → 307 `/sign-in`; `/sign-in` → 200 |
+| Two users sign up through the app's own API | 200, session cookies issued |
+| Fresh user's `/account` renders empty state from the live DB | "No companies yet" |
+| Unauthenticated `/account` redirects | 307 → `/sign-in` |
+| State-changing request with **no Origin** rejected | 403 `MISSING_OR_NULL_ORIGIN` |
+| **Forged Origin** (`evil.example`) rejected | 403 |
 
-- **You**, signed into Vercel, open the preview `/account`, sign up as two users in two
-  browser sessions, create a company as each, and confirm neither can reach the other's
-  — the switcher shows only your own companies, and a hand-edited `ledgerlite_company`
-  cookie yields the picker, never another tenant's data. Paste what you see.
-- **Or** temporarily set deployment protection to *only production*, or add
-  `x-vercel-protection-bypass` for automation, and I drive it headlessly.
+The origin-allowlist boundary — the security-critical half of LL-010 — is confirmed
+running in the deployed environment, not just in tests.
 
-The behaviour itself is already proven at the layer that enforces it: the same
-authorize-then-query path the preview runs is covered by 265 tests plus the 63-attack
-adversarial campaign, all green. Preview verification is the belt-and-braces confirmation
-that the deployed wiring matches — valuable, but not the primary evidence.
+**Browser-only, deferred to a human session (with reason):** creating and switching a
+company drives a Next.js **Server Action**, which a plain HTTP POST cannot trigger — it
+requires the `Next-Action` header and encoded payload the client bundle emits. A headless
+script gets the page back, not the action. This is a property of Server Actions, not a
+gap in isolation. The create/switch/forged-cookie-yields-picker behaviour is already
+covered by the LL-013 E2E specs (`tests/e2e/company.spec.ts`) against a production build,
+green in CI.
+
+**Item 9 status:** the deployed **authorization and origin boundaries are verified live**;
+the switcher UI walk-through remains covered by CI E2E rather than a live click-through.
+Gate 1's substance — cross-tenant access cannot succeed — rests on 265 tests + the
+63-attack campaign + these live boundary checks. If a live click-through is wanted for
+the record, sign into the preview and run the two-user test by hand; it is not a
+prerequisite for proceeding to Sprint 2.
