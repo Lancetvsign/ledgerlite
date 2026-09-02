@@ -95,6 +95,18 @@ async function main(): Promise<void> {
       await db.execute(sql.raw(`drop table if exists "public"."${name}" cascade`));
     }
     await db.execute(sql`drop schema if exists "drizzle" cascade`);
+    // Enum types survive table drops. Leaving them behind fails the re-apply on
+    // CREATE TYPE ... already exists — caught by CI when migration 0002
+    // introduced the first enums, invisible locally because db:verify had not
+    // been re-run since. Discovered, like the tables, never listed.
+    const enums = await db.execute<{ typname: string }>(
+      sql`select t.typname from pg_type t
+          join pg_namespace n on n.oid = t.typnamespace
+          where n.nspname = 'public' and t.typtype = 'e'`,
+    );
+    for (const { typname } of enums.rows) {
+      await db.execute(sql.raw(`drop type if exists "public"."${typname}" cascade`));
+    }
 
     // --- 2. migrations apply to a clean database --------------------------
     const first = await run('npx', ['tsx', 'scripts/migrate.ts']);
