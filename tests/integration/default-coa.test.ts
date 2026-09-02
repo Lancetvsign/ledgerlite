@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
 import { REQUIRED_SYSTEM_ACCOUNTS, STANDARD_CHART } from '@/server/accounts/default-coa';
-import { installDefaultChart } from '@/server/accounts/installer';
+import { installDefaultChart } from '@/server/accounts/internal';
 import { createCompanyWithOwner } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';

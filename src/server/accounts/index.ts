@@ -152,14 +152,28 @@ export async function updateAccount(
   // or company — those are not in UpdateAccountInput, so there is nothing to
   // guard here beyond the schema itself.
   try {
-    const rows = await getDbTx()
-      .update(schema.accounts)
-      .set({ ...input, updatedAt: sql`now()` })
-      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, accountId)))
-      .returning();
-    const account = rows[0];
-    if (account === undefined) throw new AccountError('ACCOUNT_NOT_FOUND', 'Account not found.');
-    return account;
+    return await getDbTx().transaction(async (tx) => {
+      const rows = await tx
+        .update(schema.accounts)
+        .set({ ...input, updatedAt: sql`now()` })
+        .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, accountId)))
+        .returning();
+      const account = rows[0];
+      if (account === undefined) throw new AccountError('ACCOUNT_NOT_FOUND', 'Account not found.');
+      // Records ACCOUNT_UPDATED atomically with the edit — the Gate 2A review
+      // flagged that create and deactivate were audited but update was not.
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId,
+        action: 'ACCOUNT_UPDATED',
+        entityType: 'account',
+        entityId: account.id,
+        before: existing,
+        after: account,
+      });
+      return account;
+    });
   } catch (error) {
     throw toDomainError(error);
   }

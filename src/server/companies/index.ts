@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import { getDbTx, schema } from '@/db';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 
-import { installDefaultChart } from '@/server/accounts/installer';
+import { installDefaultChart } from '@/server/accounts/internal';
 
 import { insertMembership, selectActiveMembers } from './internal';
 

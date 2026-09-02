@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
 import { AccountError, createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
-import { installDefaultChart } from '@/server/accounts/installer';
+import { installDefaultChart } from '@/server/accounts/internal';
 import { AuthorizationDenied } from '@/server/authorization';
 import { addMembershipAs, createCompanyWithOwner } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
