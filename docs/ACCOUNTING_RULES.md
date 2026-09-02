@@ -25,7 +25,7 @@ enforced only by a test is a rule a future change can quietly remove.
 | 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **enforced (LL-030)** — composite FKs on journal_lines; proven in raw SQL |
 | 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | **`assertPeriodOpen` built and tested (LL-022)**; wired into posting LL-031 |
 | 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | **enforced (LL-030)** — partial unique index; proven in raw SQL |
-| 7 | Posting is atomic | Pool driver + one transaction | LL-031 | pending |
+| 7 | Posting is atomic | Pool driver + one transaction | LL-031 | **enforced** — LedgerService, one Pool transaction; failure-injection test proves no partial state |
 | 8 | Money is never a float | ADR-004 + Zod boundary rejection | LL-031 | **enforced** — decimal.js configured; Zod rejects a JS number in a money field |
 
 Everything is `pending` because **Sprint 3 has not started**. Sprint 0 built the
