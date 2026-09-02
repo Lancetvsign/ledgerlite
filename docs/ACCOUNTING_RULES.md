@@ -26,7 +26,7 @@ enforced only by a test is a rule a future change can quietly remove.
 | 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | **`assertPeriodOpen` built and tested (LL-022)**; wired into posting LL-031 |
 | 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | **enforced (LL-030)** — partial unique index; proven in raw SQL |
 | 7 | Posting is atomic | Pool driver + one transaction | LL-031 | pending |
-| 8 | Money is never a float | ADR-004 + Zod boundary rejection | LL-031 | pending |
+| 8 | Money is never a float | ADR-004 + Zod boundary rejection | LL-031 | **enforced** — decimal.js configured; Zod rejects a JS number in a money field |
 
 Everything is `pending` because **Sprint 3 has not started**. Sprint 0 built the
 foundation; the ledger itself is LL-030 onward. Mark an invariant `enforced` only when
@@ -326,3 +326,34 @@ When a chart is chosen at company creation it installs in the SAME transaction a
 company and owner membership, so the system accounts the ledger needs exist from the first
 moment. Company creation with no chart argument installs nothing; a setup screen can
 install later via the authorized `installDefaultChartFor` (`account.manage`).
+
+## LedgerService (LL-031)
+
+`postJournalEntry` is the ONLY approved way to create a posted entry. No feature module
+inserts into `journal_entries`/`journal_lines` directly.
+
+**Validation pipeline, in order, all before any write persists:**
+1. Authorization — `requirePermission(actor, company, 'journal.post')`
+2. Structural + balance (pure, before I/O) — ≥2 lines, each exactly one positive amount,
+   debits equal credits exactly at NUMERIC(19,4) via decimal.js (`moneyEquals`, never
+   `===`, never epsilon)
+3. Company active · every account exists/belongs/active · period open (resolved on
+   **posting_date**, ADR-002)
+4. Gapless `entry_number` allocation via the counter row (ADR-003), inside the tx
+
+Each failure is a typed `LedgerError` with a stable code (`UNBALANCED_JOURNAL_ENTRY`,
+`PERIOD_CLOSED`, `INACTIVE_ACCOUNT`, `ACCOUNT_NOT_FOUND`, `INSUFFICIENT_LINES`,
+`INVALID_LINE`, `COMPANY_NOT_FOUND`).
+
+**Atomicity.** The header insert, all line inserts, `POSTED`/`posted_at`, and the audit
+event are ONE transaction on the Pool client (ADR-001). A failure anywhere leaves nothing
+— proven by a failure-injection test (delete the counter row → allocation throws
+mid-transaction → zero entries, lines, and audit rows remain). The DEFERRABLE balance
+trigger (LL-030) re-checks at COMMIT as defence in depth; the service's own check gives a
+clean error before the transaction opens.
+
+**Note on the injection test:** the ticket asks to inject a failure *after* the header and
+first line insert. LedgerService is a single black-box transaction, so a real failure is
+injected at the counter-allocation step (after auth + validation, inside the tx) rather
+than by mocking an internal — the guarantee proven is identical: a mid-transaction failure
+persists nothing.

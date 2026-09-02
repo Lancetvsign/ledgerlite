@@ -50,6 +50,13 @@
       "when": 1788385704130,
       "tag": "0006_journal_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788387092251,
+      "tag": "0007_journal_posted_audit_action",
+      "breakpoints": true
     }
   ]
 }
