@@ -5,11 +5,11 @@ import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
-import { createAccount, deactivateAccount } from '@/server/accounts';
+import { createAccount, deactivateAccount, updateAccount } from '@/server/accounts';
 import { recordAuditEvent } from '@/server/audit';
 import { createCompanyWithOwner } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
-import { createAccountInput } from '@/validation/account';
+import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -100,6 +100,21 @@ describe('transactional atomicity — the core requirement', () => {
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]?.action).toBe('ACCOUNT_CREATED');
     expect(r.rows[0]?.entity_id).toBe(acct.id);
+  });
+
+  it('updateAccount records ACCOUNT_UPDATED atomically (Gate 2A fix)', async () => {
+    const { user, company } = await makeOwner('o@synthetic.test');
+    const acct = await createAccount(user.id, company.id,
+      createAccountInput.parse({ name: 'Original', accountType: 'EXPENSE' }));
+    await updateAccount(user.id, company.id, acct.id, updateAccountInput.parse({ name: 'Renamed' }));
+    const db = await getTestDb();
+    const r = await db.execute<{ before_json: { name?: string }; after_json: { name?: string } }>(
+      sql`select before_json, after_json from audit_events
+          where company_id = ${company.id} and action = 'ACCOUNT_UPDATED'`,
+    );
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]?.before_json?.name).toBe('Original');
+    expect(r.rows[0]?.after_json?.name).toBe('Renamed');
   });
 
   it('deactivate records before AND after state in one transaction', async () => {

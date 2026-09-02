@@ -135,7 +135,7 @@ export async function closePeriod(
     const rows = await tx
       .update(schema.accountingPeriods)
       .set({ status: 'CLOSED', closedAt: sql`now()`, closedBy: actorUserId })
-      .where(eq(schema.accountingPeriods.id, periodId))
+      .where(and(eq(schema.accountingPeriods.companyId, companyId), eq(schema.accountingPeriods.id, periodId)))
       .returning();
     const updated = rows[0];
     if (updated === undefined) throw new PeriodError('PERIOD_NOT_FOUND', 'Period not found.');
@@ -181,7 +181,7 @@ export async function reopenPeriod(
     const rows = await tx
       .update(schema.accountingPeriods)
       .set({ status: 'OPEN', reopenedAt: sql`now()`, reopenedBy: actorUserId })
-      .where(eq(schema.accountingPeriods.id, periodId))
+      .where(and(eq(schema.accountingPeriods.companyId, companyId), eq(schema.accountingPeriods.id, periodId)))
       .returning();
     const updated = rows[0];
     if (updated === undefined) throw new PeriodError('PERIOD_NOT_FOUND', 'Period not found.');
