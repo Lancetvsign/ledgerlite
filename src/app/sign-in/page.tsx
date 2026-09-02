@@ -91,7 +91,7 @@ export default function SignInPage() {
         </label>
 
         {error !== null && (
-          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+          <p role="alert" data-testid="auth-error" className="text-sm text-red-600 dark:text-red-400">
             {error}
           </p>
         )}

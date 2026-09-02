@@ -51,13 +51,24 @@ export function CompanyPanel({
         </ul>
       )}
 
-      <form action={createCompanyAction} className="flex gap-2">
+      <form action={createCompanyAction} className="flex flex-col gap-2">
         <input
           name="legalName"
           placeholder="New company legal name"
           required
-          className="flex-1 rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+          className="rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
         />
+        <label className="flex items-center gap-2 text-xs text-neutral-500">
+          Chart of accounts
+          <select
+            name="chart"
+            defaultValue="standard"
+            className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
+          >
+            <option value="standard">Standard small business</option>
+            <option value="system-only">Required accounts only</option>
+          </select>
+        </label>
         <button type="submit" className="rounded bg-neutral-900 px-3 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
           Create
         </button>
