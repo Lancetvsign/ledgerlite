@@ -60,7 +60,7 @@ test.describe('sign-in form', () => {
     await page.getByLabel('Email').fill(EMAIL);
     await page.getByLabel('Password').fill('wrong-password-1');
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(page.getByTestId('auth-error')).toBeVisible();
     await expect(page).toHaveURL(/\/sign-in/);
   });
 });
