@@ -22,8 +22,20 @@ test.describe('authenticated', () => {
     await expect(page.getByTestId('account-email')).toHaveText(EMAIL);
   });
 
+});
+
+test.describe('sign-in form', () => {
   test('sign-out revokes access, not just the view', async ({ page }) => {
-    await page.goto('/account');
+    // Signs in FRESH rather than using the shared storageState: this test
+    // revokes its session server-side, and revoking the SHARED one made every
+    // authenticated spec scheduled after it flake to /sign-in. A destructive
+    // test brings its own state.
+    await page.goto('/sign-in');
+    await page.getByLabel('Email').fill(EMAIL);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(/\/account/);
+
     await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page).toHaveURL('/');
 
@@ -32,9 +44,8 @@ test.describe('authenticated', () => {
     await page.goto('/account');
     await expect(page).toHaveURL(/\/sign-in/);
   });
-});
 
-test.describe('sign-in form', () => {
+
   test('signs in through the real UI', async ({ page }) => {
     await page.goto('/sign-in');
     await page.getByLabel('Email').fill(EMAIL);

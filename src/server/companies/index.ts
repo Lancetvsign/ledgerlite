@@ -113,3 +113,27 @@ export async function hasActiveMembership(userId: string, companyId: string): Pr
     .limit(1);
   return rows.length > 0;
 }
+
+/**
+ * Adds a member to a company. The future invite flow's core; today it exists
+ * for tests and the tenant-isolation harness, which need multi-member and
+ * multi-role companies — states the application will produce, created through
+ * the same door it will use.
+ *
+ * AUTHORIZATION IS THE CALLER'S JOB (requirePermission user.manage) — this is
+ * a repository-level operation, kept unauthorized here so LL-013's tests can
+ * arrange fixtures; route-facing wrappers must authorize first.
+ */
+export async function addMembership(
+  companyId: string,
+  userId: string,
+  role: CompanyMembership['role'],
+): Promise<CompanyMembership> {
+  const rows = await getDbTx()
+    .insert(schema.companyMemberships)
+    .values({ companyId, userId, role })
+    .returning();
+  const membership = rows[0];
+  if (membership === undefined) throw new Error('membership insert returned no row');
+  return membership;
+}

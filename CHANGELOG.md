@@ -65,6 +65,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-013** — Company authorization layer. `requireCompanyMembership` /
+  `requirePermission`, fail-closed at every edge (malformed ids deny pre-query; database
+  errors deny; missing records deny). One byte-identical denial for every failure path so
+  existence never leaks — proven by test. Active-company cookie revalidated on every
+  read; forged context yields a picker, never a fallback. Minimal switcher UI with
+  create/switch. Also fixes an E2E flake shipped in LL-010: the sign-out test revoked the
+  SHARED storage-state session, bouncing parallel authenticated specs to /sign-in.
 - **LL-012** — RBAC capability model. Twenty capabilities as a typed union (typos are
   compile errors); grants keyed by capability in a total Record (an unmapped capability
   cannot compile); role sets derived, never authored twice — except in the tests, which

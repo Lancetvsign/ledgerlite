@@ -69,6 +69,38 @@ capability question is unanswerable without a role, and a role only exists insid
 ACTIVE membership in one company. OWNER of Company A is nobody in Company B. LL-013
 enforces that end to end.
 
+## The authorization layer (LL-013)
+
+```ts
+requireCompanyMembership(userId, companyId)          // ACTIVE membership in ACTIVE company
+requirePermission(userId, companyId, capability)     // …and the role holds the capability
+```
+
+**Every company-scoped operation calls one of these itself** — in the service, not only
+in middleware. Middleware is a convenience layer: the next background job, webhook, or
+direct service call bypasses it, and that bypass will not look like a security decision
+when it is written.
+
+**Fail closed, literally.** Malformed ids deny before the database is consulted; a
+database error denies (an unanswerable question is a "no", never a 500 a retry loop
+might squeeze a "yes" from); a missing record denies. There is no path from an
+exception or a null to access.
+
+**One denial shape.** No membership, inactive membership, wrong capability, and no such
+company all throw the same `AuthorizationDenied` — code `NOT_FOUND`, message
+`Not found.`, byte-identical (an integration test compares them). Anything more would be
+an oracle for which companies exist and who belongs to them. The real reason is logged
+server-side via the redacting logger and goes nowhere else. Timing differences are
+minimized as far as practical (single indexed query either way) but not formally
+equalized; that residual channel is accepted and recorded here.
+
+**Company context is a pointer, not a permission.** The active-company cookie names
+which of the user's companies the UI shows; every read revalidates membership. A cookie
+that fails validation yields **null and a picker** — never a fallback to another company
+the user does belong to, because silent fallback is one tenant quietly shown another
+tenant's data. A forged `company_id` in any transport — body, cookie, URL, header — is
+just a string that fails membership.
+
 ## Logging
 
 `src/lib/logging` is the only approved logging path. `console.log` in server code is a
