@@ -48,6 +48,27 @@ trusted origin succeeds.
 **every environment gets its own** — a shared secret would make a session minted in
 Preview valid in Production.
 
+## Authorization model (LL-012 onward)
+
+Capability-based. Business code asks `roleHasCapability(role, 'journal.post')` — it never
+compares role names. A role-name comparison outside `src/server/rbac` is a **lint error**
+(assignments stay legal; branching on names is what scatters policy into places nobody
+can audit).
+
+The grant matrix is keyed by capability and typed as a total `Record`, so adding a
+capability without deciding who holds it is a compile error, not a silent default. The
+tests carry an independent hand-written copy of the whole matrix: a permission change is
+always a two-file diff that reads as a permission change.
+
+Roles: OWNER and ADMIN hold everything; ACCOUNTANT works the ledger (journals, periods,
+account structure, exports); BOOKKEEPER works documents (invoices, payments, expenses,
+reconciliation) but never raw journals; READ_ONLY sees and cannot change.
+
+**No role bypasses membership.** The module's entire surface is role-scoped — a
+capability question is unanswerable without a role, and a role only exists inside an
+ACTIVE membership in one company. OWNER of Company A is nobody in Company B. LL-013
+enforces that end to end.
+
 ## Logging
 
 `src/lib/logging` is the only approved logging path. `console.log` in server code is a
