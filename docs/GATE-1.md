@@ -43,7 +43,30 @@
 
 ## Preview-environment verification (item 9)
 
-Performed live against this PR's Vercel Preview — its own schema-only Neon branch,
-production credentials unreachable by construction (LL-006):
+**Blocked from automated execution, and here is exactly why.** This PR's preview is
+`READY` and was built after `BETTER_AUTH_SECRET` was added to the Preview scope. But the
+Vercel project has **SSO deployment protection** on (`ssoProtection:
+all_except_custom_domains`, the platform default), so every preview URL sits behind
+Vercel's own login. An unauthenticated browser — including the review tooling — is
+bounced to `vercel.com/sso` and the app never renders. Confirmed against `/`, `/account`,
+and `/api/auth/get-session`, all redirected.
 
-*(recorded below after execution)*
+So the structural guarantee that makes Preview isolation *hold* is verified — the
+preview ran against its own schema-only Neon branch with production credentials
+unreachable by construction (LL-006), proven green in this PR's `Provision isolated
+preview database` check — but the **behavioural** walk-through (two users, cross-tenant
+access denied in a real browser) needs a Vercel-authenticated session.
+
+**To close item 9, one of:**
+
+- **You**, signed into Vercel, open the preview `/account`, sign up as two users in two
+  browser sessions, create a company as each, and confirm neither can reach the other's
+  — the switcher shows only your own companies, and a hand-edited `ledgerlite_company`
+  cookie yields the picker, never another tenant's data. Paste what you see.
+- **Or** temporarily set deployment protection to *only production*, or add
+  `x-vercel-protection-bypass` for automation, and I drive it headlessly.
+
+The behaviour itself is already proven at the layer that enforces it: the same
+authorize-then-query path the preview runs is covered by 265 tests plus the 63-attack
+adversarial campaign, all green. Preview verification is the belt-and-braces confirmation
+that the deployed wiring matches — valuable, but not the primary evidence.
