@@ -5,9 +5,12 @@ import { and, eq } from 'drizzle-orm';
 import { getDbTx, schema } from '@/db';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 
+import { installDefaultChart } from '@/server/accounts/installer';
+
 import { insertMembership, selectActiveMembers } from './internal';
 
 import type { AppUser, Company, CompanyMembership } from '@/db/schema';
+import type { CoaChoice } from '@/server/accounts/default-coa';
 import type { CreateCompanyInput } from '@/validation/company';
 
 /**
@@ -36,6 +39,7 @@ function toView(company: Company): CompanyView {
 export async function createCompanyWithOwner(
   ownerUserId: string,
   input: CreateCompanyInput,
+  chart?: CoaChoice,
 ): Promise<{ company: CompanyView; membership: CompanyMembership }> {
   return await getDbTx().transaction(async (tx) => {
     const companies = await tx
@@ -62,6 +66,14 @@ export async function createCompanyWithOwner(
 
     const membership = memberships[0];
     if (membership === undefined) throw new Error('membership insert returned no row');
+
+    // Install a chart in the SAME transaction when one is chosen (LL-023).
+    // Omitted (undefined) installs nothing — the company is still valid, and a
+    // setup screen can install later via installDefaultChartFor. When a chart
+    // IS chosen, the required system accounts arrive atomically with the company.
+    if (chart !== undefined) {
+      await installDefaultChart(company.id, chart, tx);
+    }
 
     return { company: toView(company), membership };
   });

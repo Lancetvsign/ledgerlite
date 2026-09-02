@@ -65,6 +65,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-023** — Default chart of accounts installer. Deterministic 25-account standard
+  chart and a 3-account system-only chart, both installing idempotently via
+  `ON CONFLICT DO NOTHING` on `(company_id, account_number)` — proven safe under two
+  concurrent installs. Choosable at company creation (installed in the same transaction)
+  or later through an authorized entry point. No journal entries, no balances.
 - **LL-022** — Accounting periods. Monthly, generated lazily on first lookup, resolved by
   posting date (ADR-002) with dates as `YYYY-MM-DD` strings (ADR-005). Overlap impossible
   via a GiST exclusion constraint — proven in raw SQL and under three concurrent lookups

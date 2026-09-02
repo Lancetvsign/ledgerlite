@@ -302,3 +302,21 @@ The chart of accounts enforces, in order of strength:
   event.
 - Period date ranges freeze once financial activity exists (`assertPeriodEditable`, a
   documented hook that always passes until LL-030 wires the journal-line check into it).
+
+## Default chart of accounts (LL-023)
+
+A deterministic small-business chart installs on request. **Idempotent by construction**:
+it upserts on `(company_id, account_number)` with `ON CONFLICT DO NOTHING`, so a repeat —
+even two concurrent installs — yields exactly one row per account number, never a
+duplicate. No check-then-insert (which races); the unique constraint is the arbiter.
+
+Two paths, both valid: **standard** (25 accounts — checking, savings, AP/AR, credit card,
+owner equity, revenue, COGS, operating expenses) and **system-only** (the three required
+system accounts: Accounts Receivable, Retained Earnings, Opening Balance Equity). Standard
+is a superset of the required set. The installer creates **no journal entries and no
+balances** — account structure only.
+
+When a chart is chosen at company creation it installs in the SAME transaction as the
+company and owner membership, so the system accounts the ledger needs exist from the first
+moment. Company creation with no chart argument installs nothing; a setup screen can
+install later via the authorized `installDefaultChartFor` (`account.manage`).

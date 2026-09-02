@@ -39,7 +39,10 @@ export async function createCompanyAction(formData: FormData): Promise<void> {
   });
   if (!parsed.success) redirect('/account?error=invalid-company');
 
-  const { company } = await createCompanyWithOwner(userId, parsed.data);
+  // Chart choice from the form; defaults to the standard small-business chart.
+  const chartRaw = formData.get('chart');
+  const chart = chartRaw === 'system-only' ? 'system-only' : 'standard';
+  const { company } = await createCompanyWithOwner(userId, parsed.data, chart);
   await setActiveCompany(userId, company.id);
   redirect('/account');
 }
