@@ -4,6 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
 import { requirePermission } from '@/server/authorization';
+import { recordAuditEvent } from '@/server/audit';
 
 import { AccountError } from './errors';
 
@@ -78,21 +79,34 @@ export async function createAccount(
   }
 
   try {
-    const rows = await getDbTx()
-      .insert(schema.accounts)
-      .values({
+    return await getDbTx().transaction(async (tx) => {
+      const rows = await tx
+        .insert(schema.accounts)
+        .values({
+          companyId,
+          name: input.name,
+          accountType: input.accountType,
+          accountNumber: input.accountNumber,
+          accountSubtype: input.accountSubtype,
+          parentAccountId: input.parentAccountId,
+          description: input.description,
+        })
+        .returning();
+      const account = rows[0];
+      if (account === undefined) throw new Error('account insert returned no row');
+      // Same tx: no account is created without its audit row, and none is
+      // audited without being created.
+      await recordAuditEvent({
+        tx,
         companyId,
-        name: input.name,
-        accountType: input.accountType,
-        accountNumber: input.accountNumber,
-        accountSubtype: input.accountSubtype,
-        parentAccountId: input.parentAccountId,
-        description: input.description,
-      })
-      .returning();
-    const account = rows[0];
-    if (account === undefined) throw new Error('account insert returned no row');
-    return account;
+        actorUserId: actorUserId,
+        action: 'ACCOUNT_CREATED',
+        entityType: 'account',
+        entityId: account.id,
+        after: account,
+      });
+      return account;
+    });
   } catch (error) {
     throw toDomainError(error);
   }
@@ -174,14 +188,26 @@ export async function deactivateAccount(
     );
   }
 
-  const rows = await getDbTx()
-    .update(schema.accounts)
-    .set({ status: 'INACTIVE', updatedAt: sql`now()` })
-    .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, accountId)))
-    .returning();
-  const account = rows[0];
-  if (account === undefined) throw new AccountError('ACCOUNT_NOT_FOUND', 'Account not found.');
-  return account;
+  return await getDbTx().transaction(async (tx) => {
+    const rows = await tx
+      .update(schema.accounts)
+      .set({ status: 'INACTIVE', updatedAt: sql`now()` })
+      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, accountId)))
+      .returning();
+    const account = rows[0];
+    if (account === undefined) throw new AccountError('ACCOUNT_NOT_FOUND', 'Account not found.');
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'ACCOUNT_DEACTIVATED',
+      entityType: 'account',
+      entityId: account.id,
+      before: existing,
+      after: account,
+    });
+    return account;
+  });
 }
 
 /** Company-scoped listing. `account.view` capability. Includes inactive by default. */

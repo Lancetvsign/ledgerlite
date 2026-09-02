@@ -243,6 +243,29 @@ can hold it.** A database constraint outlives every refactor, every new feature 
 and every agent that will touch this codebase. Application code and tests are the second
 and third lines, not the first.
 
+## Audit events (LL-021)
+
+Critical accounting actions record to `audit_events`, an **append-only** table:
+
+- **Immutable in the database.** A `BEFORE UPDATE OR DELETE` trigger raises for every
+  role, the table owner included — the app and migrations both run as `neondb_owner`, so
+  an owner bypass would protect nothing. Verified in raw SQL: UPDATE and DELETE both
+  rejected, the row survives. Erasing a record (retention, GDPR) is a deliberate,
+  reviewed migration that drops the trigger, acts, and restores it — never an app write.
+- **Written inside the action's transaction.** `recordAuditEvent({ tx, ... })` shares the
+  caller's transaction, so a rolled-back action leaves no audit row describing something
+  that never happened. A test forces a failure after the audit insert and asserts nothing
+  persists. This is the default and intended path; a tx-less call is only for a genuinely
+  standalone event.
+- **Redacted before write**, through the same `redact()` the logger uses (LL-004), so an
+  audit payload and a log line can never disagree about what is a secret. A test proves a
+  secret-keyed `before`/`after` never reaches the stored JSON.
+- **Company-partitioned** with the standing `UNIQUE (company_id, id)` and composite FK;
+  registered in the isolation harness.
+
+The account service (LL-020) already records `ACCOUNT_CREATED` and `ACCOUNT_DEACTIVATED`;
+period close/reopen follow in LL-022.
+
 ## Protected accounts (LL-020)
 
 The chart of accounts enforces, in order of strength:
