@@ -8,6 +8,13 @@
       "when": 1788227062919,
       "tag": "0000_initial_health_probe",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788312608285,
+      "tag": "0001_better_auth_tables",
+      "breakpoints": true
     }
   ]
 }

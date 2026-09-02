@@ -46,6 +46,14 @@ async function main(): Promise<void> {
   const connectionString = getDirectDatabaseUrl();
   console.info(`Verifying against ${describeConnection(connectionString)}\n`);
 
+  // The expected number of applied migrations is however many are committed —
+  // derived, not hard-coded. The literal 1 this replaces went stale the moment
+  // migration 0001 landed.
+  const { readdirSync } = await import('node:fs');
+  const expectedMigrations = readdirSync('drizzle/migrations').filter((f) =>
+    f.endsWith('.sql'),
+  ).length;
+
   const globalWebSocket: unknown = globalThis.WebSocket;
   neonConfig.webSocketConstructor = globalWebSocket as typeof neonConfig.webSocketConstructor;
 
@@ -73,8 +81,20 @@ async function main(): Promise<void> {
     check('target is a marked, allowlisted test database', true);
 
     // --- clean slate ------------------------------------------------------
-    await db.execute(sql`drop table if exists "_health"`);
-    await db.execute(sql`drop table if exists "drizzle"."__drizzle_migrations"`);
+    // Discovered, not listed. A hard-coded table list rots the moment a
+    // migration adds a table: LL-010's auth tables survived the old
+    // drop-_health-only version, and "migrations apply to a clean database"
+    // failed on tables that already existed. The safety marker is the one
+    // survivor — removing it would trip the guard on the next run.
+    const existing = await db.execute<{ table_name: string }>(
+      sql`select table_name from information_schema.tables
+          where table_schema = 'public' and table_type = 'BASE TABLE'`,
+    );
+    for (const { table_name: name } of existing.rows) {
+      if (name === TEST_MARKER_TABLE) continue;
+      await db.execute(sql.raw(`drop table if exists "public"."${name}" cascade`));
+    }
+    await db.execute(sql`drop schema if exists "drizzle" cascade`);
 
     // --- 2. migrations apply to a clean database --------------------------
     const first = await run('npx', ['tsx', 'scripts/migrate.ts']);
@@ -94,8 +114,8 @@ async function main(): Promise<void> {
     );
     check(
       're-run did not duplicate migration records',
-      applied.rows[0]?.count === '1',
-      `${applied.rows[0]?.count ?? '?'} row(s)`,
+      applied.rows[0]?.count === String(expectedMigrations),
+      `${applied.rows[0]?.count ?? '?'} row(s), expected ${String(expectedMigrations)}`,
     );
 
     // --- 4. advisory lock serialises concurrent runners -------------------
@@ -112,8 +132,8 @@ async function main(): Promise<void> {
     );
     check(
       'concurrent runners did not duplicate migration records',
-      afterConcurrent.rows[0]?.count === '1',
-      `${afterConcurrent.rows[0]?.count ?? '?'} row(s)`,
+      afterConcurrent.rows[0]?.count === String(expectedMigrations),
+      `${afterConcurrent.rows[0]?.count ?? '?'} row(s), expected ${String(expectedMigrations)}`,
     );
 
     // --- 5. the HTTP client genuinely cannot transact ---------------------

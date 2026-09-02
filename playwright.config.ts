@@ -9,8 +9,6 @@ const BASE_URL = process.env['E2E_BASE_URL'] ?? `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
-  // Authentication state is prepared once and reused. See tests/e2e/auth.setup.ts.
-  globalSetup: './tests/e2e/global-setup.ts',
 
   // A test that only passes sometimes is worse than no test: it teaches people
   // to re-run rather than read. Retries are off locally so flakiness surfaces.
@@ -26,9 +24,16 @@ export default defineConfig({
   },
 
   projects: [
+    // Signs up/in through the app's own endpoints and saves storageState;
+    // authenticated specs depend on it. See tests/e2e/auth.setup.ts.
+    {
+      name: 'setup',
+      testMatch: /auth\.setup\.ts/,
+    },
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
     },
   ],
 
@@ -45,5 +50,15 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: process.env['CI'] === undefined,
     timeout: 180_000,
+    env: {
+      ...process.env,
+      // The app under test needs auth configuration. Next.js loads .env.local
+      // but does not override variables already in the environment, so these
+      // take effect while a developer's own values still win locally.
+      BETTER_AUTH_URL: BASE_URL,
+      BETTER_AUTH_SECRET:
+        process.env['BETTER_AUTH_SECRET'] ??
+        'SYNTHETIC-E2E-ONLY-SECRET-0000000000000000000000000000',
+    },
   },
 });

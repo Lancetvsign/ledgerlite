@@ -13,6 +13,12 @@ import { closeTestDb, getTestDb, truncateAll } from './database';
 
 config({ path: '.env.local', quiet: true });
 
+// Auth flows need a secret. A synthetic one is set for tests when the developer
+// has not configured their own — clearly marked so it can never be mistaken for
+// a real credential, and long enough to satisfy Better Auth.
+process.env['BETTER_AUTH_SECRET'] ??=
+  'SYNTHETIC-TEST-ONLY-SECRET-0000000000000000000000000000';
+
 beforeAll(async () => {
   if (process.env['DATABASE_URL'] === undefined || process.env['DATABASE_URL'].trim() === '') {
     throw new Error(

@@ -7,6 +7,47 @@
 > Binding decisions live in [DECISIONS.md](DECISIONS.md). Where this file and an ADR
 > disagree, the ADR wins and this file is wrong.
 
+## Authentication (LL-010)
+
+Better Auth, email/password, with its own password hashing and session management — we
+add no crypto of our own. Its four tables (`user`, `session`, `account`, `verification`)
+were captured as migration `0001_better_auth_tables` and follow the same review rules as
+any schema change.
+
+**Authentication grants nothing.** A session proves identity, full stop. Company
+membership and capabilities are separate application concerns (LL-013), every
+company-scoped service authorizes independently, and an integration test asserts the
+session object carries no roles, permissions or company access to smuggle.
+
+### The base-URL boundary
+
+The base URL decides where auth cookies are scoped and which origins may make
+state-changing requests — so **nothing about it is derived from a request**. No `Host`,
+no `X-Forwarded-Host`. `src/lib/auth/origins.ts` builds an explicit allowlist from
+environment configuration only:
+
+- `BETTER_AUTH_URL` (explicit, wins)
+- `VERCEL_URL` / `VERCEL_BRANCH_URL` — injected by the platform per deployment, not
+  client-controlled
+- localhost variants, excluded in production
+
+There is deliberately no `*.vercel.app` wildcard — that would trust every Vercel
+deployment on the planet — and a unit test fails if anyone adds a wildcard. Production
+with no configured base URL **refuses to start** rather than guessing. An integration
+test sends a forged `Host` + `Origin` and asserts rejection; the same request from a
+trusted origin succeeds.
+
+### Session semantics, tested against the real database
+
+- unauthenticated request → no session
+- tampered token → no session
+- **sign-out revokes server-side**: the old cookie stops working, asserted directly —
+  not inferred from a page rendering signed-out
+
+`BETTER_AUTH_SECRET` is server-only, required (startup fails loudly without it), and
+**every environment gets its own** — a shared secret would make a session minted in
+Preview valid in Production.
+
 ## Logging
 
 `src/lib/logging` is the only approved logging path. `console.log` in server code is a
