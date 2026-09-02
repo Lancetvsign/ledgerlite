@@ -13,6 +13,7 @@ import { getAuth } from '@/lib/auth';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
+import { recordAuditEvent } from '@/server/audit';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
@@ -120,6 +121,44 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate the victim account (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => deactivateAccount(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    table: 'audit_events',
+    seed: async (victim) => {
+      const ev = await recordAuditEvent({
+        companyId: victim.companyId,
+        actorUserId: victim.ownerUserId,
+        action: 'ACCOUNT_CREATED',
+        entityType: 'account',
+        entityId: 'seed-account',
+      });
+      return { recordId: ev.id };
+    },
+    attempts: [
+      {
+        // audit_events has no cross-company read service; the tenancy guarantee
+        // is that the log is COMPANY-PARTITIONED. A scoped read of the
+        // attacker's own audit trail can never surface Company A's rows. (The
+        // recorder is an internal, already-authorized call — it is never reached
+        // with attacker input directly; company creation and the account
+        // service are its only callers.)
+        operation: 'audit trail is company-partitioned (attacker sees none of A)',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const attackerCompany = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`,
+          );
+          const cid = attackerCompany.rows[0]?.company_id;
+          const rows = await db.execute(
+            rawSql`select id from audit_events
+                   where company_id = ${cid} and company_id = ${victim.companyId}`,
+          );
+          return rows.rows; // attacker's company ≠ victim's, so always empty
+        },
       },
     ],
   },

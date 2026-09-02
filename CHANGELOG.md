@@ -65,6 +65,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-021** — Append-only audit events. Immutable in the database via a BEFORE
+  UPDATE/DELETE trigger that blocks every role including the table owner (verified in raw
+  SQL). `recordAuditEvent` takes the caller's transaction by default, so an audit row
+  commits or rolls back WITH the action it records — a rolled-back action leaves no event
+  (tested). `before`/`after` JSON redacted through the LL-004 redactor. The LL-020 account
+  service now emits ACCOUNT_CREATED/DEACTIVATED transactionally. Registered in the
+  isolation harness.
 - **LL-020** — Chart of accounts. `accounts` table with **no balance column** (boxed
   comment; ADR-gated), a composite parent FK making cross-company parents structurally
   impossible (proven in raw SQL), a self-parent CHECK, and service-level transitive-cycle

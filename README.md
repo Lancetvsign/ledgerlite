@@ -16,8 +16,8 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 |---|---|
 | Sprint 0 | **Complete** — Gate 0 closed |
 | Sprint 1 | complete · Gate 1 closed |
-| Sprint 2 | LL-020 chart of accounts ✅ |
-| Next | LL-021 — audit events |
+| Sprint 2 | LL-020 ✅ · LL-021 audit events ✅ |
+| Next | LL-022 — accounting periods |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

@@ -29,6 +29,13 @@
       "when": 1788369050569,
       "tag": "0003_chart_of_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788373043104,
+      "tag": "0004_audit_events",
+      "breakpoints": true
     }
   ]
 }
