@@ -14,7 +14,12 @@ export default defineConfig({
   // to re-run rather than read. Retries are off locally so flakiness surfaces.
   retries: process.env['CI'] === undefined ? 0 : 1,
   forbidOnly: process.env['CI'] !== undefined,
-  fullyParallel: true,
+  // Single worker: E2E shares one database and one Better Auth surface, and
+  // parallel specs contend on session state (a sign-out in one spec racing a
+  // sign-in in another). Serial is a few seconds slower and deterministic —
+  // the right trade for an auth-heavy suite against shared state.
+  fullyParallel: false,
+  workers: 1,
   reporter: process.env['CI'] === undefined ? 'list' : [['list'], ['html', { open: 'never' }]],
 
   use: {
@@ -28,7 +33,7 @@ export default defineConfig({
     // authenticated specs depend on it. See tests/e2e/auth.setup.ts.
     {
       name: 'setup',
-      testMatch: /auth\.setup\.ts/,
+      testMatch: /.*\.setup\.ts/,
     },
     {
       name: 'chromium',

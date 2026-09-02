@@ -209,7 +209,7 @@ real transport is proven where it actually exists:
 | service argument (any origin) | isolation + authorization integration suites | ✅ |
 | cookie (`ledgerlite_company`) | E2E: forged cookie → picker, never fallback | ✅ |
 | form body (server action) | E2E: switch action re-proves membership | ✅ |
-| URL / query param | first company-scoped route arrives in LL-024 — **its PR must add the entry here and the test** | ⏳ |
+| URL / query param | LL-024: `/accounts` takes its company from the SERVER-authorized context, never a URL/query param — there is no company id in the address bar to manipulate | ✅ |
 | header | no header-derived company exists; adding one requires a descriptor | ⏳ |
 
 ### The adversarial pass
