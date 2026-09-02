@@ -14,9 +14,9 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Sprint 0 | **Complete** — LL-000 … LL-007 all merged |
-| Current | [Gate 0](docs/GATE-0.md) verification |
-| Next | Sprint 1 — LL-010 authentication |
+| Sprint 0 | **Complete** — Gate 0 closed |
+| Sprint 1 | LL-010 authentication ✅ |
+| Next | LL-011 — users, companies, memberships |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

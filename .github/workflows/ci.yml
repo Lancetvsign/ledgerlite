@@ -48,14 +48,32 @@ jobs:
         run: npm run build
 
   # ---------------------------------------------------------------------------
-  # End-to-end against a production build. No database needed yet; that changes
-  # when authentication lands in LL-010.
+  # End-to-end against a production build. Since LL-010 the app under test
+  # authenticates, so this job provisions its own ephemeral Neon branch — same
+  # pattern and same fork-guard as the integration job.
   # ---------------------------------------------------------------------------
   e2e:
     name: End-to-end
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+      E2E_BRANCH: test/e2e-run-${{ github.run_id }}
+      # Synthetic, per run, never reused anywhere. The app under test just needs
+      # A secret; it protects nothing beyond this throwaway branch.
+      BETTER_AUTH_SECRET: SYNTHETIC-CI-E2E-SECRET-${{ github.run_id }}-0000000000
     steps:
+      - name: Require Neon credentials
+        run: |
+          if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
+            echo "::error title=Missing GitHub secrets::NEON_API_KEY / NEON_PROJECT_ID"
+            echo "E2E authenticates against a real database since LL-010. Failing rather"
+            echo "than skipping — unrun tests must never look like a pass."
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
@@ -81,7 +99,31 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
 
+      - name: Create ephemeral Neon branch
+        run: |
+          set -euo pipefail
+          npx --yes neonctl@2.15.0 branches create \
+            --project-id "$NEON_PROJECT_ID" --name "$E2E_BRANCH" --output json > /dev/null
+          POOLED=$(npx --yes neonctl@2.15.0 connection-string "$E2E_BRANCH" \
+            --project-id "$NEON_PROJECT_ID" --pooled --output json | tr -d '"')
+          DIRECT=$(npx --yes neonctl@2.15.0 connection-string "$E2E_BRANCH" \
+            --project-id "$NEON_PROJECT_ID" --output json | tr -d '"')
+          echo "::add-mask::$POOLED"
+          echo "::add-mask::$DIRECT"
+          echo "DATABASE_URL=$POOLED" >> "$GITHUB_ENV"
+          echo "DATABASE_URL_UNPOOLED=$DIRECT" >> "$GITHUB_ENV"
+
+      - name: Apply migrations
+        run: npm run db:migrate
+
       - run: npm run test:e2e
+
+      - name: Delete ephemeral Neon branch
+        if: always()
+        run: |
+          npx --yes neonctl@2.15.0 branches delete "$E2E_BRANCH" \
+            --project-id "$NEON_PROJECT_ID" || \
+            echo "::warning title=Branch cleanup failed::$E2E_BRANCH may still exist; the reaper will remove it"
 
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -65,6 +65,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-010** — Authentication. Better Auth (email/password) with its schema captured as
+  migration `0001_better_auth_tables` — including an `issuer` column the deprecated
+  generator omitted, added after introspecting the installed version. Base URL and
+  trusted origins are an environment-derived allowlist (never the Host header; no
+  wildcards; production refuses to guess). Verified against a real database: tampered
+  tokens refused, sign-out kills the old cookie server-side, forged Host+Origin
+  rejected. E2E signs in through the real UI; the CI e2e job now provisions its own
+  Neon branch.
 - **LL-007** — Engineering documentation. `ACCOUNTING_RULES.md` states the eight
   invariants with the layer that enforces each; `API.md` records service and route
   conventions before any surface exists; `docs/README.md` orients a session with no prior

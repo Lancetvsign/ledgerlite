@@ -114,6 +114,12 @@ branches, and a key that cannot reach your other Neon projects is a smaller blas
 Never share a `BETTER_AUTH_SECRET` across environments: a session minted in Preview would
 then be valid in Production.
 
+> **Action required since LL-010:** auth is live in the app, so `BETTER_AUTH_SECRET`
+> must now actually exist in Vercel's Preview and Production scopes (distinct values,
+> `openssl rand -base64 32` each) and `BETTER_AUTH_URL` in Production. Until then,
+> deployed auth routes fail loudly with a clear error — by design, rather than running
+> with a guessed identity.
+
 Connection strings are stripped of credentials by `describeConnection()` before being
 printed, and masked with `::add-mask::` in CI before use.
 

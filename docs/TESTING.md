@@ -231,10 +231,11 @@ collides with Seatboard, which owns 3000 in the parent workspace.
 Logging in per test is the usual reason an E2E suite becomes too slow to run — and then
 stops being run.
 
-Authentication itself arrives in **LL-010**; the setup currently writes an empty but
-valid storage state so the seam exists and the file path is agreed. When LL-010 lands,
-seed the user through the application's own signup path — never by writing auth tables
-directly, which would test a state the application cannot actually produce.
+Since LL-010 this is real: a Playwright `setup` project (`tests/e2e/auth.setup.ts`)
+creates the user through the application's own sign-up endpoint — never by writing auth
+tables directly, which would prove a state the application cannot produce — and saves
+`storageState`; authenticated specs opt in with `test.use({ storageState })`. The CI e2e
+job provisions its own ephemeral Neon branch, exactly like the integration job.
 
 ## Current coverage
 
