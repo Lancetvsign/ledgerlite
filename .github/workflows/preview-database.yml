@@ -28,6 +28,11 @@ env:
   NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
   NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
   VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  # .vercel/project.json is gitignored, so CI has no link file. The Vercel CLI
+  # reads these from the environment instead; without them it reports
+  # "Your codebase isn't linked to a project on Vercel".
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
   NEON_BRANCH: preview/pr-${{ github.event.pull_request.number }}
   NEONCTL: neonctl@2.15.0
 
@@ -44,6 +49,8 @@ jobs:
           [ -z "$NEON_API_KEY" ] && missing+=("NEON_API_KEY")
           [ -z "$NEON_PROJECT_ID" ] && missing+=("NEON_PROJECT_ID")
           [ -z "$VERCEL_TOKEN" ] && missing+=("VERCEL_TOKEN")
+          [ -z "$VERCEL_ORG_ID" ] && missing+=("VERCEL_ORG_ID")
+          [ -z "$VERCEL_PROJECT_ID" ] && missing+=("VERCEL_PROJECT_ID")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error title=Missing GitHub secrets::${missing[*]}"
             echo "Preview deployments cannot get an isolated database without these."
@@ -59,12 +66,18 @@ jobs:
       - run: npm ci
 
       - name: Create schema-only Neon branch
+        id: branch
         run: |
           set -euo pipefail
           # Re-creating on every synchronize would discard a reviewer's manual test
           # data mid-review, so an existing branch is reused.
+          #
+          # Whether it was CREATED matters downstream: the emptiness assertion is
+          # only meaningful on a fresh branch. On a reused one it would fail on our
+          # own seed data, which is what happened the first time this ran twice.
           if npx --yes "$NEONCTL" branches get "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" >/dev/null 2>&1; then
             echo "Reusing existing branch $NEON_BRANCH"
+            echo "created=false" >> "$GITHUB_OUTPUT"
           else
             # --schema-only is the guarantee. Without it this branch would be a
             # copy-on-write clone of production, data included.
@@ -72,6 +85,7 @@ jobs:
               --project-id "$NEON_PROJECT_ID" \
               --name "$NEON_BRANCH" \
               --schema-only
+            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Resolve connection strings
@@ -88,55 +102,56 @@ jobs:
           echo "TEST_DATABASE_ALLOWLIST=$(printf '%s' "$HOST" | cut -d. -f1 | sed -E 's/-pooler$//')" >> "$GITHUB_ENV"
 
       - name: Prove the branch carries no production data
-        run: |
-          set -euo pipefail
-          # A schema-only branch must be empty. If this ever finds rows, the
-          # --schema-only guarantee has silently regressed and production data is
-          # about to be served from a Preview URL. Fail before that happens.
-          npx tsx -e "
-            import { neonConfig, Pool } from '@neondatabase/serverless';
-            import { sql } from 'drizzle-orm';
-            import { drizzle } from 'drizzle-orm/neon-serverless';
-            neonConfig.webSocketConstructor = globalThis.WebSocket;
-            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-            const db = drizzle(pool);
-            const r = await db.execute(sql\`
-              select coalesce(sum(n_live_tup), 0)::text as rows
-              from pg_stat_user_tables where schemaname = 'public'\`);
-            const rows = Number(r.rows[0]?.rows ?? 0);
-            console.log('rows in public schema: ' + rows);
-            await pool.end();
-            if (rows > 0) {
-              console.error('::error title=Preview database is not empty::A schema-only branch must contain no rows. Refusing to expose it.');
-              process.exit(1);
-            }
-          "
+        # Only on a freshly created branch. A reused one legitimately holds the
+        # seed data this workflow put there on a previous run.
+        if: steps.branch.outputs.created == 'true'
+        # A schema-only branch must contain no rows. If this ever finds any, the
+        # --schema-only guarantee has silently regressed and production data is
+        # about to be served from a Preview URL. Fail before that happens.
+        #
+        # A real script, not `tsx -e`: tsx transpiles to CJS, where top-level
+        # await does not compile. The inline version failed to compile at all,
+        # which meant this check silently did not run the first time it deployed.
+        run: npm run db:assert-empty
+
+      # A --schema-only branch has the parent's tables but an EMPTY
+      # drizzle.__drizzle_migrations, so Drizzle sees an unmigrated database whose
+      # tables already exist and fails on CREATE TABLE. Dropping the schema lets
+      # migrations rebuild it, which also means the preview schema provably came
+      # from the committed migration files rather than being asserted to match.
+      #
+      # Destructive, so the script re-verifies emptiness itself rather than
+      # trusting the step above to have run.
+      - name: Reset schema so migrations apply from scratch
+        if: steps.branch.outputs.created == 'true'
+        env:
+          APP_ENV: test
+        run: npm run db:reset-preview
 
       - name: Apply migrations
         env:
           APP_ENV: test
         run: npm run db:migrate
 
-      - name: Mark disposable and seed synthetic data
+      - name: Mark disposable
+        if: steps.branch.outputs.created == 'true'
         env:
           APP_ENV: test
-        run: |
-          set -euo pipefail
-          ENDPOINT_ID="$TEST_DATABASE_ALLOWLIST"
-          npm run db:mark-test -- --host "$ENDPOINT_ID"
-          npm run db:seed
+        run: npm run db:mark-test -- --host "$TEST_DATABASE_ALLOWLIST"
+
+      # Always: db:seed is idempotent, and a reused branch may need data a newly
+      # added migration expects.
+      - name: Seed synthetic data
+        env:
+          APP_ENV: test
+        run: npm run db:seed
 
       - name: Point this PR's Preview deployment at it
-        run: |
-          set -euo pipefail
-          BRANCH="${{ github.head_ref }}"
-          # Branch-scoped Preview variables override nothing else: production
-          # credentials are not in the Preview scope at all.
-          for VAR in DATABASE_URL DATABASE_URL_UNPOOLED; do
-            npx --yes vercel@54.21.1 env rm "$VAR" preview "$BRANCH" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
-            printf '%s' "${!VAR}" | npx --yes vercel@54.21.1 env add "$VAR" preview "$BRANCH" --token "$VERCEL_TOKEN" >/dev/null
-            echo "set $VAR for preview branch $BRANCH"
-          done
+        # Vercel REST API, not `vercel env add`. The CLI resolves the project from
+        # a .vercel/project.json link file, which is gitignored and absent in CI;
+        # supplying the identifiers only gets as far as "Could not retrieve
+        # Project Settings". The API takes them directly.
+        run: npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}"
 
   teardown:
     name: Destroy preview database
@@ -144,6 +159,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
       - name: Delete Neon branch and Vercel variables
         run: |
           if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
@@ -153,7 +175,6 @@ jobs:
           npx --yes "$NEONCTL" branches delete "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" \
             || echo "::warning title=Branch not deleted::$NEON_BRANCH may still exist"
           if [ -n "$VERCEL_TOKEN" ]; then
-            for VAR in DATABASE_URL DATABASE_URL_UNPOOLED; do
-              npx --yes vercel@54.21.1 env rm "$VAR" preview "${{ github.head_ref }}" --yes --token "$VERCEL_TOKEN" >/dev/null 2>&1 || true
-            done
+            npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}" --remove \
+              || echo "::warning title=Teardown::preview variables for ${{ github.head_ref }} may remain"
           fi

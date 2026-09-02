@@ -14,8 +14,9 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 
 | | |
 |---|---|
-| Current ticket | LL-006 — Vercel + Neon environments ✅ |
-| Next ticket | LL-007 — Engineering documentation, then Gate 0 |
+| Sprint 0 | **Complete** — LL-000 … LL-007 all merged |
+| Current | [Gate 0](docs/GATE-0.md) verification |
+| Next | Sprint 1 — LL-010 authentication |
 | Gate | Gate 0 not yet reached |
 
 ## Start here
