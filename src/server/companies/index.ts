@@ -3,6 +3,9 @@ import 'server-only';
 import { and, eq } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
+import { requireCompanyMembership, requirePermission } from '@/server/authorization';
+
+import { insertMembership, selectActiveMembers } from './internal';
 
 import type { AppUser, Company, CompanyMembership } from '@/db/schema';
 import type { CreateCompanyInput } from '@/validation/company';
@@ -82,20 +85,33 @@ export async function listCompaniesForUser(
   return rows.map((r) => ({ company: toView(r.company), role: r.role }));
 }
 
-/** Active members of one company, with their role. Company-scoped by definition. */
+/**
+ * Active members of one company — AUTHORIZED. Any active member may see the
+ * roster of their own company; nobody sees anyone else's. Hardened after the
+ * LL-014 adversarial pass flagged the unauthorized repo read as the leak
+ * waiting for its first careless route.
+ */
 export async function listMembersForCompany(
+  actorUserId: string,
   companyId: string,
 ): Promise<{ user: AppUser; role: CompanyMembership['role'] }[]> {
-  return await getDbTx()
-    .select({ user: schema.users, role: schema.companyMemberships.role })
-    .from(schema.companyMemberships)
-    .innerJoin(schema.users, eq(schema.companyMemberships.userId, schema.users.id))
-    .where(
-      and(
-        eq(schema.companyMemberships.companyId, companyId),
-        eq(schema.companyMemberships.status, 'ACTIVE'),
-      ),
-    );
+  await requireCompanyMembership(actorUserId, companyId);
+  return await selectActiveMembers(companyId);
+}
+
+/**
+ * Grants a membership — AUTHORIZED (user.manage). The raw insert lives in
+ * ./internal.ts, reachable only from server code; this is the front door the
+ * future invite flow uses.
+ */
+export async function addMembershipAs(
+  actorUserId: string,
+  companyId: string,
+  targetUserId: string,
+  role: CompanyMembership['role'],
+): Promise<CompanyMembership> {
+  await requirePermission(actorUserId, companyId, 'user.manage');
+  return await insertMembership(companyId, targetUserId, role);
 }
 
 /** The question LL-013's authorization layer will ask on every request. */
@@ -114,26 +130,3 @@ export async function hasActiveMembership(userId: string, companyId: string): Pr
   return rows.length > 0;
 }
 
-/**
- * Adds a member to a company. The future invite flow's core; today it exists
- * for tests and the tenant-isolation harness, which need multi-member and
- * multi-role companies — states the application will produce, created through
- * the same door it will use.
- *
- * AUTHORIZATION IS THE CALLER'S JOB (requirePermission user.manage) — this is
- * a repository-level operation, kept unauthorized here so LL-013's tests can
- * arrange fixtures; route-facing wrappers must authorize first.
- */
-export async function addMembership(
-  companyId: string,
-  userId: string,
-  role: CompanyMembership['role'],
-): Promise<CompanyMembership> {
-  const rows = await getDbTx()
-    .insert(schema.companyMemberships)
-    .values({ companyId, userId, role })
-    .returning();
-  const membership = rows[0];
-  if (membership === undefined) throw new Error('membership insert returned no row');
-  return membership;
-}

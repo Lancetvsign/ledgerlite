@@ -10,9 +10,11 @@ import {
   requireCompanyMembership,
   requirePermission,
 } from '@/server/authorization';
-import { addMembership, createCompanyWithOwner, listCompaniesForUser } from '@/server/companies';
+import { createCompanyWithOwner, listCompaniesForUser } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
+
+import { insertMembership } from '@/server/companies/internal';
 
 import { truncateAll } from '../helpers/database';
 
@@ -57,7 +59,7 @@ describe('requireCompanyMembership', () => {
     const owner = await makeUser('owner@synthetic.test');
     const keeper = await makeUser('keeper@synthetic.test');
     const { company } = await createCompanyWithOwner(owner.id, COMPANY_A);
-    await addMembership(company.id, keeper.id, 'BOOKKEEPER');
+    await insertMembership(company.id, keeper.id, 'BOOKKEEPER');
     const membership = await requireCompanyMembership(keeper.id, company.id);
     expect(membership.role).toBe('BOOKKEEPER');
   });
@@ -73,7 +75,7 @@ describe('requireCompanyMembership', () => {
     const owner = await makeUser('owner@synthetic.test');
     const keeper = await makeUser('keeper@synthetic.test');
     const { company } = await createCompanyWithOwner(owner.id, COMPANY_A);
-    await addMembership(company.id, keeper.id, 'BOOKKEEPER');
+    await insertMembership(company.id, keeper.id, 'BOOKKEEPER');
     const { getTestDb } = await import('../helpers/database');
     const { sql } = await import('drizzle-orm');
     const db = await getTestDb();
@@ -122,7 +124,7 @@ describe('requirePermission', () => {
     const owner = await makeUser('owner@synthetic.test');
     const keeper = await makeUser('keeper@synthetic.test');
     const { company } = await createCompanyWithOwner(owner.id, COMPANY_A);
-    await addMembership(company.id, keeper.id, 'BOOKKEEPER');
+    await insertMembership(company.id, keeper.id, 'BOOKKEEPER');
 
     await expect(requirePermission(keeper.id, company.id, 'invoice.create')).resolves.toBeDefined();
     await expect(requirePermission(owner.id, company.id, 'journal.post')).resolves.toBeDefined();

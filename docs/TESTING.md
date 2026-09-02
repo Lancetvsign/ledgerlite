@@ -175,6 +175,50 @@ more than the milliseconds.
 so a table added in a later ticket cannot silently leak rows between tests. It preserves
 `__drizzle_migrations` and the test marker.
 
+## The tenant-isolation suite (LL-014)
+
+`tests/integration/isolation.test.ts` is release-blocking for the life of the product.
+It builds User A (member only of Company A) and User B (member only of Company B), then
+attacks every registered entity as B and requires every attempt to fail **correctly in
+kind** — a denial must be the uniform `AuthorizationDenied`, a scoped listing must be
+provably empty; a raw driver error counts as a failing test even though the attacker got
+nothing, because the wrong failure is tomorrow's oracle.
+
+### Registering an entity — not optional
+
+Every company-scoped entity adds an `IsolationDescriptor` (`tests/helpers/isolation.ts`):
+how to seed one representative record, and the attack set (read by id, list, update,
+deactivate, state transitions) run **through the front door** — the same
+authorize-then-query pairing application code uses.
+
+**Completeness is structural.** A test introspects `information_schema` for tables with
+a `company_id` column and fails naming any without a descriptor. A tenant-owned table
+added in a future ticket without isolation coverage does not slip through review — it
+fails CI. (`companies` itself is the tenant root and is registered explicitly.)
+
+The suite also guards itself: the victim's OWNER must still pass, so a layer that
+started denying everyone cannot make the attacks green for the wrong reason.
+
+### Transport coverage map
+
+A forged `company_id` collapses to a string by the time authorization sees it, but each
+real transport is proven where it actually exists:
+
+| Transport | Proven in | Status |
+|---|---|---|
+| service argument (any origin) | isolation + authorization integration suites | ✅ |
+| cookie (`ledgerlite_company`) | E2E: forged cookie → picker, never fallback | ✅ |
+| form body (server action) | E2E: switch action re-proves membership | ✅ |
+| URL / query param | first company-scoped route arrives in LL-024 — **its PR must add the entry here and the test** | ⏳ |
+| header | no header-derived company exists; adding one requires a descriptor | ⏳ |
+
+### The adversarial pass
+
+Run at LL-014 and to be re-run at every gate: a fresh agent with no sight of the
+authorization internals or these tests writes and executes its own attacks. Findings
+become permanent regression tests. Blind self-review is the weakest test there is; this
+is the antidote the ticket mandates.
+
 ## Fixtures
 
 Rules, enforced by `tests/unit/fixtures.test.ts` — a meta-test, so a violation fails the
