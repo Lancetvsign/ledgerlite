@@ -93,7 +93,14 @@ export function getDb(): HttpDatabase {
 export function getDbTx(): PoolDatabase {
   if (poolDatabase === undefined) {
     configureWebSocket();
-    pool = new Pool({ connectionString: getDatabaseUrl() });
+    pool = new Pool({
+      connectionString: getDatabaseUrl(),
+      // Small cap: financial posting is short and serial, and in tests many
+      // suites share one Neon branch whose connection limit is finite. A large
+      // default pool multiplied across suites exhausts it; 5 is ample for one
+      // process and leaves headroom.
+      max: 5,
+    });
     poolDatabase = drizzlePool(pool, { schema });
   }
   return poolDatabase;

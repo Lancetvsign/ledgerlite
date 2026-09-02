@@ -12,6 +12,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getAuth } from '@/lib/auth';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
+import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
+import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -83,6 +85,41 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate a membership (state transition)',
         expect: 'denied',
         run: (attacker, victim) => requirePermission(attacker, victim.companyId, 'user.manage'),
+      },
+    ],
+  },
+  {
+    table: 'accounts',
+    seed: async (victim) => {
+      // Seeded through the front door as the victim's OWNER, so the record is a
+      // real account in Company A that an attacker will try to reach.
+      const account = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Cash', accountType: 'ASSET', accountNumber: '1000' }));
+      return { recordId: account.id };
+    },
+    attempts: [
+      {
+        operation: 'list accounts (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listAccounts(attacker, victim.companyId),
+      },
+      {
+        operation: 'create an account in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          createAccount(attacker, victim.companyId,
+            createAccountInput.parse({ name: 'Injected', accountType: 'EXPENSE' })),
+      },
+      {
+        operation: 'update the victim account',
+        expect: 'denied',
+        run: (attacker, victim, recordId) =>
+          updateAccount(attacker, victim.companyId, recordId, updateAccountInput.parse({ name: 'Hijacked' })),
+      },
+      {
+        operation: 'deactivate the victim account (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => deactivateAccount(attacker, victim.companyId, recordId),
       },
     ],
   },

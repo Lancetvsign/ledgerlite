@@ -41,13 +41,28 @@ const PRESERVED_TABLES = new Set([TEST_MARKER_TABLE, '__drizzle_migrations']);
 let guardChecked = false;
 
 async function markerExists(db: PoolDatabase): Promise<boolean> {
-  const result = await db.execute<{ exists: boolean }>(
-    sql`select exists (
-          select 1 from information_schema.tables
-          where table_schema = 'public' and table_name = ${TEST_MARKER_TABLE}
-        ) as exists`,
-  );
-  return result.rows[0]?.exists === true;
+  // Retried with backoff. This one read decides whether the safety guard runs,
+  // and under a saturated pool (many suites at once) it can time out — which the
+  // guard, correctly, treats as "cannot confirm → deny". A transient timeout is
+  // not evidence the database is unsafe, so a genuine answer is given a few
+  // chances. The guard still fails closed on a real absence: a definite `false`
+  // returns immediately, and exhausting the retries re-throws.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const result = await db.execute<{ exists: boolean }>(
+        sql`select exists (
+              select 1 from information_schema.tables
+              where table_schema = 'public' and table_name = ${TEST_MARKER_TABLE}
+            ) as exists`,
+      );
+      return result.rows[0]?.exists === true;
+    } catch (error) {
+      lastError = error;
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -99,5 +114,10 @@ export async function truncateAll(): Promise<void> {
 }
 
 export async function closeTestDb(): Promise<void> {
+  // Reset the once-per-process guard flag WITH the pool. Without this, the next
+  // suite sees guardChecked===true, skips the guard, and reuses a closed pool
+  // reference — which is what left later suites failing fast after the first
+  // pool was torn down in afterAll.
+  guardChecked = false;
   await closeDbTx();
 }
