@@ -19,12 +19,12 @@ enforced only by a test is a rule a future change can quietly remove.
 
 | # | Invariant | Enforced by | Ticket | Status |
 |---|---|---|---|---|
-| 1 | Debits equal credits on every posted entry | DB — deferred constraint trigger | LL-030 | pending |
+| 1 | Debits equal credits on every posted entry | DB — deferred constraint trigger | LL-030 | **enforced (LL-030)** — deferred trigger; rejection proven in raw SQL |
 | 2 | No table stores an account balance | schema review + derivation | LL-020 / LL-034 | **accounts table has no balance column (LL-020)**; full derivation LL-034 |
-| 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 | pending |
-| 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **pattern proven on `accounts.parent` (LL-020)**; journal lines LL-030 |
+| 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 | **DB enforced (LL-030)**; service layer LL-033 |
+| 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **enforced (LL-030)** — composite FKs on journal_lines; proven in raw SQL |
 | 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | **`assertPeriodOpen` built and tested (LL-022)**; wired into posting LL-031 |
-| 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | pending |
+| 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | **enforced (LL-030)** — partial unique index; proven in raw SQL |
 | 7 | Posting is atomic | Pool driver + one transaction | LL-031 | pending |
 | 8 | Money is never a float | ADR-004 + Zod boundary rejection | LL-031 | pending |
 
@@ -74,8 +74,14 @@ company, not the source, not the lines, not the accounts, not the amounts.
 by **reversal**, which creates a *new* entry with debits and credits swapped and leaves
 the original untouched and visible. The audit trail is the product.
 
-The single permitted transition is `POSTED` → `REVERSED` with `reversed_by_id` set.
-Everything else raises `POSTED_ENTRY_IMMUTABLE`.
+### The one permitted transition (LL-030 trigger)
+
+A `BEFORE UPDATE OR DELETE` trigger on `journal_entries` allows, on a `POSTED` row,
+**exactly one** change: `status` POSTED→REVERSED **with** `reversed_by_id` going NULL→set
+and **every other column identical** (`IS NOT DISTINCT FROM` across all fifteen columns).
+Any other update, and any delete, raises `POSTED_ENTRY_IMMUTABLE`. A parallel trigger on
+`journal_lines` freezes a posted entry's lines entirely. Drafts remain editable. Proven in
+raw SQL, pinned by `tests/integration/ledger-schema.test.ts`.
 
 ### 4. No cross-company journal line
 

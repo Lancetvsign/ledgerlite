@@ -17,7 +17,7 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 | Sprint 0 | **Complete** — Gate 0 closed |
 | Sprint 1 | complete · Gate 1 closed |
 | Sprint 2 | LL-020..LL-024 all ✅ |
-| Next | **Gate 2A** — accounting configuration, then Sprint 3 (the ledger) |
+| Sprint 3 | LL-030 ledger schema ✅ |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

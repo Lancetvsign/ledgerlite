@@ -67,6 +67,11 @@ export async function createCompanyWithOwner(
     const membership = memberships[0];
     if (membership === undefined) throw new Error('membership insert returned no row');
 
+    // Seed the gapless entry-number counter atomically with the company
+    // (ADR-003). Without this, the first posting for a new company would find
+    // no counter row.
+    await tx.insert(schema.companyCounters).values({ companyId: company.id });
+
     // Install a chart in the SAME transaction when one is chosen (LL-023).
     // Omitted (undefined) installs nothing — the company is still valid, and a
     // setup screen can install later via installDefaultChartFor. When a chart

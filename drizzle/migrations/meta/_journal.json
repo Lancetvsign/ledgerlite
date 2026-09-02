@@ -43,6 +43,13 @@
       "when": 1788374094023,
       "tag": "0005_accounting_periods",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788385704130,
+      "tag": "0006_journal_ledger",
+      "breakpoints": true
     }
   ]
 }

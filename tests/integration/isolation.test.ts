@@ -182,6 +182,59 @@ const REGISTRY: IsolationDescriptor[] = [
       },
     ],
   },
+  {
+    table: 'company_counters',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        // The counter row is keyed by company_id and has no service surface;
+        // an attacker cannot read or allocate against the victim's counter.
+        operation: 'counter is company-partitioned',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(rawSql`select company_id from company_counters where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
+  {
+    table: 'journal_entries',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'journal entries are company-partitioned (structural FKs proven in ledger-schema.test.ts)',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(rawSql`select id from journal_entries where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
+  {
+    table: 'journal_lines',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'journal lines are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(rawSql`select id from journal_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
 ];
 
 const COMPANY_A = createCompanyInput.parse({ legalName: 'Alpha LLC', timezone: 'America/Chicago' });
