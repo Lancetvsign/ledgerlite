@@ -10,8 +10,23 @@ import { z } from 'zod';
  * money is a string, and a JavaScript number is rejected, never coerced.
  */
 
-// Node 24 ships the full IANA list; an allowlist beats a format regex.
-const SUPPORTED_TIMEZONES = new Set(Intl.supportedValuesOf('timeZone'));
+/**
+ * A timezone is valid if the runtime can actually resolve it — which is the only
+ * property that matters, since it is what every date computation depends on.
+ *
+ * NOT Intl.supportedValuesOf('timeZone'): that curated list omits 'UTC' and the
+ * 'Etc/*' zones, which are legitimate IANA identifiers a user may reasonably
+ * choose. Trying to construct a DateTimeFormat is the honest test — it accepts
+ * exactly what the platform will accept later.
+ */
+function isResolvableTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const createCompanyInput = z.object({
   legalName: z
@@ -32,7 +47,7 @@ export const createCompanyInput = z.object({
     .string()
     .regex(/^[A-Z]{3}$/, 'Currency must be a three-letter uppercase ISO 4217 code.')
     .default('USD'),
-  timezone: z.string().refine((tz) => SUPPORTED_TIMEZONES.has(tz), {
+  timezone: z.string().refine(isResolvableTimezone, {
     message: 'Timezone must be a valid IANA identifier, e.g. America/Chicago.',
   }),
 });

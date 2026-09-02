@@ -48,6 +48,11 @@ export default async function AccountPage() {
         </dd>
       </dl>
       <CompanyPanel companies={companies} active={active} />
+      {active !== null && (
+        <a href="/accounts" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+          Chart of Accounts →
+        </a>
+      )}
       <SignOutButton />
     </main>
   );

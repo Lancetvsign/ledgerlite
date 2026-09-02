@@ -65,6 +65,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-024** — Chart of accounts UI. View, search, create, edit, deactivate — a server
+  component that authorizes and passes a cosmetic `canManage` flag; every mutation
+  re-authorizes at the service (proven by an integration test where a READ_ONLY user is
+  refused each mutation). Company comes from server context, never a URL param, so there
+  is nothing to manipulate in the address bar. System accounts show a badge and offer no
+  deactivate (and the service refuses it). No balances shown. Also: E2E now runs
+  single-worker with per-file session isolation, fixing latent cross-spec session races;
+  and the timezone validator now accepts UTC/Etc zones the curated Intl list omits.
 - **LL-023** — Default chart of accounts installer. Deterministic 25-account standard
   chart and a 3-account system-only chart, both installing idempotently via
   `ON CONFLICT DO NOTHING` on `(company_id, account_number)` — proven safe under two

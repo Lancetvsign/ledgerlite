@@ -28,6 +28,15 @@ describe('createCompanyInput', () => {
     expect(createCompanyInput.safeParse(input).success).toBe(false);
   });
 
+  it('accepts UTC and Etc/* zones, which the curated Intl list omits', () => {
+    // Regression: Intl.supportedValuesOf('timeZone') excludes UTC and Etc/*,
+    // but they are valid IANA identifiers a user may choose. The validator
+    // resolves the zone instead of consulting that list.
+    for (const tz of ['UTC', 'Etc/UTC', 'Etc/GMT+5']) {
+      expect(createCompanyInput.safeParse({ legalName: 'X', timezone: tz }).success).toBe(true);
+    }
+  });
+
   it('never accepts an ein through general creation', () => {
     // The protected column has no path through this schema at all.
     const parsed = createCompanyInput.parse({ ...VALID });
