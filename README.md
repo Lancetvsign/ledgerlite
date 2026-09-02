@@ -15,8 +15,8 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 | | |
 |---|---|
 | Sprint 0 | **Complete** — Gate 0 closed |
-| Sprint 1 | LL-010 authentication ✅ |
-| Next | LL-011 — users, companies, memberships |
+| Sprint 1 | LL-010 auth ✅ · LL-011 identity/tenancy ✅ |
+| Next | LL-012 — RBAC capability model |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

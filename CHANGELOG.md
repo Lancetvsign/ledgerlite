@@ -65,6 +65,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-011** — Identity and tenancy. `users` (linked once to the auth identity,
+  provisioned idempotently on first entry), `companies` (fiscal month, currency and
+  non-blank legal name enforced by CHECK constraints in the database), and
+  `company_memberships` (roles as an enum; duplicate membership impossible by unique
+  constraint). Company + OWNER membership created in one transaction — a forced failure
+  test proves no ownerless company survives. `company_memberships` carries the first
+  standing `UNIQUE (company_id, id)`; the protected `ein` column exists but has no path
+  into any default select shape or creation input.
 - **LL-010** — Authentication. Better Auth (email/password) with its schema captured as
   migration `0001_better_auth_tables` — including an `issuer` column the deprecated
   generator omitted, added after introspecting the installed version. Base URL and
