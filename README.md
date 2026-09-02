@@ -15,8 +15,8 @@ functionality yet**, by design. The ledger engine is Sprint 3.
 | | |
 |---|---|
 | Sprint 0 | **Complete** — Gate 0 closed |
-| Sprint 1 | LL-010 ✅ · LL-011 ✅ · LL-012 RBAC ✅ |
-| Next | LL-013 — company authorization layer |
+| Sprint 1 | LL-010 ✅ · LL-011 ✅ · LL-012 ✅ · LL-013 ✅ |
+| Next | LL-014 — tenant isolation harness, then Gate 1 |
 | Gate | Gate 0 not yet reached |
 
 ## Start here

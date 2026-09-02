@@ -2,8 +2,11 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { getActiveCompanyMembership } from '@/server/authorization/company-context';
+import { listCompaniesForUser } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
 
+import { CompanyPanel } from './company-panel';
 import { SignOutButton } from './sign-out-button';
 
 /**
@@ -30,6 +33,10 @@ export default async function AccountPage() {
   // Controlled provisioning (LL-011): the application user comes into being on
   // first authenticated entry. Idempotent; grants no company access.
   const appUser = await ensureAppUser(session.user);
+  const [companies, active] = await Promise.all([
+    listCompaniesForUser(appUser.id),
+    getActiveCompanyMembership(appUser.id),
+  ]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-4 p-8">
@@ -40,6 +47,7 @@ export default async function AccountPage() {
           {appUser.email}
         </dd>
       </dl>
+      <CompanyPanel companies={companies} active={active} />
       <SignOutButton />
     </main>
   );
