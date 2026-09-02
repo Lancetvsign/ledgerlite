@@ -145,7 +145,7 @@ describe('memberships', () => {
   it('lists the active members of a company', async () => {
     const owner = await makeUser('owner@synthetic.test');
     const { company } = await createCompanyWithOwner(owner.id, COMPANY);
-    const members = await listMembersForCompany(company.id);
+    const members = await listMembersForCompany(owner.id, company.id);
     expect(members).toHaveLength(1);
     expect(members[0]?.user.id).toBe(owner.id);
     expect(members[0]?.role).toBe('OWNER');
@@ -177,7 +177,7 @@ describe('memberships', () => {
 
     expect(await hasActiveMembership(owner.id, company.id)).toBe(false);
     expect(await listCompaniesForUser(owner.id)).toHaveLength(0);
-    expect(await listMembersForCompany(company.id)).toHaveLength(0);
+    await expect(listMembersForCompany(owner.id, company.id)).rejects.toThrow();
   });
 
   it('carries the standing tenancy constraint UNIQUE (company_id, id)', async () => {

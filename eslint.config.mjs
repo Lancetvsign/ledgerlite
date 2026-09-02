@@ -120,6 +120,29 @@ export default tseslint.config(
     },
   },
 
+  /* --- LL-014 fence. ------------------------------------------------------
+     Raw repository operations (…/internal.ts) are unauthorized by default —
+     the adversarial pass showed insertMembership is a cross-tenant takeover if
+     a route ever reaches it. Routes and pages cannot import them. */
+  {
+    files: ['src/app/**/*.ts', 'src/app/**/*.tsx'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/server/*/internal', '**/server/*/internal'],
+              message:
+                'Unauthorized repository internals cannot be used from routes or pages. ' +
+                'Call the authorized wrapper in the module root instead. See LL-014.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   /* --- LL-012 boundary. ---------------------------------------------------
      Business code asks about CAPABILITIES, never role names. A role-name
      comparison outside the rbac module is a permission decision hiding where

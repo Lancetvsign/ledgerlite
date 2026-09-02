@@ -65,6 +65,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-014** — Tenant-isolation harness. Table-driven descriptors attacked uniformly as
+  a foreign user; failures must be correct IN KIND (uniform denial or provably-empty —
+  a raw driver error fails the suite). Completeness is structural: any table with a
+  company_id column and no registered descriptor fails CI by introspection. Includes an
+  adversarial pass by an implementation-blind agent (63 attacks, all defeated or fixed).
+  Its two real findings — unauthorized-by-default `addMembership` and roster reads —
+  are FIXED, not filed: authorized front doors (`addMembershipAs`,
+  member-scoped `listMembersForCompany`), raw operations moved to a lint-fenced
+  internal module that `src/app/**` cannot import, and the campaign file kept as 63
+  permanent regression tests.
 - **LL-013** — Company authorization layer. `requireCompanyMembership` /
   `requirePermission`, fail-closed at every edge (malformed ids deny pre-query; database
   errors deny; missing records deny). One byte-identical denial for every failure path so
