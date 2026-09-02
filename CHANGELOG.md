@@ -65,6 +65,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   than exposing data if that guarantee regresses. Vercel's auto-deploy from `main` is
   disabled in `vercel.json`; production is promoted by a workflow that runs migrations
   first and stops if they fail. Adds `npm run db:seed`.
+- **LL-012** — RBAC capability model. Twenty capabilities as a typed union (typos are
+  compile errors); grants keyed by capability in a total Record (an unmapped capability
+  cannot compile); role sets derived, never authored twice — except in the tests, which
+  hold an independent hand-written matrix so any permission change is a visible
+  two-file diff. Role-name comparisons outside the rbac module are now a lint error,
+  proven to fire. No role bypasses membership: the API is unanswerable without a role.
 - **LL-011** — Identity and tenancy. `users` (linked once to the auth identity,
   provisioned idempotently on first entry), `companies` (fiscal month, currency and
   non-blank legal name enforced by CHECK constraints in the database), and

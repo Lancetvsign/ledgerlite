@@ -120,6 +120,40 @@ export default tseslint.config(
     },
   },
 
+  /* --- LL-012 boundary. ---------------------------------------------------
+     Business code asks about CAPABILITIES, never role names. A role-name
+     comparison outside the rbac module is a permission decision hiding where
+     nobody will find it. Assignments (role: 'OWNER') stay legal — creating a
+     membership needs the name; BRANCHING on it is what scatters policy. */
+  {
+    files: ['src/**/*.ts', 'src/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "BinaryExpression[operator=/^[!=]==?$/] > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
+          message:
+            'Do not compare role names in business code. Ask about a capability instead: ' +
+            "roleHasCapability(role, 'journal.post'). See src/server/rbac.",
+        },
+        {
+          selector:
+            "SwitchCase > Literal[value=/^(OWNER|ADMIN|BOOKKEEPER|ACCOUNTANT|READ_ONLY)$/]",
+          message:
+            'Do not switch on role names in business code. Ask about a capability instead. ' +
+            'See src/server/rbac.',
+        },
+      ],
+    },
+  },
+  {
+    // The two places role names legitimately live: the model that defines what
+    // they mean, and the schema that stores them.
+    files: ['src/server/rbac/**', 'src/db/schema/**'],
+    rules: { 'no-restricted-syntax': 'off' },
+  },
+
   /* Config files run in Node and are not part of the app's type program. */
   {
     files: ['*.mjs', '*.js', '*.config.ts'],
