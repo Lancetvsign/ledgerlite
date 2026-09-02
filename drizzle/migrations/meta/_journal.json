@@ -15,6 +15,13 @@
       "when": 1788312608285,
       "tag": "0001_better_auth_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788313377816,
+      "tag": "0002_identity_and_tenancy",
+      "breakpoints": true
     }
   ]
 }

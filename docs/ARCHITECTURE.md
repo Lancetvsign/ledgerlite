@@ -51,6 +51,25 @@ scripts/          Claude Code guardrail hooks
 drizzle/          generated migrations (committed, reviewed, never edited after commit)
 ```
 
+## Auth identity vs application user
+
+Two tables, one link, different owners:
+
+| | `user` (Better Auth) | `users` (LedgerLite) |
+|---|---|---|
+| Owned by | the auth library | this application |
+| Holds | identity + credentials | profile, status, everything domain |
+| Shape changes when | better-auth upgrades | we write a migration |
+| Referenced by | sessions, accounts | memberships, and soon everything financial |
+
+`users.auth_user_id` links them, exactly once (unique, `ON DELETE RESTRICT` — an auth
+identity cannot vanish out from under accounting history). Provisioning is
+`ensureAppUser()`: idempotent, race-safe via `ON CONFLICT`, run on first authenticated
+entry. It grants nothing — a LedgerLite user with no memberships can access no company.
+
+Never join financial data to the auth table directly; the application user is the
+domain's identity.
+
 ## Path aliases
 
 One alias, deliberately. `@/*` → `./src/*`.
