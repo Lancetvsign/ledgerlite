@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 
+import { sumMoney } from '@/lib/decimal';
+
 import { getTestDb } from './database';
 
 /**
@@ -44,6 +46,43 @@ export async function assertLedgerIntact(companyId: string): Promise<void> {
       and not exists (select 1 from journal_entries e where e.id = l.journal_entry_id)`);
   if (orphanLines.rows.length > 0) {
     throw new Error(`Orphan journal lines: ${orphanLines.rows.map((r) => r.id).join(', ')}`);
+  }
+}
+
+/**
+ * The decisive LL-033 assertion: the net effect of an entry and its reversal,
+ * summed across EVERY account they touch, is exactly zero — not approximately.
+ *
+ * Computed with decimal.js from the raw journal lines (never floats): for each
+ * account, sum(debit) − sum(credit) over the two entries' lines must be `0`. A
+ * reversal that swapped debit↔credit line-for-line nets an account to zero; if
+ * any account is left non-zero, the reversal did not truly undo the original.
+ */
+export async function assertReversalNetsToZero(
+  originalEntryId: string,
+  reversalEntryId: string,
+): Promise<void> {
+  const db = await getTestDb();
+  const rows = await db.execute<{ account_id: string; debit: string; credit: string }>(sql`
+    select account_id, debit, credit from journal_lines
+    where journal_entry_id in (${originalEntryId}, ${reversalEntryId})`);
+
+  const byAccount = new Map<string, { debits: string[]; credits: string[] }>();
+  for (const r of rows.rows) {
+    const acc = byAccount.get(r.account_id) ?? { debits: [], credits: [] };
+    acc.debits.push(r.debit);
+    acc.credits.push(r.credit);
+    byAccount.set(r.account_id, acc);
+  }
+  if (byAccount.size === 0) {
+    throw new Error('no lines found for the entry/reversal pair');
+  }
+
+  for (const [accountId, { debits, credits }] of byAccount) {
+    const net = sumMoney(debits).minus(sumMoney(credits));
+    if (!net.isZero()) {
+      throw new Error(`account ${accountId} nets ${net.toString()}, not zero`);
+    }
   }
 }
 

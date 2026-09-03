@@ -47,5 +47,26 @@ export const postJournalEntryInput = z.object({
   { message: 'A source-backed posting requires an idempotency key.', path: ['idempotencyKey'] },
 );
 
+/**
+ * Reversal input — LL-033. Names the entry to reverse; the reversal's LINES are
+ * derived from the original by the service, never supplied by the caller (a
+ * reversal that let the caller choose amounts would not be a reversal).
+ *
+ * `reversalDate` is optional: ADR-007 defaults it to the company's today, and
+ * requires it to land in an OPEN period. The original's own date is deliberately
+ * NOT reused — reopening the (usually closed) original period is the thing ADR-007
+ * exists to prevent.
+ */
+export const reverseJournalEntryInput = z.object({
+  companyId: z.uuid(),
+  actorUserId: z.uuid(),
+  entryId: z.uuid(),
+  /** Determines the reversal's period (ADR-002/007). Defaults to company today. */
+  reversalDate: calendarDate.optional(),
+  /** An optional human reason; the service still records the structural linkage. */
+  description: z.string().max(1000).optional(),
+});
+
 export type JournalLineInput = z.infer<typeof journalLineInput>;
 export type PostJournalEntryInput = z.infer<typeof postJournalEntryInput>;
+export type ReverseJournalEntryInput = z.infer<typeof reverseJournalEntryInput>;

@@ -43,6 +43,7 @@ export const auditAction = pgEnum('audit_action', [
   'ACCOUNTING_PERIOD_CLOSED',
   'ACCOUNTING_PERIOD_REOPENED',
   'JOURNAL_ENTRY_POSTED',
+  'JOURNAL_ENTRY_REVERSED',
 ]);
 
 export const auditEvents = pgTable(
