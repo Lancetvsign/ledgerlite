@@ -793,3 +793,49 @@ error for the rare race path and for any future caller.
 A soft-close workflow (ADR-007's "revisit") is added, or posting throughput makes the
 per-close wait on in-flight posts material — at which point a deferred trigger or an
 advisory-lock scheme could replace the row `FOR SHARE`.
+
+---
+
+## ADR-013 — Invoice totals are stored, but always service-derived
+
+**Status** Accepted · **Added by** LL-041 · **Decided by** product owner
+
+### Context
+
+Invariant 2 forbids storing an **account balance** — those derive from journal lines,
+every time. An **invoice total** (subtotal, tax, grand total) is a different thing: a
+property of a source *document*, computed from its line items. LL-041 had to choose
+between deriving those totals on every read and storing them on the invoice row.
+
+### Decision
+
+**Store `subtotal`, `tax_total`, and `total` on `invoices` — but they are ALWAYS
+recomputed from the line items by the service (`computeInvoiceTotals`, decimal.js,
+ROUND_HALF_EVEN) and written on every create/update. No input carries a total; there is
+no path for a caller to state one.** Per line: `amount = quantity × unit_price`,
+`tax = amount × rate ÷ 100`, each rounded to `NUMERIC(19,4)`; the invoice totals are the
+sums. When an invoice is finalized (DRAFT→OPEN, LL-042) the lines freeze and so do the
+totals.
+
+This is explicitly **not** a violation of invariant 2:
+- It is a document total, not an account balance. A customer's *open balance* (what they
+  owe) is still derived from posted journal lines against Accounts Receivable, never
+  stored here.
+- The stored total can never silently diverge from the lines, because the service is the
+  only writer and always derives it, and a regression test asserts
+  `stored total == recompute(lines)`.
+
+### Consequences
+
+- Reads and reports get the invoice's totals without recomputing across line items, and a
+  posted invoice (LL-042) references a fixed, frozen total.
+- The discipline is load-bearing: any future writer of `invoices.subtotal/tax_total/total`
+  MUST go through `computeInvoiceTotals`. A raw `UPDATE` that sets a total by hand is a
+  defect the consistency test is designed to catch. If invoices ever gain a
+  hand-adjustable total (a manual discount line is the better model), that is a new ADR.
+
+### Revisit if
+
+Multi-currency or per-invoice rounding rules arrive, or the consistency test ever proves
+insufficient — at which point a deferred CHECK/trigger recomputing the total in the
+database (not just the service) would make the guarantee structural.
