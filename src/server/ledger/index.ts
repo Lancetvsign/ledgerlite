@@ -247,6 +247,8 @@ async function resolveIdempotentRetry(
 }
 
 export { reverseJournalEntry } from './reversal';
+export { getJournalEntry } from './queries';
+export type { JournalEntryView, JournalEntryLineView } from './queries';
 export type { PostedEntry } from './internal';
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';

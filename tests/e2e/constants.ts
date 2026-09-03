@@ -10,3 +10,11 @@ export const ACCOUNTS_USER = {
   password: 'synthetic-password-1',
   name: 'Accounts Tester',
 };
+
+/** LL-035 manual journal-entry specs — its own session, isolated from the others. */
+export const JOURNAL_STORAGE = 'tests/e2e/.auth/journal.json';
+export const JOURNAL_USER = {
+  email: 'e2e-journal@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Journal Tester',
+};
