@@ -680,3 +680,116 @@ A dedicated reversal `source_type` per original source is ever needed for report
 distinguishing an invoice reversal from a payment reversal at the source level). Today the
 `reversal_of_id` join to the original supplies that, so the single `'REVERSAL'` source
 suffices.
+
+---
+
+## ADR-011 — What "in the ledger" means for balances (POSTED **and** REVERSED)
+
+**Status** Accepted · **Added by** LL-034
+
+### Context
+
+The LL-034 ticket says the trial balance should "include only `POSTED` entries." Taken
+literally against the LL-033 reversal model, that is wrong, and the ticket's own test
+("an entry plus its reversal nets to zero") is the proof.
+
+A reversal does not erase the original. LL-033 leaves the original exactly as posted and
+adds a **separate** offsetting entry, marking the original `REVERSED`. The two entries
+together are what nets to zero. Consider Cash 100 / Revenue 100, then reversed:
+
+| Entry | Status | Cash | Revenue |
+|---|---|---|---|
+| Original | `REVERSED` | +100 Dr | +100 Cr |
+| Reversal | `POSTED` | −100 (Cr) | −100 (Dr) |
+| **Net** | | **0** | **0** |
+
+If balances counted only `POSTED` entries, the `REVERSED` original would drop out and the
+reversal would stand alone — Cash would read −100, Revenue −100. The books would be wrong
+*because* a correction was made. That is the opposite of what a reversal is for.
+
+### Decision
+
+**An entry is "in the ledger" when its status is `POSTED` or `REVERSED`, and excluded only
+when `DRAFT`.** Every balance computation — the trial balance and all four integrity
+assertions (`invariants.ts`) — uses `status in ('POSTED','REVERSED')`, never `= 'POSTED'`.
+"Only POSTED" in the ticket is read as "only entries posted to the ledger" — i.e. not
+drafts — which is the sense in which it is true.
+
+A `REVERSED` entry is never hidden, deleted, or altered (invariant 3 / ADR-007); it keeps
+its lines and its financial effect, offset by its reversal. `DRAFT` entries have never
+been posted and carry no ledger effect, so they are the only thing excluded.
+
+### Consequences
+
+- The trial balance always balances, before and after any reversal, and shows an entry
+  and its reversal netting to zero on every account — proven with `decimal.js` in the
+  LL-034 tests.
+- Every later report (general ledger, financial statements) must use the same
+  `('POSTED','REVERSED')` population. A report that filters `= 'POSTED'` will silently
+  drop reversed originals and misstate the books.
+
+### Revisit if
+
+A future "voided draft" or other non-ledger status is added; the exclusion rule is
+"`DRAFT` (and anything equally pre-ledger) is out", not "only these two are in", so a new
+pre-posting status would join `DRAFT` on the excluded side.
+
+---
+
+## ADR-012 — Closed-period enforcement is structural (a period-locking trigger)
+
+**Status** Accepted · **Added by** Gate 2 remediation
+
+### Context
+
+The Gate 2 review found that invariant 5 — "no posting into a `CLOSED` period" (AGENTS
+§4.5) — was enforced **only** by `LedgerService` (`assertPeriodOpen` and an in-transaction
+re-read). Two consequences, both confirmed by independent review and the LL-036 adversarial
+pass:
+
+1. **Not structural.** A raw `INSERT` into `journal_entries` — the service bypassed —
+   posted freely into a closed period. Every other financial invariant is backed by a DB
+   constraint or trigger; this one was not, contradicting AGENTS §4's "enforced in the
+   database … as well as in application code."
+2. **A close-vs-post TOCTOU.** The period check was a non-locking `SELECT`. A posting that
+   read the period OPEN could commit *after* a concurrent `closePeriod` committed — landing
+   an entry in a just-closed period and silently changing that period's derived numbers
+   after the close, the exact outcome ADR-007 exists to prevent.
+
+### Decision
+
+**A `BEFORE INSERT` trigger on `journal_entries` (migration 0010) enforces the rule in the
+database, and does so with a lock that also closes the race.** For every `POSTED` insert it
+reads the containing accounting period `FOR SHARE` and raises `PERIOD_CLOSED` if that period
+is `CLOSED`.
+
+- The **`FOR SHARE`** lock is held until the posting commits. `closePeriod`'s `UPDATE` takes
+  a row-exclusive lock, so a close must **wait** for in-flight posts, and any post that
+  begins after a close commits sees `CLOSED` and is refused. Lock acquisition and status
+  read are one statement — no window between "checked open" and "committed". Concurrent
+  posts into one period take compatible share locks (and already serialise on the
+  per-company counter), so the only new interaction is post-vs-close.
+- The trigger fires **only for `POSTED`** rows; drafts carry no ledger effect.
+- A `posting_date` with **no** period row is left alone. The application always creates the
+  OPEN period before posting (`getAccountingPeriod`), so this only matters to raw inserts,
+  and a period-less posted row is a separate anomaly, not "posting into a closed period".
+  This keeps the guard surgical and changes no open-period behaviour.
+
+`LedgerService` keeps its early, non-locking period check so the common case returns a typed
+`PERIOD_CLOSED` without reaching the trigger; the trigger's raise is mapped to the same typed
+error for the rare race path and for any future caller.
+
+### Consequences
+
+- Invariant 5 is now **structural**: a raw-SQL insert into a closed period is rejected by
+  the database, proven with the service bypassed.
+- The close-vs-post TOCTOU is eliminated: a close serialises against in-flight posts.
+- `closePeriod` needs no change — its existing `UPDATE` already conflicts with the share
+  lock. No deadlock: postings acquire the counter before the period, and `closePeriod`
+  touches only the period.
+
+### Revisit if
+
+A soft-close workflow (ADR-007's "revisit") is added, or posting throughput makes the
+per-close wait on in-flight posts material — at which point a deferred trigger or an
+advisory-lock scheme could replace the row `FOR SHARE`.

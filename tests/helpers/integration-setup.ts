@@ -7,7 +7,9 @@
  * than failing obscurely partway through.
  */
 import { config } from 'dotenv';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, afterEach, beforeAll } from 'vitest';
+
+import { assertLedgerIntegrity } from '@/server/ledger/invariants';
 
 import { closeTestDb, getTestDb, truncateAll } from './database';
 
@@ -34,6 +36,15 @@ beforeAll(async () => {
   // database — see src/db/safety.ts.
   await getTestDb();
   await truncateAll();
+});
+
+// LL-034: after EVERY integration test, audit every company's ledger. Any test
+// that corrupts the ledger — even one written to check something unrelated —
+// fails here, turning the whole suite into a continuous integrity check. Tests
+// that inject corruption deliberately must roll it back (the corruption suite
+// does, via transactional DDL) so this teardown sees an intact ledger.
+afterEach(async () => {
+  await assertLedgerIntegrity();
 });
 
 afterAll(async () => {

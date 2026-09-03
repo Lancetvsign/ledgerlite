@@ -233,3 +233,76 @@ jobs:
           npx --yes neonctl@2.15.0 branches delete "$BRANCH_NAME" \
             --project-id "$NEON_PROJECT_ID" || \
             echo "::warning title=Branch cleanup failed::$BRANCH_NAME may still exist; the reaper will remove it"
+
+  # ---------------------------------------------------------------------------
+  # RELEASE GATE — the general-ledger regression suite (LL-036).
+  #
+  # The consolidated statement of the accounting invariants (GL-T001..GL-T015)
+  # runs as its OWN required check, so a merge is blocked the moment any invariant
+  # regresses — independently of the broader integration job. Its own ephemeral
+  # Neon branch, so it is isolated from every other suite. Same fork-guard: this
+  # cannot run for forks (no secrets), and it FAILS rather than skips when the
+  # credentials are absent — an unrun release gate must never read as a pass.
+  # ---------------------------------------------------------------------------
+  gl-regression:
+    name: GL regression suite (release gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+      BRANCH_NAME: test/gl-${{ github.event.pull_request.number || 'push' }}-run-${{ github.run_id }}
+      APP_ENV: test
+    steps:
+      - name: Require Neon credentials
+        run: |
+          if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
+            echo "::error title=Missing GitHub secrets::NEON_API_KEY / NEON_PROJECT_ID"
+            echo "The GL regression suite is a release gate against a real database."
+            echo "Failing rather than skipping — an unrun gate must never look like a pass."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Create ephemeral Neon branch
+        id: neon
+        run: |
+          npx --yes neonctl@2.15.0 branches create \
+            --project-id "$NEON_PROJECT_ID" --name "$BRANCH_NAME" --output json > /dev/null
+          POOLED=$(npx --yes neonctl@2.15.0 connection-string "$BRANCH_NAME" \
+            --project-id "$NEON_PROJECT_ID" --pooled --output json | tr -d '"')
+          DIRECT=$(npx --yes neonctl@2.15.0 connection-string "$BRANCH_NAME" \
+            --project-id "$NEON_PROJECT_ID" --output json | tr -d '"')
+          echo "::add-mask::$POOLED"
+          echo "::add-mask::$DIRECT"
+          echo "DATABASE_URL=$POOLED" >> "$GITHUB_ENV"
+          echo "DATABASE_URL_UNPOOLED=$DIRECT" >> "$GITHUB_ENV"
+          HOST=$(printf '%s' "$DIRECT" | sed -E 's|^[^@]+@([^/:]+).*|\1|')
+          ENDPOINT_ID=$(printf '%s' "$HOST" | cut -d. -f1 | sed -E 's/-pooler$//')
+          echo "TEST_DATABASE_ALLOWLIST=$ENDPOINT_ID" >> "$GITHUB_ENV"
+          echo "endpoint_id=$ENDPOINT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Apply migrations
+        run: npm run db:migrate
+
+      - name: Mark branch as a disposable test database
+        run: npm run db:mark-test -- --host "${{ steps.neon.outputs.endpoint_id }}"
+
+      - name: GL regression suite
+        run: npm run test:gl
+
+      - name: Delete ephemeral Neon branch
+        if: always()
+        run: |
+          npx --yes neonctl@2.15.0 branches delete "$BRANCH_NAME" \
+            --project-id "$NEON_PROJECT_ID" || \
+            echo "::warning title=Branch cleanup failed::$BRANCH_NAME may still exist; the reaper will remove it"
