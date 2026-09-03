@@ -1,0 +1,1 @@
+ALTER TABLE "journal_entries" ADD COLUMN "idempotency_fingerprint" text;

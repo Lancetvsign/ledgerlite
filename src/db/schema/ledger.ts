@@ -78,6 +78,11 @@ export const journalEntries = pgTable(
     sourceId: text('source_id'),
     /** Idempotency key: one posting per (company, key). */
     idempotencyKey: text('idempotency_key'),
+    /** A stable hash of the posting's material content (ADR-003 / LL-032). On a
+     *  retry with the SAME key, a matching fingerprint means an identical
+     *  request (return the existing entry); a differing one is a
+     *  IDEMPOTENCY_KEY_CONFLICT — a caller bug reusing a key for new content. */
+    idempotencyFingerprint: text('idempotency_fingerprint'),
     /** If this entry reverses another, the original's id. */
     reversalOfId: uuid('reversal_of_id'),
     /** If this entry has been reversed, the reversing entry's id. */

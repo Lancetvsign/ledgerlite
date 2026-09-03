@@ -39,7 +39,13 @@ export const postJournalEntryInput = z.object({
   sourceId: z.string().max(200).optional(),
   idempotencyKey: z.string().max(200).optional(),
   lines: z.array(journalLineInput).min(2, 'A journal entry needs at least two lines.'),
-});
+}).refine(
+  // A source-backed posting (an invoice, payment, …) comes from a machine call
+  // that can time out and retry, so it MUST carry an idempotency key. A manual
+  // JOURNAL_ENTRY (a human posts once) has no source and needs none. LL-032.
+  (v) => v.sourceId === undefined || v.idempotencyKey !== undefined,
+  { message: 'A source-backed posting requires an idempotency key.', path: ['idempotencyKey'] },
+);
 
 export type JournalLineInput = z.infer<typeof journalLineInput>;
 export type PostJournalEntryInput = z.infer<typeof postJournalEntryInput>;
