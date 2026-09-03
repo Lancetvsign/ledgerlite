@@ -13,9 +13,11 @@ import { getAuth } from '@/lib/auth';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
+import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { recordAuditEvent } from '@/server/audit';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
+import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -122,6 +124,38 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate the victim account (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => deactivateAccount(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    table: 'customers',
+    seed: async (victim) => {
+      const customer = await createCustomer(victim.ownerUserId, victim.companyId,
+        createCustomerInput.parse({ name: 'Victim Customer', customerNumber: 'C-1' }));
+      return { recordId: customer.id };
+    },
+    attempts: [
+      {
+        operation: 'list customers (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listCustomers(attacker, victim.companyId),
+      },
+      {
+        operation: 'create a customer in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          createCustomer(attacker, victim.companyId, createCustomerInput.parse({ name: 'Injected' })),
+      },
+      {
+        operation: 'update the victim customer',
+        expect: 'denied',
+        run: (attacker, victim, recordId) =>
+          updateCustomer(attacker, victim.companyId, recordId, updateCustomerInput.parse({ name: 'Hijacked' })),
+      },
+      {
+        operation: 'deactivate the victim customer (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => deactivateCustomer(attacker, victim.companyId, recordId),
       },
     ],
   },

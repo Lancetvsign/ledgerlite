@@ -85,6 +85,20 @@
       "when": 1788450000000,
       "tag": "0011_freeze_idempotency_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788457739649,
+      "tag": "0012_customers",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788457834249,
+      "tag": "0013_customer_audit_actions",
+      "breakpoints": true
     }
   ]
 }

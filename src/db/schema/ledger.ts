@@ -17,6 +17,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { accounts } from './accounts';
+import { customers } from './customers';
 import { companies, users } from './identity';
 
 /**
@@ -156,6 +157,15 @@ export const journalLines = pgTable(
       foreignColumns: [journalEntries.companyId, journalEntries.id],
       name: 'journal_lines_entry_same_company_fk',
     }).onDelete('cascade'),
+    // Invariant 2 (tenancy) for the optional customer tag — LL-040. Composite FK,
+    // so a line can never reference another company's customer. customer_id is
+    // nullable and Postgres MATCH SIMPLE skips the check when it is NULL, so
+    // untagged lines are unaffected; a tagged line must resolve in THIS company.
+    foreignKey({
+      columns: [table.companyId, table.customerId],
+      foreignColumns: [customers.companyId, customers.id],
+      name: 'journal_lines_customer_same_company_fk',
+    }).onDelete('restrict'),
     // Invariant 5 — deterministic line ordering within an entry.
     unique('journal_lines_entry_line_number_unique').on(table.journalEntryId, table.lineNumber),
     // Standing tenancy constraint (future composite FKs into lines).
