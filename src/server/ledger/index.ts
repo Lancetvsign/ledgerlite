@@ -11,7 +11,7 @@ import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
 import { fingerprintPosting } from './fingerprint';
-import { allocateEntryNumber, loadEntry, type PostedEntry } from './internal';
+import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry } from './internal';
 
 import type { PostJournalEntryInput } from '@/validation/journal';
 
@@ -61,7 +61,9 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
     if (input.idempotencyKey !== undefined && isIdempotencyViolation(error)) {
       return await resolveIdempotentRetry(input, fingerprint);
     }
-    throw error;
+    // Map the closed-period guard (and any other DB-trigger domain error) to a
+    // typed LedgerError; anything unrecognised passes through unchanged.
+    throw toLedgerDomainError(error);
   }
 }
 
