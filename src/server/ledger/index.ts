@@ -250,3 +250,13 @@ export { reverseJournalEntry } from './reversal';
 export type { PostedEntry } from './internal';
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';
+
+// LL-034 integrity assertions — the audit every gate and later ticket leans on.
+export {
+  assertLedgerBalanced,
+  assertNoOrphanedLines,
+  assertAccountOwnership,
+  assertTrialBalanceBalanced,
+  assertLedgerIntegrity,
+  LedgerIntegrityError,
+} from './invariants';
