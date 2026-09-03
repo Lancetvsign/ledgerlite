@@ -85,5 +85,15 @@ export function toLedgerDomainError(error: unknown): unknown {
       'A posted entry cannot be modified; correct it with a reversal.',
     );
   }
+  // The closed-period guard (migration 0010) raises this at INSERT time. It only
+  // surfaces here in the rare race where a close commits between the service's own
+  // period check and the insert — the service's early check catches the common
+  // case first — but when it does, callers still get the typed PERIOD_CLOSED.
+  if (/PERIOD_CLOSED/.test(text)) {
+    return new LedgerError(
+      'PERIOD_CLOSED',
+      'The accounting period for this posting date is closed.',
+    );
+  }
   return error;
 }

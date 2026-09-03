@@ -733,3 +733,63 @@ been posted and carry no ledger effect, so they are the only thing excluded.
 A future "voided draft" or other non-ledger status is added; the exclusion rule is
 "`DRAFT` (and anything equally pre-ledger) is out", not "only these two are in", so a new
 pre-posting status would join `DRAFT` on the excluded side.
+
+---
+
+## ADR-012 — Closed-period enforcement is structural (a period-locking trigger)
+
+**Status** Accepted · **Added by** Gate 2 remediation
+
+### Context
+
+The Gate 2 review found that invariant 5 — "no posting into a `CLOSED` period" (AGENTS
+§4.5) — was enforced **only** by `LedgerService` (`assertPeriodOpen` and an in-transaction
+re-read). Two consequences, both confirmed by independent review and the LL-036 adversarial
+pass:
+
+1. **Not structural.** A raw `INSERT` into `journal_entries` — the service bypassed —
+   posted freely into a closed period. Every other financial invariant is backed by a DB
+   constraint or trigger; this one was not, contradicting AGENTS §4's "enforced in the
+   database … as well as in application code."
+2. **A close-vs-post TOCTOU.** The period check was a non-locking `SELECT`. A posting that
+   read the period OPEN could commit *after* a concurrent `closePeriod` committed — landing
+   an entry in a just-closed period and silently changing that period's derived numbers
+   after the close, the exact outcome ADR-007 exists to prevent.
+
+### Decision
+
+**A `BEFORE INSERT` trigger on `journal_entries` (migration 0010) enforces the rule in the
+database, and does so with a lock that also closes the race.** For every `POSTED` insert it
+reads the containing accounting period `FOR SHARE` and raises `PERIOD_CLOSED` if that period
+is `CLOSED`.
+
+- The **`FOR SHARE`** lock is held until the posting commits. `closePeriod`'s `UPDATE` takes
+  a row-exclusive lock, so a close must **wait** for in-flight posts, and any post that
+  begins after a close commits sees `CLOSED` and is refused. Lock acquisition and status
+  read are one statement — no window between "checked open" and "committed". Concurrent
+  posts into one period take compatible share locks (and already serialise on the
+  per-company counter), so the only new interaction is post-vs-close.
+- The trigger fires **only for `POSTED`** rows; drafts carry no ledger effect.
+- A `posting_date` with **no** period row is left alone. The application always creates the
+  OPEN period before posting (`getAccountingPeriod`), so this only matters to raw inserts,
+  and a period-less posted row is a separate anomaly, not "posting into a closed period".
+  This keeps the guard surgical and changes no open-period behaviour.
+
+`LedgerService` keeps its early, non-locking period check so the common case returns a typed
+`PERIOD_CLOSED` without reaching the trigger; the trigger's raise is mapped to the same typed
+error for the rare race path and for any future caller.
+
+### Consequences
+
+- Invariant 5 is now **structural**: a raw-SQL insert into a closed period is rejected by
+  the database, proven with the service bypassed.
+- The close-vs-post TOCTOU is eliminated: a close serialises against in-flight posts.
+- `closePeriod` needs no change — its existing `UPDATE` already conflicts with the share
+  lock. No deadlock: postings acquire the counter before the period, and `closePeriod`
+  touches only the period.
+
+### Revisit if
+
+A soft-close workflow (ADR-007's "revisit") is added, or posting throughput makes the
+per-close wait on in-flight posts material — at which point a deferred trigger or an
+advisory-lock scheme could replace the row `FOR SHARE`.
