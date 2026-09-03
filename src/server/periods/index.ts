@@ -56,12 +56,13 @@ async function findPeriod(
 export async function getAccountingPeriod(
   companyId: string,
   date: string,
+  executor: Tx | PoolDatabase = getDbTx(),
 ): Promise<AccountingPeriod> {
   if (!isCalendarDate(date)) {
     throw new PeriodError('INVALID_DATE', `Not a calendar date: ${date}`);
   }
 
-  const existing = await findPeriod(getDbTx(), companyId, date);
+  const existing = await findPeriod(executor, companyId, date);
   if (existing !== undefined) return existing;
 
   // Create the containing month. Two concurrent creators race here; the
@@ -69,7 +70,7 @@ export async function getAccountingPeriod(
   const start = startOfMonth(date);
   const end = endOfMonth(date);
   try {
-    const rows = await getDbTx()
+    const rows = await executor
       .insert(schema.accountingPeriods)
       .values({ companyId, startDate: start, endDate: end })
       .returning();
@@ -78,7 +79,7 @@ export async function getAccountingPeriod(
     return created;
   } catch (error) {
     // Lost the race (overlap rejected) — the winner's period now exists.
-    const now = await findPeriod(getDbTx(), companyId, date);
+    const now = await findPeriod(executor, companyId, date);
     if (now !== undefined) return now;
     throw error;
   }
