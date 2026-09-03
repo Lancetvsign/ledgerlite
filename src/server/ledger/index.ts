@@ -11,17 +11,9 @@ import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
 import { fingerprintPosting } from './fingerprint';
+import { allocateEntryNumber, loadEntry, type PostedEntry } from './internal';
 
-import type { PoolDatabase } from '@/db';
-import type { JournalEntry, JournalLine } from '@/db/schema';
 import type { PostJournalEntryInput } from '@/validation/journal';
-
-type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
-
-export interface PostedEntry {
-  readonly entry: JournalEntry;
-  readonly lines: JournalLine[];
-}
 
 /**
  * LedgerService — the ONLY approved mechanism for creating posted journal
@@ -213,20 +205,6 @@ function validateBalance(input: PostJournalEntryInput): void {
   }
 }
 
-/** Gapless per-company allocation via the locked counter row (ADR-003). */
-async function allocateEntryNumber(tx: Tx, companyId: string): Promise<number> {
-  const rows = await tx.execute<{ next_entry_number: string }>(sql`
-    update company_counters
-    set next_entry_number = next_entry_number + 1
-    where company_id = ${companyId}
-    returning next_entry_number - 1 as next_entry_number`);
-  const value = rows.rows[0]?.next_entry_number;
-  if (value === undefined) {
-    throw new LedgerError('COMPANY_NOT_FOUND', 'No entry-number counter for this company.');
-  }
-  return Number(value);
-}
-
 /** True when an error is the idempotency-key partial-unique violation. */
 function isIdempotencyViolation(error: unknown): boolean {
   const message = String((error as { cause?: unknown }).cause ?? error);
@@ -268,21 +246,7 @@ async function resolveIdempotentRetry(
   return await loadEntry(db, prior.id);
 }
 
-async function loadEntry(tx: Tx | PoolDatabase, entryId: string): Promise<PostedEntry> {
-  const entryRows = await tx
-    .select()
-    .from(schema.journalEntries)
-    .where(eq(schema.journalEntries.id, entryId))
-    .limit(1);
-  const entry = entryRows[0];
-  if (entry === undefined) throw new Error('posted entry vanished');
-  const lines = await tx
-    .select()
-    .from(schema.journalLines)
-    .where(eq(schema.journalLines.journalEntryId, entryId))
-    .orderBy(schema.journalLines.lineNumber);
-  return { entry, lines };
-}
-
+export { reverseJournalEntry } from './reversal';
+export type { PostedEntry } from './internal';
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';

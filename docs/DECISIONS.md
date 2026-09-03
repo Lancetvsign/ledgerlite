@@ -623,3 +623,60 @@ eventual TS 7 upgrade unblocked by our own configuration.
 genuine ESLint 10 compatibility. In both cases, upgrade and then **re-run the rule proof**
 — confirm `no-floating-promises` still reports against a floating promise before trusting
 the result. A green lint run proves nothing if the rules silently stopped applying.
+
+---
+
+## ADR-010 — Reversal entry mechanics
+
+**Status** Accepted · **Added by** LL-033
+
+### Context
+
+ADR-007 settled the reversal *date*. Building the engine surfaced four further choices the
+ticket left to implementation, each of which interacts with an existing invariant.
+
+### Decision
+
+**Source linkage.** The reversing entry carries `source_type = 'REVERSAL'` and
+`source_id = <original entry id>`, and the authoritative link is `reversal_of_id`. The
+original's own `source_type`/`source_id` are **not** copied. Copying them would post a
+second POSTED row for the original's source (an invoice, a payment) and violate the
+"one POSTED entry per source" index (invariant 6) — reversing an invoice's entry would
+be indistinguishable from posting that invoice twice. The `'REVERSAL' → original.id`
+source is also a second, independent guard: a repeat reversal of the same original
+collides on `journal_entries_source_posted_once` even if every other check were bypassed.
+
+**Dating.** Both `transaction_date` and `posting_date` on the reversal are set to the
+reversal date. The correction is an event in the period where it is actually made
+(ADR-007); backdating `transaction_date` to the original would drag the reversal toward
+the original's (usually closed) period and split one entry across two periods.
+
+**Audit.** A reversal writes **two** events in its single transaction: a
+`JOURNAL_ENTRY_POSTED` on the new reversing entry (it is a posting like any other) and a
+`JOURNAL_ENTRY_REVERSED` on the original (recording that it was reversed, and by which
+entry). Both roll back with the operation.
+
+**Deactivated accounts.** Reversal deliberately does **not** re-check that the referenced
+accounts are active — the one validation from the posting path it omits. An account may
+have been deactivated after the erroneous entry was posted; refusing to reverse against an
+inactive account would trap the error permanently, with no correct way out. The composite
+FK still guarantees the accounts belong to the company, and the amounts are copied
+verbatim from the original's committed lines, so nothing unbalanced or cross-tenant can
+result.
+
+### Consequences
+
+- The net effect of an entry and its reversal is exactly zero on every account, proven
+  from the journal lines with decimal.js in every reversal test.
+- Reversing a reversal is ordinary (each reversal is a plain POSTED entry with its own
+  `REVERSAL` source pointing at what it reverses); reversing an already-`REVERSED` entry
+  is rejected.
+- A reversal is visible in reports for the period it lands in, never the original's — the
+  honest presentation ADR-007 requires.
+
+### Revisit if
+
+A dedicated reversal `source_type` per original source is ever needed for reporting (e.g.
+distinguishing an invoice reversal from a payment reversal at the source level). Today the
+`reversal_of_id` join to the original supplies that, so the single `'REVERSAL'` source
+suffices.
