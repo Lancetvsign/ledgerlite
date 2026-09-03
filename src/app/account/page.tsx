@@ -1,9 +1,11 @@
 import { headers } from 'next/headers';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listCompaniesForUser } from '@/server/companies';
+import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
 import { CompanyPanel } from './company-panel';
@@ -49,9 +51,16 @@ export default async function AccountPage() {
       </dl>
       <CompanyPanel companies={companies} active={active} />
       {active !== null && (
-        <a href="/accounts" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-          Chart of Accounts →
-        </a>
+        <nav className="flex flex-col gap-1">
+          <a href="/accounts" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+            Chart of Accounts →
+          </a>
+          {roleHasCapability(active.role, 'journal.create') && (
+            <Link href="/journal/new" data-testid="new-journal-entry-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+              New Journal Entry →
+            </Link>
+          )}
+        </nav>
       )}
       <SignOutButton />
     </main>

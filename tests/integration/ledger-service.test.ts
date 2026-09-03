@@ -9,6 +9,7 @@ import { getAuth } from '@/lib/auth';
 import { createAccount } from '@/server/accounts';
 import { closePeriod } from '@/server/periods';
 import { createCompanyWithOwner } from '@/server/companies';
+import { insertMembership } from '@/server/companies/internal';
 import { LedgerError, postJournalEntry } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
@@ -172,6 +173,20 @@ describe('authorization', () => {
     // outsider posts into c's company → AuthorizationDenied (not a LedgerError)
     await expect(postJournalEntry(postJournalEntryInput.parse({
       companyId: c.companyId, actorUserId: outsiderCtx.userId, transactionDate: '2026-01-10',
+      sourceType: 'JOURNAL_ENTRY', lines: [{ accountId: c.cashId, debit: '1' }, { accountId: c.revId, credit: '1' }],
+    }))).rejects.toThrow();
+    expect((await counts(c.companyId)).entries).toBe(0);
+  });
+
+  it('a MEMBER lacking journal.post (READ_ONLY) is denied — the LL-035 UI gate is not the control', async () => {
+    // This is what "post without the capability" means at the boundary the manual
+    // journal-entry action relies on: a real member of the company whose role does
+    // not hold journal.post is refused, regardless of any client-side gate.
+    const c = await setup();
+    const reader = await setup(); // reuse setup to mint a second app user
+    await insertMembership(c.companyId, reader.userId, 'READ_ONLY');
+    await expect(postJournalEntry(postJournalEntryInput.parse({
+      companyId: c.companyId, actorUserId: reader.userId, transactionDate: '2026-01-10',
       sourceType: 'JOURNAL_ENTRY', lines: [{ accountId: c.cashId, debit: '1' }, { accountId: c.revId, credit: '1' }],
     }))).rejects.toThrow();
     expect((await counts(c.companyId)).entries).toBe(0);
