@@ -21,6 +21,8 @@ export const CAPABILITIES = [
   'journal.view',
   'journal.create',
   'journal.post',
+  'customer.view',
+  'customer.manage',
   'invoice.view',
   'invoice.create',
   'invoice.post',
@@ -76,6 +78,9 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   'journal.view': EVERYONE,
   'journal.create': LEDGER_WRITERS,
   'journal.post': LEDGER_WRITERS,
+  // Customers are day-to-day A/R work (like invoices): any writer manages them.
+  'customer.view': EVERYONE,
+  'customer.manage': ALL_WRITERS,
   'invoice.view': EVERYONE,
   'invoice.create': ALL_WRITERS,
   'invoice.post': ALL_WRITERS,
