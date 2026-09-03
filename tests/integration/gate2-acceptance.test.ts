@@ -167,14 +167,20 @@ describe('GATE 2 — manual acceptance scenario, derived purely from journal lin
     await assertLedgerIntegrity(c.companyId);
   });
 
-  it('stores no balance anywhere — proven from the schema, not the code', async () => {
+  it('stores no ACCOUNT balance anywhere — proven from the schema, not the code', async () => {
     const db = await getTestDb();
-    // No column on any table resembles a stored balance/total (invariant 2).
+    // No column resembles a stored account/ledger balance (invariant 2). The ONE
+    // exemption is the invoice DOCUMENT totals (subtotal/tax_total/total on
+    // `invoices`): those are a property of the source document, always
+    // service-derived from its lines (ADR-013), not an account balance — a
+    // customer's open balance still derives from journal lines. Any balance/total
+    // column on any OTHER table is still a failure.
     const cols = await db.execute<{ table_name: string; column_name: string }>(sql`
       select table_name, column_name from information_schema.columns
       where table_schema = 'public'
         and (column_name ilike '%balance%' or column_name ilike '%running_total%'
-             or column_name = 'total' or column_name ilike '%cached%')`);
+             or column_name = 'total' or column_name ilike '%cached%')
+        and not (table_name = 'invoices' and column_name in ('subtotal', 'tax_total', 'total'))`);
     expect(cols.rows).toEqual([]);
   });
 });
