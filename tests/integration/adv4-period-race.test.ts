@@ -101,17 +101,18 @@ describe('ADV4 period-transition races', () => {
       }
       ops.push(code(closePeriod(c.userId, c.companyId, pid)));
       await Promise.all(ops);
-      // Deterministic guard: once the close has COMMITTED, any further post into
-      // the period is rejected. In-flight posts that read OPEN before the close
-      // committed may still land — a serializably-correct "already-in-flight"
-      // window that breaks none of the five invariants (asserted below).
+      // Since ADR-012 (migration 0010) the posting trigger reads the period FOR SHARE,
+      // so a concurrent close serialises against in-flight posts: each post either
+      // commits before the close (which WAITS for it) or, once the close has
+      // committed, is refused. There is no "post committed into an already-closed
+      // period" window. Below: a post after the committed close is always rejected.
       const afterClose = await code(post(c, date, [
         { accountId: c.cashId, debit: '1.0000' },
         { accountId: c.revId, credit: '1.0000' },
       ]));
       expect(afterClose).toBe('PERIOD_CLOSED');
     }
-    // The four core invariants hold regardless of the TOCTOU interleaving.
+    // Every core invariant holds regardless of the interleaving.
     await assertLedgerIntact(c.companyId);
     await assertLedgerIntegrity(c.companyId);
   });
