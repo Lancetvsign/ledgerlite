@@ -357,3 +357,51 @@ first line insert. LedgerService is a single black-box transaction, so a real fa
 injected at the counter-allocation step (after auth + validation, inside the tx) rather
 than by mocking an internal — the guarantee proven is identical: a mid-transaction failure
 persists nothing.
+
+## Idempotency and concurrency (LL-032)
+
+**Idempotency is resolved on the database's unique index, never check-then-insert** (which
+races). A posting attempts its insert; if the partial `UNIQUE (company_id, idempotency_key)`
+rejects it, a prior or concurrent request already used that key, and the service resolves:
+
+- **identical retry** (same key, same `idempotency_fingerprint`) → returns the existing
+  entry as a success — the posting already happened
+- **same key, different fingerprint** → `IDEMPOTENCY_KEY_CONFLICT`, never a silent return
+  of the original (that would hide a caller bug and lose their transaction)
+- **same key across companies** → independent; the index is scoped by `company_id`
+- **source-backed posting with no key** → rejected at the Zod boundary; a machine posting
+  that can retry must carry a key (a manual `JOURNAL_ENTRY` has no source and needs none)
+
+The `idempotency_fingerprint` is a SHA-256 of the posting's material content (dates, source,
+description, and each line's account and amounts — lines canonicalised by sort order), so
+line reordering still matches and any real change does not.
+
+**Which constraints carry the guarantee:**
+- `UNIQUE (company_id, idempotency_key) WHERE key IS NOT NULL` — one posting per key
+- `UNIQUE (company_id, source_type, source_id) WHERE status='POSTED' AND source_id NOT NULL`
+  — one POSTED entry per source, the backstop even if a key is somehow absent
+- `company_counters` row locked by `UPDATE … RETURNING` inside the posting transaction —
+  gapless per-company `entry_number` (ADR-003)
+
+**Isolation and serialisation.** Postings run at Postgres' default READ COMMITTED. Two
+postings to the SAME company serialise at that company's counter row (the `UPDATE` takes a
+row lock); different companies never contend. Proven under real parallelism: ten
+concurrent postings to one company produce a contiguous `1..10` sequence — no gaps, no
+duplicates.
+
+**The accounting period is resolved and created BEFORE the posting transaction opens**, in
+its own commit. Lazy creation inside the posting transaction let two concurrent postings
+race on the period's exclusion constraint and abort the loser's whole transaction — a
+defect LL-032's concurrency tests surfaced and fixed. The posting transaction only ever
+reads an existing period (re-checking it is still OPEN).
+
+**What a caller does on each error code:**
+- `IDEMPOTENCY_KEY_CONFLICT` → you reused a key for different content; use a new key or
+  send the original payload
+- `PERIOD_CLOSED` → the target period is closed; post into an open one
+- `UNBALANCED_JOURNAL_ENTRY` / `INVALID_LINE` / `INSUFFICIENT_LINES` → fix the lines
+- `ACCOUNT_NOT_FOUND` / `INACTIVE_ACCOUNT` → the referenced account is wrong or deactivated
+
+After every concurrency test the suite asserts three invariants hold: every POSTED entry
+balances, each source posted exactly once, and no partial journal exists (no entry without
+lines, no line without an entry).

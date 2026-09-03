@@ -10,6 +10,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
+import { fingerprintPosting } from './fingerprint';
 
 import type { PoolDatabase } from '@/db';
 import type { JournalEntry, JournalLine } from '@/db/schema';
@@ -45,28 +46,39 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
   validateStructure(input);
   validateBalance(input);
 
-  return await getDbTx().transaction(async (tx) => {
-    // ---- 7. Idempotency (first, inside the tx) ------------------------------
-    // If this key already produced an entry, return it — the posting already
-    // happened. A conflicting payload under the same key is LL-032's concern;
-    // here the unique index is the backstop against a duplicate.
-    if (input.idempotencyKey !== undefined) {
-      const existing = await tx
-        .select()
-        .from(schema.journalEntries)
-        .where(
-          and(
-            eq(schema.journalEntries.companyId, input.companyId),
-            eq(schema.journalEntries.idempotencyKey, input.idempotencyKey),
-          ),
-        )
-        .limit(1);
-      const priorEntry = existing[0];
-      if (priorEntry !== undefined) {
-        return await loadEntry(tx, priorEntry.id);
-      }
-    }
+  // Ensure the accounting period EXISTS (and is open) BEFORE opening the posting
+  // transaction. Lazy period creation inside the posting tx would let two
+  // concurrent postings race on the period's exclusion constraint, aborting the
+  // loser's whole transaction. Creating it first — in its own commit — means the
+  // posting tx only ever reads an existing period.
+  const period = await getAccountingPeriod(input.companyId, postingDate);
+  if (period.status !== 'OPEN') {
+    throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${postingDate} is closed.`);
+  }
 
+  const fingerprint =
+    input.idempotencyKey !== undefined ? fingerprintPosting(input) : undefined;
+
+  try {
+    return await postInNewTransaction(input, postingDate, fingerprint);
+  } catch (error) {
+    // ---- 7. Idempotency, resolved ON THE UNIQUE VIOLATION -------------------
+    // Not check-then-insert (which races): we attempt the insert, and if the
+    // partial unique index (company_id, idempotency_key) rejects it, a
+    // concurrent or prior request already posted this key. Resolve here.
+    if (input.idempotencyKey !== undefined && isIdempotencyViolation(error)) {
+      return await resolveIdempotentRetry(input, fingerprint);
+    }
+    throw error;
+  }
+}
+
+async function postInNewTransaction(
+  input: PostJournalEntryInput,
+  postingDate: string,
+  fingerprint: string | undefined,
+): Promise<PostedEntry> {
+  return await getDbTx().transaction(async (tx) => {
     // ---- 2. Company exists and is active ------------------------------------
     const company = await tx
       .select({ id: schema.companies.id })
@@ -98,9 +110,16 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
       }
     }
 
-    // ---- 4. Period is open (resolved on posting_date, ADR-002) --------------
-    const period = await getAccountingPeriod(input.companyId, postingDate, tx);
-    if (period.status !== 'OPEN') {
+    // Period was resolved-and-created before this transaction opened, so it
+    // exists; a re-read here guards against a close landing in the gap between,
+    // without ever creating (which would race).
+    const periodNow = await tx
+      .select({ status: schema.accountingPeriods.status })
+      .from(schema.accountingPeriods)
+      .where(and(eq(schema.accountingPeriods.companyId, input.companyId),
+                 sql`${postingDate} between start_date and end_date`))
+      .limit(1);
+    if (periodNow[0]?.status === 'CLOSED') {
       throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${postingDate} is closed.`);
     }
 
@@ -123,6 +142,7 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
         sourceType: input.sourceType,
         sourceId: input.sourceId,
         idempotencyKey: input.idempotencyKey,
+        idempotencyFingerprint: fingerprint,
         createdBy: input.actorUserId,
         postedAt: sql`now()`,
       })
@@ -207,7 +227,48 @@ async function allocateEntryNumber(tx: Tx, companyId: string): Promise<number> {
   return Number(value);
 }
 
-async function loadEntry(tx: Tx, entryId: string): Promise<PostedEntry> {
+/** True when an error is the idempotency-key partial-unique violation. */
+function isIdempotencyViolation(error: unknown): boolean {
+  const message = String((error as { cause?: unknown }).cause ?? error);
+  return /journal_entries_idempotency_unique|duplicate key/i.test(message);
+}
+
+/**
+ * A prior/concurrent posting won the unique index. Load it and decide:
+ * identical fingerprint → return it (the retry succeeded once already);
+ * different fingerprint → IDEMPOTENCY_KEY_CONFLICT (a caller reused a key for
+ * new content — never silently return the original and lose their transaction).
+ */
+async function resolveIdempotentRetry(
+  input: PostJournalEntryInput,
+  fingerprint: string | undefined,
+): Promise<PostedEntry> {
+  const db = getDbTx();
+  const rows = await db
+    .select()
+    .from(schema.journalEntries)
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, input.companyId),
+        eq(schema.journalEntries.idempotencyKey, input.idempotencyKey!),
+      ),
+    )
+    .limit(1);
+  const prior = rows[0];
+  if (prior === undefined) {
+    // The winner rolled back after all; nothing to resolve to.
+    throw new LedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Idempotent retry could not be resolved.');
+  }
+  if (prior.idempotencyFingerprint !== fingerprint) {
+    throw new LedgerError(
+      'IDEMPOTENCY_KEY_CONFLICT',
+      'This idempotency key was already used for a different posting.',
+    );
+  }
+  return await loadEntry(db, prior.id);
+}
+
+async function loadEntry(tx: Tx | PoolDatabase, entryId: string): Promise<PostedEntry> {
   const entryRows = await tx
     .select()
     .from(schema.journalEntries)
