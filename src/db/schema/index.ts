@@ -6,3 +6,4 @@ export * from './customers';
 export * from './audit';
 export * from './periods';
 export * from './ledger';
+export * from './invoices';

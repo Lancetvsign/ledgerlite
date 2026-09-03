@@ -14,10 +14,12 @@ import { requireCompanyMembership, requirePermission } from '@/server/authorizat
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
+import { createInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { recordAuditEvent } from '@/server/audit';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
+import { createInvoiceInput } from '@/validation/invoice';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -156,6 +158,69 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate the victim customer (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => deactivateCustomer(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    table: 'invoices',
+    seed: async (victim) => {
+      const customer = await createCustomer(victim.ownerUserId, victim.companyId,
+        createCustomerInput.parse({ name: 'Victim Cust' }));
+      const account = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Revenue', accountType: 'REVENUE' }));
+      const { invoice } = await createInvoice(victim.ownerUserId, victim.companyId, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10',
+        lines: [{ accountId: account.id, quantity: '1', unitPrice: '100.0000' }],
+      }));
+      return { recordId: invoice.id };
+    },
+    attempts: [
+      {
+        operation: 'list invoices (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listInvoices(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim invoice',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getInvoice(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'create an invoice in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          createInvoice(attacker, victim.companyId, createInvoiceInput.parse({
+            customerId: '00000000-0000-0000-0000-000000000000', invoiceDate: '2026-01-10',
+            lines: [{ accountId: '00000000-0000-0000-0000-000000000000', quantity: '1', unitPrice: '1' }],
+          })),
+      },
+      {
+        operation: 'edit the victim invoice',
+        expect: 'denied',
+        run: (attacker, victim, recordId) =>
+          updateInvoice(attacker, victim.companyId, recordId, createInvoiceInput.parse({
+            customerId: '00000000-0000-0000-0000-000000000000', invoiceDate: '2026-01-10',
+            lines: [{ accountId: '00000000-0000-0000-0000-000000000000', quantity: '1', unitPrice: '1' }],
+          })),
+      },
+    ],
+  },
+  {
+    table: 'invoice_lines',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'invoice lines are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from invoice_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
       },
     ],
   },

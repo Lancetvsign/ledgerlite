@@ -99,6 +99,13 @@
       "when": 1788457834249,
       "tag": "0013_customer_audit_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788460990652,
+      "tag": "0014_invoices",
+      "breakpoints": true
     }
   ]
 }
