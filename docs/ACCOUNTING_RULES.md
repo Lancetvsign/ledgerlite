@@ -78,7 +78,7 @@ the original untouched and visible. The audit trail is the product.
 
 A `BEFORE UPDATE OR DELETE` trigger on `journal_entries` allows, on a `POSTED` row,
 **exactly one** change: `status` POSTED→REVERSED **with** `reversed_by_id` going NULL→set
-and **every other column identical** (`IS NOT DISTINCT FROM` across all fifteen columns).
+and **every other column identical** (`IS NOT DISTINCT FROM` across all sixteen columns).
 Any other update, and any delete, raises `POSTED_ENTRY_IMMUTABLE`. A parallel trigger on
 `journal_lines` freezes a posted entry's lines entirely. Drafts remain editable. Proven in
 raw SQL, pinned by `tests/integration/ledger-schema.test.ts`.

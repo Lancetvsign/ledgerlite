@@ -71,6 +71,13 @@
       "when": 1788398247994,
       "tag": "0009_journal_reversed_audit_action",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788402673913,
+      "tag": "0010_freeze_idempotency_fingerprint",
+      "breakpoints": true
     }
   ]
 }

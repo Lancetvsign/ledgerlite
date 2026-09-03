@@ -51,13 +51,15 @@ async function postBalanced(
   userId: string,
   cashId: string,
   revId: string,
-  opts: { entryNumber: number; sourceId?: string },
+  opts: { entryNumber: number; sourceId?: string; fingerprint?: string },
 ): Promise<string> {
   const { getDbTx } = await import('@/db');
   return await getDbTx().transaction(async (tx) => {
+    // idempotency_fingerprint can only be set at INSERT: the immutability trigger
+    // forbids changing it once the row is POSTED (that is the invariant under test).
     const r = await tx.execute<{ id: string }>(sql`
-      insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, source_id)
-      values (${companyId}, '2026-01-10', '2026-01-10', 'INVOICE', ${userId}, 'POSTED', ${opts.entryNumber}, ${opts.sourceId ?? null})
+      insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, source_id, idempotency_fingerprint)
+      values (${companyId}, '2026-01-10', '2026-01-10', 'INVOICE', ${userId}, 'POSTED', ${opts.entryNumber}, ${opts.sourceId ?? null}, ${opts.fingerprint ?? null})
       returning id`);
     const id = r.rows[0]!.id;
     await tx.execute(sql`insert into journal_lines (journal_entry_id,company_id,account_id,line_number,debit,credit) values (${id},${companyId},${cashId},1,10,0),(${id},${companyId},${revId},2,0,10)`);
@@ -190,6 +192,41 @@ describe('invariant 7 — posted entries are immutable', () => {
     await db.execute(sql`update journal_entries set status='REVERSED', reversed_by_id=${rev} where id=${orig}`);
     const s = await db.execute<{ status: string }>(sql`select status from journal_entries where id=${orig}`);
     expect(s.rows[0]?.status).toBe('REVERSED');
+  });
+
+  // Regression: idempotency_fingerprint was added in migration 0008, AFTER 0006's
+  // frozen-column list. The permitted POSTED→REVERSED transition must still change
+  // NOTHING but status + reversed_by_id — including this later-added column.
+  it('rejects POSTED → REVERSED that also changes idempotency_fingerprint', async () => {
+    const f = await fixture();
+    const db = await getTestDb();
+    const orig = await postBalanced(f.companyId, f.userId, f.cashId, f.revId, { entryNumber: 50, fingerprint: 'fp-original' });
+    const rev = await postBalanced(f.companyId, f.userId, f.cashId, f.revId, { entryNumber: 51 });
+    await rejects(
+      db.execute(sql`update journal_entries set status='REVERSED', reversed_by_id=${rev}, idempotency_fingerprint='fp-tampered' where id=${orig}`),
+      /POSTED_ENTRY_IMMUTABLE|restrict/i,
+    );
+    // The original is untouched: still POSTED, fingerprint unchanged.
+    const after = await db.execute<{ status: string; idempotency_fingerprint: string }>(
+      sql`select status, idempotency_fingerprint from journal_entries where id=${orig}`,
+    );
+    expect(after.rows[0]?.status).toBe('POSTED');
+    expect(after.rows[0]?.idempotency_fingerprint).toBe('fp-original');
+  });
+
+  it('permits POSTED → REVERSED when idempotency_fingerprint is carried through unchanged', async () => {
+    const f = await fixture();
+    const db = await getTestDb();
+    const orig = await postBalanced(f.companyId, f.userId, f.cashId, f.revId, { entryNumber: 52, fingerprint: 'fp-original' });
+    const rev = await postBalanced(f.companyId, f.userId, f.cashId, f.revId, { entryNumber: 53 });
+    // Freezing the column must not FORBID the transition when the fingerprint is
+    // left untouched — exactly what the real reversal path does (reversal.ts).
+    await db.execute(sql`update journal_entries set status='REVERSED', reversed_by_id=${rev} where id=${orig}`);
+    const after = await db.execute<{ status: string; idempotency_fingerprint: string }>(
+      sql`select status, idempotency_fingerprint from journal_entries where id=${orig}`,
+    );
+    expect(after.rows[0]?.status).toBe('REVERSED');
+    expect(after.rows[0]?.idempotency_fingerprint).toBe('fp-original');
   });
 });
 
