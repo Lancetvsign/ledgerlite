@@ -22,6 +22,7 @@
     "db:mark-test": "tsx scripts/mark-test-database.ts",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:gl": "vitest run --project integration tests/integration/gl-regression.test.ts",
     "test:e2e": "playwright test",
     "test:watch": "vitest --project unit",
     "db:target": "tsx scripts/db-target.ts",
