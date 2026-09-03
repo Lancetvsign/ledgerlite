@@ -78,6 +78,13 @@
       "when": 1788449945468,
       "tag": "0010_closed_period_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788450000000,
+      "tag": "0011_freeze_idempotency_fingerprint",
+      "breakpoints": true
     }
   ]
 }
