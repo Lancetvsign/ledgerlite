@@ -1,14 +1,20 @@
 # Gate 2 — General Ledger Acceptance · MANDATORY HUMAN REVIEW
 
-> Sprint 3 — the ledger engine, **LL-030 … LL-036** — is complete and merged to `main`
-> (tip `c3f5271`). This gate is a **human acceptance review** before any Sprint 4 feature
-> (customers, invoices) is built on the foundation.
+> Sprint 3 — the ledger engine, **LL-030 … LL-036** — is complete and merged to `main`.
+> This gate is a **human acceptance review** before any Sprint 4 feature (customers,
+> invoices) is built on the foundation.
 >
 > Everything below is **prepared evidence**: the required suites were run, the acceptance
 > scenario was executed and asserted, and two independent implementation‑blind reviews
 > were performed. **The sign‑off in §8 is the human reviewer's to make** — Claude does not
-> pass its own gate. Read §3, §4, and §7 closely; they contain findings that need a
-> decision.
+> pass its own gate. Read §3, §4, and §7 closely.
+>
+> **Update — the one invariant‑level finding was remediated during this review.** Both
+> reviews flagged that invariant 5 (no posting into a closed period) was enforced by
+> application code only. That is now **structural**: **ADR‑012 / migration 0010** (merged)
+> adds a period‑locking `BEFORE INSERT` trigger, so a raw‑SQL insert into a closed period
+> is rejected by the database and the close‑vs‑post race is closed. §4, §6, and §7 reflect
+> the fixed state.
 
 **Key term.** *Structural* = enforced by the database, so it holds even when the
 application is bypassed (raw SQL). *Conventional* = enforced only by application code.
@@ -31,12 +37,12 @@ The gate's "confirm each failure in raw SQL too" exists precisely to tell these 
 | 9 | `/code-review high` across the Sprint 3 surface | ✅ | Implementation‑blind correctness review — §5a |
 | 10 | `/security-review` across the Sprint 3 surface | ✅ | Implementation‑blind security review — **no exploitable finding** — §5b |
 | 11 | Manual acceptance scenario derives correctly | ✅ with a criteria discrepancy | Executed as `gate2-acceptance.test.ts` — §3. **Finding G2‑1** below. |
-| 12 | Every negative case fails (service **and** raw SQL) | ⚠️ mixed by design | §4 — five are structural; **closed‑period and inactive‑account are conventional (app‑only)** |
+| 12 | Every negative case fails (service **and** raw SQL) | ✅ (after ADR‑012) | §4 — closed‑period is now **structural** (0010 trigger); inactive‑account stays conventional **by design**, authorization is app‑layer **by nature** |
 | 13 | No balance stored anywhere — verified from the schema | ✅ | `information_schema` scan finds no balance/total/cached column (test in `gate2-acceptance.test.ts`) |
-| 14 | All ADRs decided | ✅ | ADR‑001 … ADR‑011 in [DECISIONS.md](DECISIONS.md) |
+| 14 | All ADRs decided | ✅ | ADR‑001 … **ADR‑012** in [DECISIONS.md](DECISIONS.md) |
 
-Two ⚠️ rows (11, 12) are **decisions for the reviewer**, detailed in §7. Neither is a code
-defect; both are honest results the gate is designed to surface.
+Row 11 (the acceptance‑script number, Finding G2‑1) is a **doc‑only** note for the reviewer
+— the engine is correct. Everything else is verified.
 
 ---
 
@@ -63,10 +69,11 @@ The gate says to read these yourself. Exact locations:
 | Command | Result |
 |---|---|
 | `npm run ci` | ✅ (CI verify check green on `main`; see checklist #5 for the local‑worktree caveat) |
-| `npm run test:integration` | ✅ 277/277 this session (+2 acceptance = 279) |
+| `npm run test:integration` | ✅ all green — LL‑036 baseline 277 + 2 acceptance + 5 closed‑period‑guard; CI "Integration" green on `main` and on this PR |
 | `npm run test:gl` (release gate) | ✅ 15/15 |
 | `isolation` suite | ✅ 5/5 |
 | adversarial battery (`adv1…adv5`) | ✅ 32/32 — **no invariant violation found** (LL‑036) |
+| `closed-period-guard` suite | ✅ 5/5 — raw‑SQL insert into a closed period rejected by the DB (ADR‑012) |
 
 ---
 
@@ -113,14 +120,15 @@ determines whether the guarantee is structural or conventional.
 | Duplicate idempotency key | same entry / `IDEMPOTENCY_KEY_CONFLICT` (GL‑T005) | **Rejected** — partial unique index (`ledger-schema` inv‑3&4) | **Structural** |
 | Two simultaneous identical postings | exactly one entry (GL‑T014, adv2‑C1) | **Rejected** second — unique index + counter lock | **Structural** |
 | Zero / single‑line posting | rejected (GL‑T008 / Zod) | **Rejected** at COMMIT — `assert_entry_balanced` ≥2‑line check | **Structural** |
-| **Posting into a CLOSED period** | `PERIOD_CLOSED` (GL‑T004) | **SUCCEEDS** — no period‑status trigger/constraint exists on the journal tables | **Conventional (app‑only)** ⚠️ |
-| **Posting to an inactive account** | `INACTIVE_ACCOUNT` (GL‑T009) | **SUCCEEDS** — no account‑status constraint (deliberate: reversal must work against a since‑deactivated account) | **Conventional (by design)** ⚠️ |
+| **Posting into a CLOSED period** | `PERIOD_CLOSED` (GL‑T004) | **Rejected** — the period‑locking `BEFORE INSERT` trigger (ADR‑012, migration 0010; `closed-period-guard` test posts a raw entry into a closed period with the service bypassed) | **Structural** (was app‑only; remediated) |
+| **Posting to an inactive account** | `INACTIVE_ACCOUNT` (GL‑T009) | **SUCCEEDS** — no account‑status constraint (deliberate: reversal must work against a since‑deactivated account) | **Conventional (by design)** |
 | Posting without `journal.post` | `AuthorizationDenied` (`ledger-service` READ_ONLY test) | N/A — capabilities are application‑layer by nature; the DB enforces **tenancy** (composite FK), not app‑user permissions | **Conventional (by nature)** |
 
-Verified from `0006_journal_ledger.sql`: the journal tables carry the sign check, composite
-FKs, idempotency/source unique indexes, the deferred balance triggers, and the immutability
-triggers — and **no** trigger or constraint referencing accounting‑period status or account
-status. See §7 for what to decide about the two ⚠️ rows.
+The journal tables carry the sign check, composite FKs, idempotency/source unique indexes,
+the deferred balance triggers, and the immutability triggers (`0006_journal_ledger.sql`),
+**plus the period‑status guard trigger** (`0010_closed_period_guard.sql`, ADR‑012). No
+trigger references **account** status — that is deliberate (reversal must post against a
+since‑deactivated account), so inactive‑account rejection stays application‑layer by design.
 
 ---
 
@@ -143,13 +151,13 @@ resolve‑on‑unique‑violation; the trial balance's `('POSTED','REVERSED')` p
 exhaustive natural‑direction signs over the six `account_type` values; composite‑FK
 tenancy; and driver policy (HTTP client only on reads).
 
-The **one invariant‑level item** it raised is **invariant 5 (closed periods)** — the same
-one in §4/§7. It independently confirmed there is no DB enforcement and a real (if
-serializably‑correct) TOCTOU window, that it is deliberately accepted in a test comment but
-**not scoped by any ADR**, and that it contradicts AGENTS §4's "enforced in the database"
-claim — so it belongs in front of a human. Its remaining findings map to §7 items 6
-(fingerprint trigger), 5 (sum‑overflow), and the new items 8–9 below; all lower severity,
-none exploitable, none corrupting.
+The **one invariant‑level item** it raised was **invariant 5 (closed periods)** — no DB
+enforcement and a real (if serializably‑correct) TOCTOU window, unscoped by any ADR and
+contradicting AGENTS §4's "enforced in the database" claim. **This was remediated during the
+review** (ADR‑012 / migration 0010): a period‑locking `BEFORE INSERT` trigger now makes it
+structural and closes the race. Its remaining findings map to §7 items 6 (fingerprint
+trigger), 5 (sum‑overflow), and items 8–9; all lower severity, none exploitable, none
+corrupting.
 
 ### 5b. Security review — **no exploitable vulnerability found**
 An implementation‑blind agent traced the Sprint 3 journal surface end‑to‑end and confirmed
@@ -176,33 +184,30 @@ auth error message.
 | 2 | Balances derived, none stored | **DB** (no balance column) + app | §3 schema scan; trial balance derives from lines |
 | 3 | Posted entries immutable | **DB** (triggers) + app (`POSTED_ENTRY_IMMUTABLE`) | GL‑T007; `ledger-schema` inv‑7 |
 | 4 | No cross‑company line | **DB** (composite FKs) + app | GL‑T003; `ledger-schema` inv‑2; isolation suite |
-| 5 | No posting into a CLOSED period | **App only** (`assertPeriodOpen`) | GL‑T004 — **conventional; see §7** |
+| 5 | No posting into a CLOSED period | **DB** (period‑locking trigger, ADR‑012) + app | GL‑T004; `closed-period-guard` (raw‑SQL rejected) |
 | 6 | Source posts once; retries idempotent | **DB** (unique indexes) + app | GL‑T005/T014; adv2 |
 | 7 | Posting is atomic | **DB** (tx + deferred trigger at COMMIT) | GL‑T012; adv |
 | 8 | `LedgerService` is the only posting path | **App / convention** (inherently) | AGENTS §4.8; no feature module inserts into journal tables |
 
-Invariants 5 and 8 are, by their nature, not expressible as a single DB constraint;
-invariant 5 *could* be made structural with a period‑status trigger (see §7).
+Invariant 8 is, by its nature, not expressible as a single DB constraint. Invariant 5 was
+made structural during this review (ADR‑012 / migration 0010).
 
 ---
 
-## 7. Open items the reviewer must weigh
+## 7. Items surfaced (items 2 & 4 were fixed during the review)
 
 1. **Finding G2‑1 (acceptance script number).** Post‑reversal Checking is **8,000**, not
    7,500. Engine correct; script wording should be fixed. *(Doc‑only.)*
-2. **Closed‑period is conventional, not structural.** A raw SQL insert can post into a
-   `CLOSED` period; only `LedgerService` enforces it. AGENTS §4 implies DB enforcement for
-   all invariants — this one is app‑only. **Decision:** accept app‑only enforcement, or add
-   a period‑status guard (a `BEFORE INSERT` trigger, or a period‑row lock — which would also
-   close the close‑vs‑post TOCTOU below). *A follow‑up task is already filed for the TOCTOU
-   decision.*
+2. **✅ RESOLVED — closed‑period is now structural.** Was app‑only; **ADR‑012 / migration
+   0010** (merged) added a period‑locking `BEFORE INSERT` trigger, so a raw‑SQL insert into a
+   `CLOSED` period is now rejected by the database (`closed-period-guard` test proves it with
+   the service bypassed).
 3. **Inactive‑account is conventional (by design).** No DB block on posting to an inactive
    account, because **reversal must work against a since‑deactivated account** (ADR‑007 /
    LL‑033). This is deliberate; noted so the reviewer accepts it explicitly.
-4. **Period close‑vs‑post TOCTOU** (from the LL‑036 adversarial pass). An in‑flight post
-   that read the period OPEN before a concurrent close committed can still land in it
-   (serializably correct; a post *after* the close commits is always `PERIOD_CLOSED`).
-   Breaks none of the five core invariants. **Follow‑up task filed** for the product call.
+4. **✅ RESOLVED — the close‑vs‑post TOCTOU is closed.** The same ADR‑012 trigger reads the
+   period `FOR SHARE`, so `closePeriod` waits for in‑flight posts and no post can commit into
+   an already‑closed period. (The prior follow‑up task was dismissed as superseded.)
 5. **Sum‑overflow robustness.** A balanced entry whose per‑side SUM exceeds NUMERIC(19,4)
    is rejected at COMMIT with an opaque (non‑typed) error but leaves **no partial state**.
    A typed magnitude guard would be nicer. *(Low priority.)*
@@ -238,13 +243,16 @@ invariant 5 *could* be made structural with a period‑status trigger (see §7).
 
 The reviewer confirms, by reading the code and this evidence:
 
-- [ ] I have read the schema, every constraint/trigger, and `LedgerService` in full (§2).
-- [ ] The manual acceptance scenario derives correctly (§3), and I accept Finding G2‑1.
-- [ ] I accept the structural‑vs‑conventional split in §4, **including** that closed‑period
-      and inactive‑account are enforced by application code, not the database — or I have
-      filed work to make closed‑period structural.
+- [ ] I have read the schema, every constraint/trigger (including the 0010 period guard),
+      and `LedgerService` in full (§2).
+- [ ] The manual acceptance scenario derives correctly (§3), and I accept Finding G2‑1
+      (the acceptance‑script number, doc‑only).
+- [ ] I accept the structural‑vs‑conventional split in §4: closed‑period is now **structural**
+      (ADR‑012); I accept that inactive‑account is app‑layer **by design** and authorization
+      is app‑layer **by nature**.
 - [ ] The independent correctness (§5a) and security (§5b) reviews raise nothing blocking.
-- [ ] The open items in §7 are each accepted or ticketed.
+- [ ] The remaining §7 items (5–10, all low‑severity/informational) are each accepted or
+      ticketed.
 - [ ] **Gate 2 is passed. Sprint 4 (Customers & Invoices) may begin.**
 
 _Prepared by Claude Code. Sign‑off is the human reviewer's._
