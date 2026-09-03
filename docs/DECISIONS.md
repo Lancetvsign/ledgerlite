@@ -680,3 +680,56 @@ A dedicated reversal `source_type` per original source is ever needed for report
 distinguishing an invoice reversal from a payment reversal at the source level). Today the
 `reversal_of_id` join to the original supplies that, so the single `'REVERSAL'` source
 suffices.
+
+---
+
+## ADR-011 — What "in the ledger" means for balances (POSTED **and** REVERSED)
+
+**Status** Accepted · **Added by** LL-034
+
+### Context
+
+The LL-034 ticket says the trial balance should "include only `POSTED` entries." Taken
+literally against the LL-033 reversal model, that is wrong, and the ticket's own test
+("an entry plus its reversal nets to zero") is the proof.
+
+A reversal does not erase the original. LL-033 leaves the original exactly as posted and
+adds a **separate** offsetting entry, marking the original `REVERSED`. The two entries
+together are what nets to zero. Consider Cash 100 / Revenue 100, then reversed:
+
+| Entry | Status | Cash | Revenue |
+|---|---|---|---|
+| Original | `REVERSED` | +100 Dr | +100 Cr |
+| Reversal | `POSTED` | −100 (Cr) | −100 (Dr) |
+| **Net** | | **0** | **0** |
+
+If balances counted only `POSTED` entries, the `REVERSED` original would drop out and the
+reversal would stand alone — Cash would read −100, Revenue −100. The books would be wrong
+*because* a correction was made. That is the opposite of what a reversal is for.
+
+### Decision
+
+**An entry is "in the ledger" when its status is `POSTED` or `REVERSED`, and excluded only
+when `DRAFT`.** Every balance computation — the trial balance and all four integrity
+assertions (`invariants.ts`) — uses `status in ('POSTED','REVERSED')`, never `= 'POSTED'`.
+"Only POSTED" in the ticket is read as "only entries posted to the ledger" — i.e. not
+drafts — which is the sense in which it is true.
+
+A `REVERSED` entry is never hidden, deleted, or altered (invariant 3 / ADR-007); it keeps
+its lines and its financial effect, offset by its reversal. `DRAFT` entries have never
+been posted and carry no ledger effect, so they are the only thing excluded.
+
+### Consequences
+
+- The trial balance always balances, before and after any reversal, and shows an entry
+  and its reversal netting to zero on every account — proven with `decimal.js` in the
+  LL-034 tests.
+- Every later report (general ledger, financial statements) must use the same
+  `('POSTED','REVERSED')` population. A report that filters `= 'POSTED'` will silently
+  drop reversed originals and misstate the books.
+
+### Revisit if
+
+A future "voided draft" or other non-ledger status is added; the exclusion rule is
+"`DRAFT` (and anything equally pre-ledger) is out", not "only these two are in", so a new
+pre-posting status would join `DRAFT` on the excluded side.
