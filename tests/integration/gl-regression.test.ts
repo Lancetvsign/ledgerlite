@@ -22,7 +22,7 @@ import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
-import { receivePayment } from '@/server/payments';
+import { receivePayment, voidPayment } from '@/server/payments';
 import {
   assertLedgerIntegrity,
   getJournalEntry,
@@ -31,14 +31,14 @@ import {
   reverseJournalEntry,
 } from '@/server/ledger';
 import { closePeriod } from '@/server/periods';
-import { getTrialBalance } from '@/server/reports';
+import { getArAging, getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
-import { receivePaymentInput } from '@/validation/payment';
+import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
@@ -454,4 +454,57 @@ describe('GL regression suite (release-blocking)', () => {
 
     await assertLedgerIntegrity(company.id);
   });
+
+  it('GL-T018 — the A/R aging subsidiary reconciles to the GL control balance (LL-046)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Aging Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL046 Revenue', accountType: 'REVENUE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL046 Cash', accountType: 'ASSET' }));
+    const mkInvoice = async (price: string, dueDate: string): Promise<string> => {
+      const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10', dueDate, lines: [{ accountId: rev.id, unitPrice: price }],
+      }));
+      await finalizeInvoice(userId, company.id, invoice.id);
+      return invoice.id;
+    };
+    await mkInvoice('100.00', '2026-06-15'); // overdue as of a mid-year date
+    const partial = await mkInvoice('200.00', '2026-07-15');
+    await receivePayment(userId, company.id, receivePaymentInput.parse({
+      customerId: customer.id, paymentDate: '2026-06-20', depositAccountId: cash.id,
+      applications: [{ invoiceId: partial, amountApplied: '50.00' }],
+    }));
+
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arBalance = (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+    const aging = await getArAging(userId, company.id, '2026-12-31');
+
+    // The subsidiary (aging of open invoices) equals the control (derived A/R).
+    expect(arBalance).toBe('250.0000'); // 100 + (200 − 50)
+    expect(aging.totals.total).toBe(arBalance);
+
+    // Void the partial payment: the balance returns to A/R and both still agree.
+    await voidPaymentReconciles(userId, company.id, partial, arId);
+    await assertLedgerIntegrity(company.id);
+  });
 });
+
+/** Voids the (single) payment on an invoice, then re-asserts subsidiary ⇔ control. */
+async function voidPaymentReconciles(userId: string, companyId: string, invoiceId: string, arId: string): Promise<void> {
+  const db = await getTestDb();
+  const paymentId = (await db.execute<{ id: string }>(sql`
+    select p.id from payments p
+    join payment_applications pa on pa.company_id = p.company_id and pa.payment_id = p.id
+    where p.company_id = ${companyId} and pa.invoice_id = ${invoiceId} and p.status = 'POSTED' limit 1`)).rows[0]!.id;
+  await voidPayment(userId, companyId, paymentId, voidPaymentInput.parse({}));
+  const arBalance = (await getTrialBalance(userId, companyId, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+  const aging = await getArAging(userId, companyId, '2026-12-31');
+  expect(arBalance).toBe('300.0000'); // the 50 is un-applied → back to 100 + 200
+  expect(aging.totals.total).toBe(arBalance);
+}
