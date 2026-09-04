@@ -114,7 +114,43 @@ export function computeInvoicePosting(
   return { ...totals, revenueByAccount };
 }
 
-/** Confirms the customer and every referenced account live in THIS company. */
+/**
+ * Every invoice line must post to an ordinary, in-company account — never a system
+ * CONTROL account. Crediting the Accounts Receivable control account as a "revenue"
+ * line posts Dr A/R (the total) / Cr A/R (the subtotal): the entry balances, so every
+ * trigger passes, but the invoice's full total counts as open in the aging while the
+ * ledger A/R moved only by the tax — silently breaking the aging⇔control
+ * reconciliation (GL-T018 / ADR-016). Sales Tax Payable, Retained Earnings, etc. are
+ * system-managed too and are never a legitimate manual line choice. The invoice UI only
+ * offers REVENUE accounts; because the browser is untrusted (AGENTS §6) and the line
+ * `accountId` is a client-supplied field, the rule is enforced HERE, at the service.
+ * Also confirms each account exists in this company.
+ */
+async function assertLineAccountsPostable(
+  tx: Tx,
+  companyId: string,
+  accountIds: readonly string[],
+): Promise<void> {
+  const ids = [...new Set(accountIds)];
+  const found = await tx
+    .select({ id: schema.accounts.id, systemAccountType: schema.accounts.systemAccountType })
+    .from(schema.accounts)
+    .where(and(eq(schema.accounts.companyId, companyId), inArray(schema.accounts.id, ids)));
+  const systemTypeById = new Map(found.map((a) => [a.id, a.systemAccountType]));
+  for (const id of ids) {
+    if (!systemTypeById.has(id)) {
+      throw new InvoiceError('ACCOUNT_NOT_FOUND', 'A line references an account not in this company.');
+    }
+    if (systemTypeById.get(id) !== null) {
+      throw new InvoiceError(
+        'LINE_ACCOUNT_INVALID',
+        'An invoice line cannot post to a system control account (e.g. Accounts Receivable).',
+      );
+    }
+  }
+}
+
+/** Confirms the customer lives in THIS company and every line account is postable. */
 async function validateReferences(
   tx: Tx,
   companyId: string,
@@ -130,17 +166,7 @@ async function validateReferences(
     throw new InvoiceError('CUSTOMER_NOT_FOUND', 'That customer does not exist in this company.');
   }
 
-  const accountIds = [...new Set(lines.map((l) => l.accountId))];
-  const found = await tx
-    .select({ id: schema.accounts.id })
-    .from(schema.accounts)
-    .where(and(eq(schema.accounts.companyId, companyId), inArray(schema.accounts.id, accountIds)));
-  const foundIds = new Set(found.map((a) => a.id));
-  for (const id of accountIds) {
-    if (!foundIds.has(id)) {
-      throw new InvoiceError('ACCOUNT_NOT_FOUND', 'A line references an account not in this company.');
-    }
-  }
+  await assertLineAccountsPostable(tx, companyId, lines.map((l) => l.accountId));
 }
 
 async function insertLines(
@@ -380,6 +406,12 @@ export async function finalizeInvoice(
       .from(schema.invoiceLines)
       .where(eq(schema.invoiceLines.invoiceId, invoiceId))
       .orderBy(schema.invoiceLines.lineNumber);
+
+    // Defense in depth: no stored line may post to a system control account (see
+    // assertLineAccountsPostable). create/update already enforce this, so this only
+    // catches a draft created before the guard existed or through some other path —
+    // it must never post a reconciliation-breaking entry (GL-T018 / ADR-016).
+    await assertLineAccountsPostable(tx, companyId, lineRows.map((l) => l.accountId));
 
     // Derive the posting from the LOCKED lines; assert it matches the stored
     // totals (ADR-013 tripwire — the service is the only writer of both).

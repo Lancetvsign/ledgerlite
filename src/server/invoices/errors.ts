@@ -16,6 +16,13 @@ export type InvoiceErrorCode =
   | 'CUSTOMER_NOT_FOUND'
   /** A line references an account that does not exist in this company. */
   | 'ACCOUNT_NOT_FOUND'
+  /**
+   * A line references a system CONTROL account (non-null system_account_type, e.g.
+   * Accounts Receivable or Sales Tax Payable). Crediting A/R as a "revenue" line
+   * posts Dr A/R / Cr A/R — balanced, but it breaks the aging⇔control
+   * reconciliation (GL-T018 / ADR-016). Invoice lines post to ordinary accounts only.
+   */
+  | 'LINE_ACCOUNT_INVALID'
   /** No Accounts Receivable system account is configured for this company. */
   | 'AR_ACCOUNT_NOT_CONFIGURED'
   /** The invoice has tax but no Sales Tax Payable system account is configured. */

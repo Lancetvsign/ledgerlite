@@ -400,3 +400,44 @@ describe('tenancy — cross-company ids read as a genuine miss', () => {
     expect((await errOf(voidInvoice(b.userId, b.companyId, invoice.id, voidInvoiceInput.parse({})))).code).toBe('INVOICE_NOT_FOUND');
   });
 });
+
+describe('invoice lines cannot post to a system control account (protects GL-T018 / ADR-016)', () => {
+  // A crafted request naming the A/R control account as a "revenue" line would post
+  // Dr A/R (total) / Cr A/R (subtotal): balanced, so every trigger passes — but the
+  // invoice's full total counts as open in the aging while the ledger A/R moved only
+  // by the tax, silently breaking the aging⇔control reconciliation. The service (not
+  // the UI, which the browser can bypass) must reject it. Both independent Gate 3
+  // reviews flagged this.
+  it('rejects creating an invoice whose line names the A/R control account', async () => {
+    const c = await setup();
+    const arId = await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE');
+    expect(arId).not.toBeNull();
+    expect(
+      (await errOf(createInvoice(c.userId, c.companyId, draft(c, [{ accountId: arId!, unitPrice: '100.00' }])))).code,
+    ).toBe('LINE_ACCOUNT_INVALID');
+  });
+
+  it('rejects the Sales Tax Payable control account as a line account too', async () => {
+    const c = await setup();
+    const taxId = await sysAccount(c.companyId, 'SALES_TAX_PAYABLE');
+    expect(taxId).not.toBeNull();
+    expect(
+      (await errOf(createInvoice(c.userId, c.companyId, draft(c, [{ accountId: taxId!, unitPrice: '100.00' }])))).code,
+    ).toBe('LINE_ACCOUNT_INVALID');
+  });
+
+  it('defense in depth: finalize refuses a stored draft whose line was force-set to A/R, and posts nothing', async () => {
+    // Simulate a draft that bypassed create-time validation (e.g. predating the guard)
+    // by writing the A/R account onto the stored line directly, then finalizing.
+    const c = await setup();
+    const arId = await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE');
+    const { invoice } = await createInvoice(c.userId, c.companyId, draft(c, [{ accountId: c.revId, unitPrice: '100.00' }]));
+    const db = await getTestDb();
+    await db.execute(
+      sql`update invoice_lines set account_id = ${arId} where company_id = ${c.companyId} and invoice_id = ${invoice.id}`,
+    );
+    expect((await errOf(finalizeInvoice(c.userId, c.companyId, invoice.id))).code).toBe('LINE_ACCOUNT_INVALID');
+    // Nothing posted — the refusal left no journal entry behind.
+    expect(await invoiceEntries(c.companyId, invoice.id)).toEqual([]);
+  });
+});
