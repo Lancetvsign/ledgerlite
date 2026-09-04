@@ -7,6 +7,7 @@ import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDbTx, schema } from '@/db';
 import { todayInTimeZone } from '@/lib/dates';
 import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
+import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
@@ -308,25 +309,6 @@ async function loadInvoice(
   return { invoice, lines };
 }
 
-/** The company's single account for a system role (unique via the LL-042 index). */
-async function resolveSystemAccount(
-  tx: Tx,
-  companyId: string,
-  systemAccountType: string,
-): Promise<string | null> {
-  const rows = await tx
-    .select({ id: schema.accounts.id })
-    .from(schema.accounts)
-    .where(
-      and(
-        eq(schema.accounts.companyId, companyId),
-        eq(schema.accounts.systemAccountType, systemAccountType),
-      ),
-    )
-    .limit(1);
-  return rows[0]?.id ?? null;
-}
-
 /**
  * Finalize a DRAFT invoice: assign its number, transition DRAFT→OPEN, and post
  * the balanced entry to the general ledger — ATOMICALLY, in one transaction, so
@@ -554,6 +536,21 @@ export async function voidInvoice(
     if (invoice === undefined) throw new InvoiceError('INVOICE_NOT_FOUND', 'Invoice not found.');
     if (invoice.status !== 'OPEN') {
       throw new InvoiceError('INVOICE_NOT_OPEN', 'Only an open invoice can be voided.');
+    }
+
+    // An invoice with LIVE (non-void) payments applied cannot be voided — void the
+    // payment first (LL-043). Otherwise the payment's Cr A/R would strand against a
+    // voided invoice, leaving an untracked customer credit.
+    const livePayments = await tx.execute<{ n: string }>(sql`
+      select count(*)::text n
+      from payment_applications pa
+      join payments p on p.company_id = pa.company_id and p.id = pa.payment_id
+      where pa.company_id = ${companyId} and pa.invoice_id = ${invoiceId} and p.status <> 'VOID'`);
+    if (Number(livePayments.rows[0]?.n ?? '0') > 0) {
+      throw new InvoiceError(
+        'INVOICE_HAS_PAYMENTS',
+        'Void the payments applied to this invoice before voiding it.',
+      );
     }
 
     // Its posted entry — unique via the source-once index.

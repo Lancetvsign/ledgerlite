@@ -914,3 +914,60 @@ Gapless invoice numbering becomes a requirement (jurisdiction), void needs its o
 or must handle PAID invoices (payment application, LL-043), or per-line tax accounts / multiple
 tax authorities arrive — at which point the single `SALES_TAX_PAYABLE` resolution is replaced
 by a per-line tax-account reference.
+
+---
+
+## ADR-015 — Customer payments: posting and application
+
+**Status** Accepted · **Added by** LL-043 · **Decided by** product owner
+
+### Context
+
+LL-042 posts invoices to A/R; nothing recorded money coming back. A payment must post to
+the ledger, apply to specific invoices, and settle them — the second document type to drive
+the GL. Four choices: how a payment maps to invoices, what it posts, how much it must apply,
+and how it interacts with invoice void.
+
+### Decision
+
+**Application is multi-invoice.** A `payment_applications` junction links one payment to one
+or more of the customer's invoices, with a per-invoice `amount_applied`. A payment is
+**fully applied**: its `amount` is exactly Σ(applications), service-derived and never input.
+Each application must be ≤ the invoice's **open balance** (`invoice.total − Σ amount_applied
+from non-void payments`) and target an **OPEN** invoice **of the paying customer**. An invoice
+is set **PAID** when an application clears its remaining balance. Overpayment, prepayment, and
+on-account credit (CUSTOMER_REFUND) are explicitly out of scope — a later ticket.
+
+**The entry.** One entry per payment: **Dr the deposit account = amount, Cr Accounts
+Receivable = amount** (A/R line tagged with the customer). The deposit account is any in-company,
+active **ASSET** account the payment names (Cash / Checking / Undeposited Funds); the
+"make deposits" batch workflow is later. Source-typed `CUSTOMER_PAYMENT` with the payment's id,
+so the "one POSTED per source" index makes it source-once; posting reuses `postEntryCore` within
+the payment's own transaction (atomic with the payment + applications + PAID transitions).
+
+**Nothing is stored as a balance** (invariant 2). `payments.amount` is a document total; a
+customer's receivable derives from journal lines and an invoice's open balance from the
+applications. `invoice.status` (OPEN/PAID) is a document state, not a balance.
+
+**Authorization** is `payment.create` (ALL_WRITERS incl. BOOKKEEPER); the posting goes through
+`postEntryCore`, which does not re-gate on `journal.post`, so a bookkeeper who works documents
+is not blocked (mirrors ADR-014).
+
+**Void.** Voiding a POSTED payment reverses its entry (`reverseEntryCore`, nets every account
+to zero), marks it VOID, and reverts every invoice it had marked PAID back to OPEN (removing the
+payment necessarily un-fully-pays them). To keep the "no untracked credit" rule, **`voidInvoice`
+now refuses an invoice that has any live (non-void) payment applied** (`INVOICE_HAS_PAYMENTS`) —
+void the payment first. So a PAID invoice is voided by first voiding its payment (which returns
+it to OPEN), then voiding it.
+
+### Consequences
+
+- A customer's balance and each invoice's open balance are fully derived and auditable from the
+  ledger and the applications; LL-046 aging builds on the applications.
+- `resolveSystemAccount` moved to `@/server/accounts` (shared by invoices and payments).
+- Payment and invoice void compose safely without a cascade.
+
+### Revisit if
+
+Overpayment / prepayment / customer credit or refunds (CUSTOMER_REFUND) arrive, deposits need
+the Undeposited-Funds → bank batch workflow, or payments need their own void capability.

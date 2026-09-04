@@ -8,8 +8,12 @@ import { recordAuditEvent } from '@/server/audit';
 
 import { AccountError } from './errors';
 
+import type { PoolDatabase } from '@/db';
 import type { Account } from '@/db/schema';
 import type { CreateAccountInput, UpdateAccountInput } from '@/validation/account';
+
+/** An executor that runs reads: the pool client or an open transaction. */
+type Executor = PoolDatabase | Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
 
 /**
  * Chart-of-accounts service — LL-020.
@@ -235,6 +239,31 @@ export async function listAccounts(
     .from(schema.accounts)
     .where(eq(schema.accounts.companyId, companyId))
     .orderBy(schema.accounts.accountNumber, schema.accounts.name);
+}
+
+/**
+ * The company's single account carrying a system role (Accounts Receivable, Sales
+ * Tax Payable, …), or null if none is configured. Unique per company via the LL-042
+ * partial index `accounts_company_system_account_type_key`, so this resolves
+ * deterministically. Shared by the document services that post to those accounts
+ * (invoices LL-042, payments LL-043). Read-only; pass a tx to read inside one.
+ */
+export async function resolveSystemAccount(
+  executor: Executor,
+  companyId: string,
+  systemAccountType: string,
+): Promise<string | null> {
+  const rows = await executor
+    .select({ id: schema.accounts.id })
+    .from(schema.accounts)
+    .where(
+      and(
+        eq(schema.accounts.companyId, companyId),
+        eq(schema.accounts.systemAccountType, systemAccountType),
+      ),
+    )
+    .limit(1);
+  return rows[0]?.id ?? null;
 }
 
 export { AccountError } from './errors';

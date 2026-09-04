@@ -8,6 +8,8 @@ export type InvoiceErrorCode =
   | 'INVOICE_NOT_DRAFT'
   /** Only an OPEN invoice may be voided (DRAFT is discarded, not voided; PAID/VOID cannot). */
   | 'INVOICE_NOT_OPEN'
+  /** The invoice has live (non-void) payments applied; void those first (LL-043). */
+  | 'INVOICE_HAS_PAYMENTS'
   /** Finalizing a zero-total invoice would produce no postable entry. */
   | 'INVOICE_ZERO_TOTAL'
   /** The billed customer does not exist in this company. */

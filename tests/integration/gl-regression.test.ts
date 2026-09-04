@@ -22,6 +22,7 @@ import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
+import { receivePayment } from '@/server/payments';
 import {
   assertLedgerIntegrity,
   getJournalEntry,
@@ -37,6 +38,7 @@ import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
+import { receivePaymentInput } from '@/validation/payment';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
@@ -413,6 +415,42 @@ describe('GL regression suite (release-blocking)', () => {
       where company_id = ${company.id} and source_type = 'INVOICE'
         and source_id = ${invoice.id} and status = 'POSTED'`);
     expect(stillOne.rows[0]?.n).toBe('1');
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T017 — a customer payment posts a balanced, source-once entry that reduces A/R (LL-043)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Pay Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL043 Revenue', accountType: 'REVENUE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL043 Cash', accountType: 'ASSET' }));
+    const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+      customerId: customer.id, invoiceDate: '2026-01-10', lines: [{ accountId: rev.id, quantity: '1', unitPrice: '100.00' }],
+    }));
+    await finalizeInvoice(userId, company.id, invoice.id);
+    const { payment } = await receivePayment(userId, company.id, receivePaymentInput.parse({
+      customerId: customer.id, paymentDate: '2026-01-15', depositAccountId: cash.id,
+      applications: [{ invoiceId: invoice.id, amountApplied: '100.00' }],
+    }));
+
+    const db = await getTestDb();
+    const posted = await db.execute<{ n: string }>(sql`
+      select count(*)::text n from journal_entries
+      where company_id = ${company.id} and source_type = 'CUSTOMER_PAYMENT'
+        and source_id = ${payment.id} and status = 'POSTED'`);
+    expect(posted.rows[0]?.n).toBe('1');
+
+    // A/R nets to zero once paid, and the trial balance still balances.
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const tb = await getTrialBalance(userId, company.id, '2026-12-31');
+    expect(tb.rows.find((r) => r.accountId === arId)?.balance ?? '0.0000').toBe('0.0000');
+    expect(tb.balanced).toBe(true);
 
     await assertLedgerIntegrity(company.id);
   });
