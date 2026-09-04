@@ -59,6 +59,12 @@ export const companyCounters = pgTable('company_counters', {
     .primaryKey()
     .references(() => companies.id, { onDelete: 'restrict' }),
   nextEntryNumber: bigint('next_entry_number', { mode: 'number' }).notNull().default(1),
+  /**
+   * Per-company invoice-number counter (LL-042). Unlike entry numbers (gapless,
+   * SELECT … FOR UPDATE), invoice numbers ALLOW gaps: this is bumped with a plain
+   * atomic increment at finalize, so a rolled-back finalize may skip a number.
+   */
+  nextInvoiceNumber: bigint('next_invoice_number', { mode: 'number' }).notNull().default(1),
 });
 
 export const journalEntries = pgTable(

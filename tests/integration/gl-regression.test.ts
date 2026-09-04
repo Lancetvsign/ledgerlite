@@ -20,6 +20,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getAuth } from '@/lib/auth';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
+import { createCustomer } from '@/server/customers';
+import { createInvoice, finalizeInvoice } from '@/server/invoices';
 import {
   assertLedgerIntegrity,
   getJournalEntry,
@@ -32,6 +34,8 @@ import { getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
+import { createCustomerInput } from '@/validation/customer';
+import { createInvoiceInput } from '@/validation/invoice';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -370,5 +374,46 @@ describe('GL regression suite (release-blocking)', () => {
     expect(tb.totalCredits).toBe('130.0000');
     expect(tb.balanced).toBe(true);
     await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('GL-T016 — an invoice finalizes to a balanced, source-once ledger entry (LL-042)', async () => {
+    // Needs the STANDARD chart so A/R and Sales Tax Payable exist for the posting
+    // (the shared setup() installs no chart — its tests create their own accounts).
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Inv Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL042 Revenue', accountType: 'REVENUE' }));
+    const { invoice } = await createInvoice(
+      userId,
+      company.id,
+      createInvoiceInput.parse({
+        customerId: customer.id,
+        invoiceDate: '2026-01-10',
+        lines: [{ accountId: rev.id, quantity: '2', unitPrice: '100.00', taxRate: '10' }],
+      }),
+    );
+    const { invoice: finalized } = await finalizeInvoice(userId, company.id, invoice.id);
+    expect(finalized.status).toBe('OPEN');
+
+    const db = await getTestDb();
+    const posted = await db.execute<{ n: string }>(sql`
+      select count(*)::text n from journal_entries
+      where company_id = ${company.id} and source_type = 'INVOICE'
+        and source_id = ${invoice.id} and status = 'POSTED'`);
+    expect(posted.rows[0]?.n).toBe('1');
+
+    // A second finalize cannot produce a second posting for the same invoice.
+    await expect(finalizeInvoice(userId, company.id, invoice.id)).rejects.toThrow();
+    const stillOne = await db.execute<{ n: string }>(sql`
+      select count(*)::text n from journal_entries
+      where company_id = ${company.id} and source_type = 'INVOICE'
+        and source_id = ${invoice.id} and status = 'POSTED'`);
+    expect(stillOne.rows[0]?.n).toBe('1');
+
+    await assertLedgerIntegrity(company.id);
   });
 });

@@ -71,8 +71,11 @@ describe('installation', () => {
     const accounts = await listAccounts(user.id, company.id);
     const ar = accounts.find((a) => a.accountNumber === '1100');
     const checking = accounts.find((a) => a.accountNumber === '1000');
+    const salesTax = accounts.find((a) => a.accountNumber === '2200');
     expect(ar?.systemAccountType).toBe('ACCOUNTS_RECEIVABLE');
     expect(checking?.systemAccountType).toBeNull();
+    // Sales Tax Payable is a system account so invoice tax posting can resolve it (LL-042).
+    expect(salesTax?.systemAccountType).toBe('SALES_TAX_PAYABLE');
   });
 
   it('system-only install yields exactly the required accounts', async () => {

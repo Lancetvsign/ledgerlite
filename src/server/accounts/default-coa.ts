@@ -49,7 +49,7 @@ export const STANDARD_CHART: readonly DefaultAccount[] = [
   // Liabilities
   { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable' },
   { accountNumber: '2100', name: 'Credit Card', accountType: 'LIABILITY', accountSubtype: 'credit_card' },
-  { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability' },
+  { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability', systemAccountType: 'SALES_TAX_PAYABLE' },
   // Equity
   { accountNumber: '3100', name: 'Owner Contributions', accountType: 'EQUITY', accountSubtype: 'owner_equity' },
   { accountNumber: '3200', name: 'Owner Distributions', accountType: 'EQUITY', accountSubtype: 'owner_equity' },

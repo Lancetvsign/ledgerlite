@@ -7,6 +7,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -86,6 +87,14 @@ export const accounts = pgTable(
     // An account cannot be its own parent. Transitive cycles (A→B→A) are the
     // service's job — a recursive trigger on every insert is disproportionate.
     check('accounts_no_self_parent', sql`${table.parentAccountId} is distinct from ${table.id}`),
+    // At most ONE account per system role per company (LL-042). System roles
+    // (ACCOUNTS_RECEIVABLE, SALES_TAX_PAYABLE, …) are resolved at posting time to
+    // decide where an invoice's A/R debit and tax credit land; that resolution
+    // must be unambiguous, so it is guaranteed structurally, not just by the
+    // service. Partial: only rows that actually carry a role are constrained.
+    uniqueIndex('accounts_company_system_account_type_key')
+      .on(table.companyId, table.systemAccountType)
+      .where(sql`system_account_type is not null`),
     // GL/reporting access patterns.
     index('accounts_company_type_idx').on(table.companyId, table.accountType),
     index('accounts_company_parent_idx').on(table.companyId, table.parentAccountId),

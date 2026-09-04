@@ -37,11 +37,13 @@ export async function installDefaultChart(
         systemAccountType: a.systemAccountType ?? null,
       })),
     )
-    // The idempotency mechanism: a re-run collides on (company_id,
-    // account_number) and inserts nothing, rather than duplicating.
-    .onConflictDoNothing({
-      target: [schema.accounts.companyId, schema.accounts.accountNumber],
-    })
+    // The idempotency mechanism: a re-run (or a concurrent install) collides and
+    // inserts nothing, rather than duplicating. Untargeted so it covers EVERY
+    // unique constraint on accounts — both (company_id, account_number) AND the
+    // (company_id, system_account_type) index (LL-042): a second install of the
+    // A/R account conflicts on the system-type index too, and targeting only
+    // account_number would let that surface as a duplicate-key error.
+    .onConflictDoNothing()
     .returning({ id: schema.accounts.id });
 
   return result.length; // rows actually inserted this run (0 on a repeat)
