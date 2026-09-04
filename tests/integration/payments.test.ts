@@ -18,7 +18,7 @@ import { insertMembership } from '@/server/companies/internal';
 import { createCustomer } from '@/server/customers';
 import { InvoiceError, createInvoice, finalizeInvoice, voidInvoice } from '@/server/invoices';
 import { LedgerError, assertLedgerIntegrity } from '@/server/ledger';
-import { PaymentError, computePaymentAmount, getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
+import { PaymentError, computePaymentAmount, getPayment, listOpenInvoices, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { closePeriod } from '@/server/periods';
 import { getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
@@ -401,5 +401,43 @@ describe('tenancy', () => {
       applications: [{ invoiceId: invId, amountApplied: '100.00' }],
     }));
     expect((await payErr(voidPayment(b.userId, b.companyId, payment.id, voidPaymentInput.parse({})))).code).toBe('PAYMENT_NOT_FOUND');
+  });
+});
+
+describe('listOpenInvoices — open balances for the payment UI (LL-045)', () => {
+  it('open balance = total − non-void applications; a void restores it', async () => {
+    const c = await setup();
+    const invId = await openInvoice(c, '100.00');
+    const before = await listOpenInvoices(c.userId, c.companyId);
+    expect(before.find((o) => o.id === invId)?.openBalance).toBe('100.0000');
+    expect(before.find((o) => o.id === invId)?.total).toBe('100.0000');
+
+    const { payment } = await receivePayment(c.userId, c.companyId, receivePaymentInput.parse({
+      customerId: c.customerId, paymentDate: '2026-01-15', depositAccountId: c.cashId,
+      applications: [{ invoiceId: invId, amountApplied: '40.00' }],
+    }));
+    const partial = await listOpenInvoices(c.userId, c.companyId);
+    expect(partial.find((o) => o.id === invId)?.openBalance).toBe('60.0000'); // 100 − 40
+
+    await voidPayment(c.userId, c.companyId, payment.id, voidPaymentInput.parse({}));
+    const restored = await listOpenInvoices(c.userId, c.companyId);
+    expect(restored.find((o) => o.id === invId)?.openBalance).toBe('100.0000'); // void un-applies
+  });
+
+  it('excludes PAID invoices and is company-scoped', async () => {
+    const a = await setup();
+    const b = await setup();
+    const paid = await openInvoice(a, '50.00');
+    await receivePayment(a.userId, a.companyId, receivePaymentInput.parse({
+      customerId: a.customerId, paymentDate: '2026-01-15', depositAccountId: a.cashId,
+      applications: [{ invoiceId: paid, amountApplied: '50.00' }],
+    })); // fully paid → PAID
+    const stillOpen = await openInvoice(a, '30.00');
+    const bInv = await openInvoice(b, '99.00');
+
+    const listA = await listOpenInvoices(a.userId, a.companyId);
+    expect(listA.some((o) => o.id === paid)).toBe(false); // PAID excluded
+    expect(listA.some((o) => o.id === stillOpen)).toBe(true);
+    expect(listA.some((o) => o.id === bInv)).toBe(false); // another company's invoice never appears
   });
 });

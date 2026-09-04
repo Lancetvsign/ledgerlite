@@ -381,6 +381,50 @@ export async function listPayments(actorUserId: string, companyId: string): Prom
     .orderBy(schema.payments.paymentDate, schema.payments.createdAt);
 }
 
+export interface OpenInvoice {
+  readonly id: string;
+  readonly invoiceNumber: string | null;
+  readonly customerId: string;
+  readonly invoiceDate: string;
+  readonly total: string;
+  /** total − Σ(amount_applied from non-void payments). Derived, never stored. */
+  readonly openBalance: string;
+}
+
+/**
+ * OPEN invoices with their open balance, for the payment-application UI (and the
+ * LL-046 aging report). The open balance is total − applied-by-non-void-payments,
+ * computed with decimal.js (ADR-004) from the SQL-summed applied total — never a
+ * stored balance (invariant 2). `invoice.view`.
+ */
+export async function listOpenInvoices(actorUserId: string, companyId: string): Promise<OpenInvoice[]> {
+  await requirePermission(actorUserId, companyId, 'invoice.view');
+  const rows = await getDbTx().execute<{
+    id: string;
+    invoice_number: string | null;
+    customer_id: string;
+    invoice_date: string;
+    total: string;
+    applied: string;
+  }>(sql`
+    select i.id, i.invoice_number, i.customer_id, i.invoice_date, i.total,
+           coalesce(sum(pa.amount_applied) filter (where p.status <> 'VOID'), 0)::text as applied
+    from invoices i
+    left join payment_applications pa on pa.company_id = i.company_id and pa.invoice_id = i.id
+    left join payments p on p.company_id = pa.company_id and p.id = pa.payment_id
+    where i.company_id = ${companyId} and i.status = 'OPEN'
+    group by i.id
+    order by i.invoice_date, i.created_at`);
+  return rows.rows.map((r) => ({
+    id: r.id,
+    invoiceNumber: r.invoice_number,
+    customerId: r.customer_id,
+    invoiceDate: r.invoice_date,
+    total: toMoney(r.total).toFixed(4),
+    openBalance: toMoney(r.total).minus(toMoney(r.applied)).toFixed(4),
+  }));
+}
+
 async function loadPayment(
   tx: Tx | PoolDatabase,
   companyId: string,

@@ -26,3 +26,11 @@ export const INVOICES_USER = {
   password: 'synthetic-password-1',
   name: 'Invoices Tester',
 };
+
+/** LL-045 payment-UI specs — its own session, isolated from the others. */
+export const PAYMENTS_STORAGE = 'tests/e2e/.auth/payments.json';
+export const PAYMENTS_USER = {
+  email: 'e2e-payments@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Payments Tester',
+};
