@@ -971,3 +971,56 @@ it to OPEN), then voiding it.
 
 Overpayment / prepayment / customer credit or refunds (CUSTOMER_REFUND) arrive, deposits need
 the Undeposited-Funds → bank batch workflow, or payments need their own void capability.
+
+---
+
+## ADR-016 — A/R aging reconciles to the general-ledger control account
+
+**Status** Accepted · **Added by** LL-046 · **Decided by** product owner
+
+### Context
+
+Accounts Receivable exists in two places that must agree: the **subsidiary** view (what each
+customer owes, invoice by invoice) and the **control** account in the general ledger (the A/R
+balance derived from journal lines). An aging report that does not tie back to the ledger is a
+number nobody can trust. LL-046 adds the aging report and makes the reconciliation a release gate.
+
+### Decision
+
+**The aging report is the A/R subsidiary ledger.** `getArAging(asOfDate)` lists every `OPEN`
+invoice's open balance (`total − Σ amount_applied` from non-void payments, ADR-015), grouped by
+customer and bucketed by age — **Current** (not yet due), **1–30**, **31–60**, **61–90**, **90+**
+days past due, aged by `due_date` (falling back to `invoice_date` when there is none). Nothing is
+stored: open balances derive from invoices + applications every time (invariant 2). Money is a
+string at every boundary and summed with decimal.js (ADR-004); PostgreSQL does the per-invoice
+aggregation.
+
+**"As of" ages the current balances.** The `asOfDate` changes only which bucket each balance falls
+in, never the grand total. So the grand total is age-independent and always equals the current A/R.
+Point-in-time historical aging (balances *as they were* on a past date) is deliberately out of
+scope — a later ADR if it is ever needed.
+
+**Reconciliation is a release-gate invariant.** The aging grand total MUST equal the A/R control
+balance derived from journal lines (`getTrialBalance`'s Accounts Receivable row). This holds
+structurally — a posted invoice debits A/R by its total, its payments credit A/R by what they
+apply, a fully-paid invoice nets to zero and leaves the OPEN set, and a void reverses to zero — so
+`Σ open balances (subsidiary) = A/R balance (control)`. `gl-regression`'s **GL-T018** asserts it
+(including after a payment void), so a merge is blocked the moment the two drift.
+
+### Consequences
+
+- A/R can be certified (Gate 3): the customer-facing aging and the books provably agree.
+- `getArAging` reuses the LL-045 open-balance derivation and is the reporting foundation later
+  A/R work builds on.
+- **Assumption — A/R is document-driven.** The reconciliation holds only because the A/R account
+  is moved solely by invoices and payments. The LL-035 manual-journal path can currently post to
+  ANY account, so a hand-posted entry to A/R would make the control diverge from the aging with
+  nothing detecting it (GL-T018 exercises only document-driven data). Treating A/R (and the other
+  system accounts) as a **control account locked from manual entry** is the structural fix and a
+  tracked follow-up; until then this is a known limitation, not an enforced guarantee.
+
+### Revisit if
+
+Point-in-time historical aging, customer credits / unapplied payments (which would make the
+subsidiary richer than "open invoices"), or multi-currency arrive — each changes what "the A/R
+balance" means and how the subsidiary must reconcile to it.
