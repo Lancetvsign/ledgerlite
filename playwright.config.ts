@@ -64,6 +64,10 @@ export default defineConfig({
       BETTER_AUTH_SECRET:
         process.env['BETTER_AUTH_SECRET'] ??
         'SYNTHETIC-E2E-ONLY-SECRET-0000000000000000000000000000',
+      // The suite signs several users in back-to-back from one IP; Better Auth's
+      // production rate limit would throttle the last one. Trusted test env only —
+      // never set in production/preview, so prod keeps rate limiting. See src/lib/auth.
+      E2E_RATE_LIMIT_DISABLED: 'true',
     },
   },
 });

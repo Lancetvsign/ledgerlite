@@ -18,3 +18,11 @@ export const JOURNAL_USER = {
   password: 'synthetic-password-1',
   name: 'Journal Tester',
 };
+
+/** LL-044 invoice-UI specs — its own session, isolated from the others. */
+export const INVOICES_STORAGE = 'tests/e2e/.auth/invoices.json';
+export const INVOICES_USER = {
+  email: 'e2e-invoices@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Invoices Tester',
+};

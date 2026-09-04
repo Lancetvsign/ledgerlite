@@ -56,6 +56,16 @@ function createAuth() {
     emailAndPassword: {
       enabled: true,
     },
+
+    // Better Auth rate-limits its auth endpoints in production (off in dev). The
+    // E2E suite runs a PRODUCTION build and signs several dedicated users in, in
+    // rapid succession from one IP, which trips that limit for the last setup.
+    // Disable it ONLY when the E2E flag is set — a value production and preview
+    // never set (it lives in playwright.config.ts), so prod keeps its brute-force
+    // protection. Not tied to NODE_ENV: the E2E build IS production.
+    ...(process.env['E2E_RATE_LIMIT_DISABLED'] === 'true'
+      ? { rateLimit: { enabled: false } }
+      : {}),
   });
 }
 
