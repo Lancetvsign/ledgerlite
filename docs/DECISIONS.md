@@ -1013,11 +1013,20 @@ apply, a fully-paid invoice nets to zero and leaves the OPEN set, and a void rev
 - `getArAging` reuses the LL-045 open-balance derivation and is the reporting foundation later
   A/R work builds on.
 - **Assumption — A/R is document-driven.** The reconciliation holds only because the A/R account
-  is moved solely by invoices and payments. The LL-035 manual-journal path can currently post to
-  ANY account, so a hand-posted entry to A/R would make the control diverge from the aging with
-  nothing detecting it (GL-T018 exercises only document-driven data). Treating A/R (and the other
-  system accounts) as a **control account locked from manual entry** is the structural fix and a
-  tracked follow-up; until then this is a known limitation, not an enforced guarantee.
+  is moved solely by invoices and payments. Two paths could violate that; one is now closed:
+  - **Invoice line naming A/R (closed, Gate 3).** An invoice line's account is client-supplied, so
+    a crafted request could once name the A/R control account as a "revenue" line, posting a
+    balanced Dr A/R / Cr A/R entry that inflated the aging without moving the control by the same
+    amount. The invoice service now **rejects any line account that is a system account** (non-null
+    `system_account_type`) via `assertLineAccountsPostable`, enforced at create/edit and again at
+    finalize (`LINE_ACCOUNT_INVALID`), with regression tests.
+  - **Manual JE to A/R (still open — a policy decision).** The LL-035 manual-journal path can post
+    to ANY account, so a hand-posted entry to A/R would make the control diverge from the aging with
+    nothing detecting it (GL-T018 exercises only document-driven data). Unlike the invoice-line path,
+    a blanket lock is not obviously correct — bad-debt write-offs (Dr Bad Debt Expense / Cr A/R) and
+    opening balances (Dr A/R / Cr Opening Equity) are legitimate manual A/R entries — so the fix needs
+    a considered design (a dedicated write-off/adjustment document, or a narrower capability). Until
+    then this remains a known limitation, not an enforced guarantee.
 
 ### Revisit if
 
