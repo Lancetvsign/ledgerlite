@@ -110,16 +110,13 @@ The gate says to read these yourself. Exact locations:
 | `npm run lint` | ✅ clean |
 | `npm run test:unit` | ✅ 175/175 |
 | `npm run build` | ✅ ok |
-| `npm run test:integration` (full, pre-remediation) | ✅ 356/356 (31 files, incl. `gate3-acceptance`) |
-| `npm run test:integration` — affected suites (post-remediation) | ✅ 46/46 (`invoice-posting` incl. 3 new guard regressions, `gate3-acceptance`, `ar-aging`, `payments`) |
+| `npm run test:integration` (full, post-remediation) | ✅ **359/359** (31 files, incl. the 3 new guard regressions + `gate3-acceptance`) |
 | `npm run test:gl` (release gate, incl. GL-T018) | ✅ covered by the integration run |
 | `gate3-acceptance` (this gate's scenario) | ✅ 2/2 (§3) |
 
-The item-1 remediation touches only `src/server/invoices/*`; the four integration suites
-that exercise invoices all pass post-remediation (46/46), and typecheck/lint are clean. The
-**full post-remediation suite** (expected 359 = 356 + 3 new guard tests) runs as this PR's
-required **"Integration (ephemeral Neon branch)"** CI job — the authoritative full run.
-CI on the LL-046 merge (`3d150d9`) was green across every job: Lint/types/unit/build,
+The full post-remediation suite is green locally (**359** = the pre-remediation 356 + the 3
+new guard tests); it also runs as this PR's required **"Integration (ephemeral Neon branch)"**
+CI job. CI on the LL-046 merge (`3d150d9`) was green across every job: Lint/types/unit/build,
 Integration, GL regression (release gate), and E2E.
 
 ---
