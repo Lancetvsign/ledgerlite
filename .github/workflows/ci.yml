@@ -142,7 +142,14 @@ jobs:
   integration:
     name: Integration (ephemeral Neon branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The database-backed suite runs its files serially against one Neon branch
+    # (parallel files would truncate tables mid-assertion — see vitest.config.mts),
+    # and Neon compute latency varies run to run: real durations have ranged from
+    # ~3 to ~16 minutes as Sprint 3/4 added concurrency-heavy tests. 30 gives a slow
+    # Neon day headroom so it never times out a green suite. Splitting into parallel
+    # jobs was rejected: it would add a second concurrent Neon branch, and the
+    # contention (not the test count) is the actual cause of the slow runs.
+    timeout-minutes: 30
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
     env:
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
