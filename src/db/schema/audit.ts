@@ -51,6 +51,8 @@ export const auditAction = pgEnum('audit_action', [
   'INVOICE_UPDATED',
   'INVOICE_FINALIZED',
   'INVOICE_VOIDED',
+  'PAYMENT_RECEIVED',
+  'PAYMENT_VOIDED',
 ]);
 
 export const auditEvents = pgTable(

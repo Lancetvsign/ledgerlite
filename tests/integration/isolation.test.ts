@@ -14,12 +14,14 @@ import { requireCompanyMembership, requirePermission } from '@/server/authorizat
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
-import { createInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
+import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
+import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { recordAuditEvent } from '@/server/audit';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
+import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -225,6 +227,63 @@ const REGISTRY: IsolationDescriptor[] = [
     ],
   },
   {
+    table: 'payments',
+    seed: async (victim) => {
+      const customer = await createCustomer(victim.ownerUserId, victim.companyId,
+        createCustomerInput.parse({ name: 'Victim Payer' }));
+      const revenue = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Revenue P', accountType: 'REVENUE' }));
+      const cash = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Cash', accountType: 'ASSET' }));
+      const { invoice } = await createInvoice(victim.ownerUserId, victim.companyId, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10',
+        lines: [{ accountId: revenue.id, quantity: '1', unitPrice: '100.0000' }],
+      }));
+      await finalizeInvoice(victim.ownerUserId, victim.companyId, invoice.id);
+      const { payment } = await receivePayment(victim.ownerUserId, victim.companyId, receivePaymentInput.parse({
+        customerId: customer.id, paymentDate: '2026-01-15', depositAccountId: cash.id,
+        applications: [{ invoiceId: invoice.id, amountApplied: '100.0000' }],
+      }));
+      return { recordId: payment.id };
+    },
+    attempts: [
+      {
+        operation: 'list payments (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listPayments(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim payment',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getPayment(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'void the victim payment (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => voidPayment(attacker, victim.companyId, recordId, voidPaymentInput.parse({})),
+      },
+    ],
+  },
+  {
+    table: 'payment_applications',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'payment applications are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from payment_applications where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
+  {
     table: 'audit_events',
     seed: async (victim) => {
       const ev = await recordAuditEvent({
@@ -355,7 +414,10 @@ interface Fixture {
 async function buildFixture(): Promise<Fixture> {
   const userA = await makeUser('user-a@synthetic.test');
   const userB = await makeUser('user-b@synthetic.test');
-  const { company: companyA } = await createCompanyWithOwner(userA.id, COMPANY_A);
+  // system-only chart so A has the required system accounts (A/R) the finalize +
+  // payment seeds need, without the numbered everyday accounts (e.g. 1000) that
+  // the accounts descriptor seeds itself — a 'standard' chart would collide on 1000.
+  const { company: companyA } = await createCompanyWithOwner(userA.id, COMPANY_A, 'system-only');
   await createCompanyWithOwner(userB.id, COMPANY_B); // B has a legitimate home
   return { victim: { companyId: companyA.id, ownerUserId: userA.id }, attackerUserId: userB.id };
 }
