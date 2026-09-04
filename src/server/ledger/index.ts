@@ -11,7 +11,7 @@ import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
 import { fingerprintPosting } from './fingerprint';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry } from './internal';
+import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { PostJournalEntryInput } from '@/validation/journal';
 
@@ -72,108 +72,131 @@ async function postInNewTransaction(
   postingDate: string,
   fingerprint: string | undefined,
 ): Promise<PostedEntry> {
-  return await getDbTx().transaction(async (tx) => {
-    // ---- 2. Company exists and is active ------------------------------------
-    const company = await tx
-      .select({ id: schema.companies.id })
-      .from(schema.companies)
-      .where(
-        and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
-      )
-      .limit(1);
-    if (company[0] === undefined) {
-      throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
-    }
+  return await getDbTx().transaction((tx) => postEntryCore(tx, input, postingDate, fingerprint));
+}
 
-    // ---- 3. Every account exists, belongs here, and is active ---------------
-    const accountIds = [...new Set(input.lines.map((l) => l.accountId))];
-    const accounts = await tx
-      .select({ id: schema.accounts.id, status: schema.accounts.status })
-      .from(schema.accounts)
-      .where(
-        and(eq(schema.accounts.companyId, input.companyId), inArray(schema.accounts.id, accountIds)),
-      );
-    const byId = new Map(accounts.map((a) => [a.id, a]));
-    for (const id of accountIds) {
-      const account = byId.get(id);
-      if (account === undefined) {
-        throw new LedgerError('ACCOUNT_NOT_FOUND', 'A referenced account does not exist in this company.');
-      }
-      if (account.status !== 'ACTIVE') {
-        throw new LedgerError('INACTIVE_ACCOUNT', 'A referenced account is inactive.');
-      }
-    }
+/**
+ * The in-transaction posting mechanics, shared by the manual posting path above
+ * and by document services (invoices in LL-042; payments later) that must post
+ * WITHIN their own transaction, so the document write and its ledger entry
+ * commit atomically — a document can never be marked posted without its entry,
+ * nor an entry exist for an unposted document.
+ *
+ * MECHANICAL BY DESIGN — it does NOT authorize and does NOT create the period.
+ * The CALLER must, BEFORE opening the transaction it hands in here: (a) authorize
+ * at the appropriate capability (manual entries → `journal.post`; an invoice →
+ * `invoice.post`, so a BOOKKEEPER who may post invoices but not raw journals is
+ * not wrongly blocked), and (b) resolve/create the posting period — exactly the
+ * order postJournalEntry uses. Balance and structure are the caller's to validate
+ * too (the manual path validates early; a document service asserts its derived
+ * entry balances); the deferred balance trigger is the final backstop at commit.
+ */
+export async function postEntryCore(
+  tx: Tx,
+  input: PostJournalEntryInput,
+  postingDate: string,
+  fingerprint: string | undefined,
+): Promise<PostedEntry> {
+  // ---- 2. Company exists and is active --------------------------------------
+  const company = await tx
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(
+      and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
+    )
+    .limit(1);
+  if (company[0] === undefined) {
+    throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
 
-    // Period was resolved-and-created before this transaction opened, so it
-    // exists; a re-read here guards against a close landing in the gap between,
-    // without ever creating (which would race).
-    const periodNow = await tx
-      .select({ status: schema.accountingPeriods.status })
-      .from(schema.accountingPeriods)
-      .where(and(eq(schema.accountingPeriods.companyId, input.companyId),
-                 sql`${postingDate} between start_date and end_date`))
-      .limit(1);
-    if (periodNow[0]?.status === 'CLOSED') {
-      throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${postingDate} is closed.`);
-    }
-
-    // ---- Allocate the gapless entry number (ADR-003) ------------------------
-    // SELECT … FOR UPDATE inside this transaction, so a rollback reuses the
-    // number and the sequence stays gapless. Serialises concurrent postings to
-    // THIS company only.
-    const entryNumber = await allocateEntryNumber(tx, input.companyId);
-
-    // ---- Insert the posted entry and its lines ------------------------------
-    const entryRows = await tx
-      .insert(schema.journalEntries)
-      .values({
-        companyId: input.companyId,
-        entryNumber,
-        transactionDate: input.transactionDate,
-        postingDate,
-        description: input.description,
-        status: 'POSTED',
-        sourceType: input.sourceType,
-        sourceId: input.sourceId,
-        idempotencyKey: input.idempotencyKey,
-        idempotencyFingerprint: fingerprint,
-        createdBy: input.actorUserId,
-        postedAt: sql`now()`,
-      })
-      .returning();
-    const entry = entryRows[0];
-    if (entry === undefined) throw new Error('journal entry insert returned no row');
-
-    await tx.insert(schema.journalLines).values(
-      input.lines.map((line, index) => ({
-        journalEntryId: entry.id,
-        companyId: input.companyId,
-        accountId: line.accountId,
-        lineNumber: index + 1,
-        description: line.description,
-        debit: line.debit,
-        credit: line.credit,
-        customerId: line.customerId,
-        vendorId: line.vendorId,
-      })),
+  // ---- 3. Every account exists, belongs here, and is active -----------------
+  const accountIds = [...new Set(input.lines.map((l) => l.accountId))];
+  const accounts = await tx
+    .select({ id: schema.accounts.id, status: schema.accounts.status })
+    .from(schema.accounts)
+    .where(
+      and(eq(schema.accounts.companyId, input.companyId), inArray(schema.accounts.id, accountIds)),
     );
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  for (const id of accountIds) {
+    const account = byId.get(id);
+    if (account === undefined) {
+      throw new LedgerError('ACCOUNT_NOT_FOUND', 'A referenced account does not exist in this company.');
+    }
+    if (account.status !== 'ACTIVE') {
+      throw new LedgerError('INACTIVE_ACCOUNT', 'A referenced account is inactive.');
+    }
+  }
 
-    // ---- Audit, INSIDE the transaction --------------------------------------
-    // A record written in a separate transaction could survive a rolled-back
-    // posting and describe something that never happened.
-    await recordAuditEvent({
-      tx,
+  // Period was resolved-and-created before this transaction opened, so it
+  // exists; a re-read here guards against a close landing in the gap between,
+  // without ever creating (which would race).
+  const periodNow = await tx
+    .select({ status: schema.accountingPeriods.status })
+    .from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.companyId, input.companyId),
+               sql`${postingDate} between start_date and end_date`))
+    .limit(1);
+  if (periodNow[0]?.status === 'CLOSED') {
+    throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${postingDate} is closed.`);
+  }
+
+  // ---- Allocate the gapless entry number (ADR-003) --------------------------
+  // SELECT … FOR UPDATE inside this transaction, so a rollback reuses the
+  // number and the sequence stays gapless. Serialises concurrent postings to
+  // THIS company only.
+  const entryNumber = await allocateEntryNumber(tx, input.companyId);
+
+  // ---- Insert the posted entry and its lines --------------------------------
+  const entryRows = await tx
+    .insert(schema.journalEntries)
+    .values({
       companyId: input.companyId,
-      actorUserId: input.actorUserId,
-      action: 'JOURNAL_ENTRY_POSTED',
-      entityType: 'journal_entry',
-      entityId: entry.id,
-      after: { entryNumber, sourceType: input.sourceType, lineCount: input.lines.length },
-    });
+      entryNumber,
+      transactionDate: input.transactionDate,
+      postingDate,
+      description: input.description,
+      status: 'POSTED',
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      idempotencyKey: input.idempotencyKey,
+      idempotencyFingerprint: fingerprint,
+      createdBy: input.actorUserId,
+      postedAt: sql`now()`,
+    })
+    .returning();
+  const entry = entryRows[0];
+  if (entry === undefined) throw new Error('journal entry insert returned no row');
 
-    // The deferred balance trigger validates debits=credits AT COMMIT (LL-030).
-    return await loadEntry(tx, entry.id);
+  await tx.insert(schema.journalLines).values(
+    input.lines.map((line, index) => ({
+      journalEntryId: entry.id,
+      companyId: input.companyId,
+      accountId: line.accountId,
+      lineNumber: index + 1,
+      description: line.description,
+      debit: line.debit,
+      credit: line.credit,
+      customerId: line.customerId,
+      vendorId: line.vendorId,
+    })),
+  );
+
+  // ---- Audit, INSIDE the transaction ----------------------------------------
+  // A record written in a separate transaction could survive a rolled-back
+  // posting and describe something that never happened.
+  await recordAuditEvent({
+    tx,
+    companyId: input.companyId,
+    actorUserId: input.actorUserId,
+    action: 'JOURNAL_ENTRY_POSTED',
+    entityType: 'journal_entry',
+    entityId: entry.id,
+    after: { entryNumber, sourceType: input.sourceType, lineCount: input.lines.length },
   });
+
+  // The deferred balance trigger validates debits=credits AT COMMIT (LL-030).
+  return await loadEntry(tx, entry.id);
 }
 
 /** Structural validation (invariant 6's line rules, in the app for a clear error). */
@@ -248,7 +271,7 @@ async function resolveIdempotentRetry(
   return await loadEntry(db, prior.id);
 }
 
-export { reverseJournalEntry } from './reversal';
+export { reverseJournalEntry, reverseEntryCore } from './reversal';
 export { getJournalEntry } from './queries';
 export type { JournalEntryView, JournalEntryLineView } from './queries';
 export type { PostedEntry } from './internal';

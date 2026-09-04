@@ -47,4 +47,16 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceInput>;
 export const updateInvoiceInput = createInvoiceInput;
 export type UpdateInvoiceInput = z.infer<typeof updateInvoiceInput>;
 
+/**
+ * Voiding a posted (OPEN) invoice. The reversal's LINES are derived from the
+ * original posted entry by the ledger, never supplied here. `reversalDate` is
+ * optional (defaults to the company's today, ADR-007) and must land in an OPEN
+ * period; `reason` is an optional human note recorded on the audit event.
+ */
+export const voidInvoiceInput = z.object({
+  reversalDate: calendarDate.optional(),
+  reason: z.string().trim().max(1000).optional().transform((v) => (v === '' ? undefined : v)),
+});
+export type VoidInvoiceInput = z.infer<typeof voidInvoiceInput>;
+
 export type InvoiceLineInput = z.infer<typeof invoiceLineInput>;

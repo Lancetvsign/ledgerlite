@@ -11,7 +11,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry } from './internal';
+import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { JournalLine } from '@/db/schema';
 import type { ReverseJournalEntryInput } from '@/validation/journal';
@@ -78,190 +78,207 @@ async function reverseInNewTransaction(
   input: ReverseJournalEntryInput,
   reversalDate: string,
 ): Promise<PostedEntry> {
-  return await getDbTx().transaction(async (tx) => {
-    // ---- Load and LOCK the original, scoped to this company. --------------
-    // FOR UPDATE serialises concurrent reversals of the same entry: the second
-    // waits, then re-reads the now-REVERSED row and is rejected below — exactly
-    // one reversal is ever produced. Scoping to (company_id, id) means a
-    // cross-company id resolves to nothing and returns the same ENTRY_NOT_FOUND
-    // as a genuine miss, never revealing that it exists in another company.
-    const originalRows = await tx
-      .select()
-      .from(schema.journalEntries)
-      .where(
-        and(
-          eq(schema.journalEntries.companyId, input.companyId),
-          eq(schema.journalEntries.id, input.entryId),
-        ),
-      )
-      .for('update')
-      .limit(1);
-    const original = originalRows[0];
-    if (original === undefined) {
-      throw new LedgerError('ENTRY_NOT_FOUND', 'Entry not found.');
-    }
+  return await getDbTx().transaction((tx) => reverseEntryCore(tx, input, reversalDate));
+}
 
-    // ---- Only a POSTED, not-yet-reversed entry can be reversed. -----------
-    if (original.status === 'DRAFT') {
-      throw new LedgerError('ENTRY_NOT_POSTED', 'Only a posted entry can be reversed.');
-    }
-    if (original.status === 'REVERSED' || original.reversedById !== null) {
-      throw new LedgerError('ENTRY_ALREADY_REVERSED', 'This entry has already been reversed.');
-    }
+/**
+ * The in-transaction reversal mechanics, shared by the manual reversal path
+ * above and by document services (voiding an invoice in LL-042; a payment
+ * later) that must reverse WITHIN their own transaction, so the document's
+ * status change and its reversing entry commit atomically.
+ *
+ * MECHANICAL BY DESIGN — like `postEntryCore`, it does NOT authorize and does
+ * NOT create the period. The CALLER authorizes at its own capability (a manual
+ * reversal → `journal.post`; an invoice void → `invoice.post`) and resolves the
+ * reversal-date period BEFORE opening the transaction handed in here.
+ */
+export async function reverseEntryCore(
+  tx: Tx,
+  input: ReverseJournalEntryInput,
+  reversalDate: string,
+): Promise<PostedEntry> {
+  // ---- Load and LOCK the original, scoped to this company. ------------------
+  // FOR UPDATE serialises concurrent reversals of the same entry: the second
+  // waits, then re-reads the now-REVERSED row and is rejected below — exactly
+  // one reversal is ever produced. Scoping to (company_id, id) means a
+  // cross-company id resolves to nothing and returns the same ENTRY_NOT_FOUND
+  // as a genuine miss, never revealing that it exists in another company.
+  const originalRows = await tx
+    .select()
+    .from(schema.journalEntries)
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, input.companyId),
+        eq(schema.journalEntries.id, input.entryId),
+      ),
+    )
+    .for('update')
+    .limit(1);
+  const original = originalRows[0];
+  if (original === undefined) {
+    throw new LedgerError('ENTRY_NOT_FOUND', 'Entry not found.');
+  }
 
-    // ---- Company still active (parity with posting; atomic in-tx). --------
-    const companyNow = await tx
-      .select({ id: schema.companies.id })
-      .from(schema.companies)
-      .where(
-        and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
-      )
-      .limit(1);
-    if (companyNow[0] === undefined) {
-      throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
-    }
+  // ---- Only a POSTED, not-yet-reversed entry can be reversed. ---------------
+  if (original.status === 'DRAFT') {
+    throw new LedgerError('ENTRY_NOT_POSTED', 'Only a posted entry can be reversed.');
+  }
+  if (original.status === 'REVERSED' || original.reversedById !== null) {
+    throw new LedgerError('ENTRY_ALREADY_REVERSED', 'This entry has already been reversed.');
+  }
 
-    // ---- Re-read the reversal period inside the tx (a close could have landed
-    // in the gap since we resolved it). Never CREATE here — that would race. --
-    const periodNow = await tx
-      .select({ status: schema.accountingPeriods.status })
-      .from(schema.accountingPeriods)
-      .where(
-        and(
-          eq(schema.accountingPeriods.companyId, input.companyId),
-          sql`${reversalDate} between start_date and end_date`,
-        ),
-      )
-      .limit(1);
-    if (periodNow[0]?.status === 'CLOSED') {
-      throw new LedgerError(
-        'PERIOD_CLOSED',
-        `The reversal date ${reversalDate} falls in a closed period.`,
-      );
-    }
+  // ---- Company still active (parity with posting; atomic in-tx). ------------
+  const companyNow = await tx
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(
+      and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
+    )
+    .limit(1);
+  if (companyNow[0] === undefined) {
+    throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
 
-    // ---- Derive the reversing lines: swap debit and credit. ---------------
-    // Amounts and accounts are copied verbatim from the original's committed
-    // lines. The original's accounts may since have been DEACTIVATED — a
-    // reversal must still be possible against them, so unlike posting this path
-    // deliberately does NOT re-check account status. Trapping an erroneous entry
-    // because its account was later deactivated is not an option.
-    const originalLines = await tx
-      .select()
-      .from(schema.journalLines)
-      .where(eq(schema.journalLines.journalEntryId, original.id))
-      .orderBy(schema.journalLines.lineNumber);
-    if (originalLines.length < 2) {
-      // A POSTED entry always has ≥2 lines (LL-030). This cannot happen; if it
-      // does, the ledger is corrupt and we must not compound it.
-      throw new Error(`posted entry ${original.id} has ${String(originalLines.length)} lines`);
-    }
-
-    const reversalLines = originalLines.map((line: JournalLine) => ({
-      companyId: input.companyId,
-      accountId: line.accountId,
-      lineNumber: line.lineNumber,
-      description: line.description,
-      debit: line.credit, // swap
-      credit: line.debit, // swap
-      customerId: line.customerId,
-      vendorId: line.vendorId,
-    }));
-
-    // Balance is structurally guaranteed by the swap, but we assert it here too
-    // (ADR-004, exact NUMERIC(19,4) equality) — "same balance validation" as
-    // posting, and a tripwire if the original were ever stored unbalanced.
-    const debits = sumMoney(reversalLines.map((l) => l.debit));
-    const credits = sumMoney(reversalLines.map((l) => l.credit));
-    if (!moneyEquals(debits, credits)) {
-      throw new LedgerError(
-        'UNBALANCED_JOURNAL_ENTRY',
-        `Reversal debits (${debits.toString()}) must equal credits (${credits.toString()}).`,
-      );
-    }
-
-    // ---- Allocate the gapless number and insert the reversal entry. -------
-    const entryNumber = await allocateEntryNumber(tx, input.companyId);
-    const description =
-      input.description ?? `Reversal of entry #${String(original.entryNumber)}`;
-
-    const insertedRows = await tx
-      .insert(schema.journalEntries)
-      .values({
-        companyId: input.companyId,
-        entryNumber,
-        // The correction is an event ON the reversal date, in the open period
-        // where it is actually being made (ADR-007) — not backdated to the
-        // original, which would drag it into the original's (closed) period.
-        transactionDate: reversalDate,
-        postingDate: reversalDate,
-        description,
-        status: 'POSTED',
-        // A distinct source keeps the reversal from colliding with the original
-        // on the "one POSTED per source" index (invariant 6): the original may
-        // carry an invoice/payment source, and copying it verbatim would be a
-        // second posting of that source. The authoritative link is reversalOfId;
-        // sourceId mirrors it so the source view points back too.
-        sourceType: 'REVERSAL',
-        sourceId: original.id,
-        reversalOfId: original.id,
-        createdBy: input.actorUserId,
-        postedAt: sql`now()`,
-      })
-      .returning();
-    const reversal = insertedRows[0];
-    if (reversal === undefined) throw new Error('reversal entry insert returned no row');
-
-    await tx.insert(schema.journalLines).values(
-      reversalLines.map((line) => ({ ...line, journalEntryId: reversal.id })),
+  // ---- Re-read the reversal period inside the tx (a close could have landed
+  // in the gap since we resolved it). Never CREATE here — that would race. ----
+  const periodNow = await tx
+    .select({ status: schema.accountingPeriods.status })
+    .from(schema.accountingPeriods)
+    .where(
+      and(
+        eq(schema.accountingPeriods.companyId, input.companyId),
+        sql`${reversalDate} between start_date and end_date`,
+      ),
+    )
+    .limit(1);
+  if (periodNow[0]?.status === 'CLOSED') {
+    throw new LedgerError(
+      'PERIOD_CLOSED',
+      `The reversal date ${reversalDate} falls in a closed period.`,
     );
+  }
 
-    // ---- Drive the original through the ONE permitted transition. ---------
-    // Setting ONLY status and reversed_by_id is exactly what the LL-030 trigger
-    // allows (POSTED→REVERSED, reversed_by_id NULL→set, all else unchanged). Any
-    // other column touched here, or a second reversal racing in, is rejected by
-    // the trigger as POSTED_ENTRY_IMMUTABLE.
-    const updated = await tx
-      .update(schema.journalEntries)
-      .set({ status: 'REVERSED', reversedById: reversal.id })
-      .where(
-        and(
-          eq(schema.journalEntries.companyId, input.companyId),
-          eq(schema.journalEntries.id, original.id),
-        ),
-      )
-      .returning();
-    if (updated[0] === undefined) throw new Error('original entry vanished during reversal');
+  // ---- Derive the reversing lines: swap debit and credit. -------------------
+  // Amounts and accounts are copied verbatim from the original's committed
+  // lines. The original's accounts may since have been DEACTIVATED — a
+  // reversal must still be possible against them, so unlike posting this path
+  // deliberately does NOT re-check account status. Trapping an erroneous entry
+  // because its account was later deactivated is not an option.
+  const originalLines = await tx
+    .select()
+    .from(schema.journalLines)
+    .where(eq(schema.journalLines.journalEntryId, original.id))
+    .orderBy(schema.journalLines.lineNumber);
+  if (originalLines.length < 2) {
+    // A POSTED entry always has ≥2 lines (LL-030). This cannot happen; if it
+    // does, the ledger is corrupt and we must not compound it.
+    throw new Error(`posted entry ${original.id} has ${String(originalLines.length)} lines`);
+  }
 
-    // ---- Audit, INSIDE the transaction (both facts, atomically). ----------
-    // The reversal is a posting like any other; the original records that it was
-    // reversed and by which entry. A rolled-back reversal leaves neither.
-    await recordAuditEvent({
-      tx,
+  const reversalLines = originalLines.map((line: JournalLine) => ({
+    companyId: input.companyId,
+    accountId: line.accountId,
+    lineNumber: line.lineNumber,
+    description: line.description,
+    debit: line.credit, // swap
+    credit: line.debit, // swap
+    customerId: line.customerId,
+    vendorId: line.vendorId,
+  }));
+
+  // Balance is structurally guaranteed by the swap, but we assert it here too
+  // (ADR-004, exact NUMERIC(19,4) equality) — "same balance validation" as
+  // posting, and a tripwire if the original were ever stored unbalanced.
+  const debits = sumMoney(reversalLines.map((l) => l.debit));
+  const credits = sumMoney(reversalLines.map((l) => l.credit));
+  if (!moneyEquals(debits, credits)) {
+    throw new LedgerError(
+      'UNBALANCED_JOURNAL_ENTRY',
+      `Reversal debits (${debits.toString()}) must equal credits (${credits.toString()}).`,
+    );
+  }
+
+  // ---- Allocate the gapless number and insert the reversal entry. -----------
+  const entryNumber = await allocateEntryNumber(tx, input.companyId);
+  const description =
+    input.description ?? `Reversal of entry #${String(original.entryNumber)}`;
+
+  const insertedRows = await tx
+    .insert(schema.journalEntries)
+    .values({
       companyId: input.companyId,
-      actorUserId: input.actorUserId,
-      action: 'JOURNAL_ENTRY_POSTED',
-      entityType: 'journal_entry',
-      entityId: reversal.id,
-      after: {
-        entryNumber,
-        sourceType: 'REVERSAL',
-        reversalOfId: original.id,
-        lineCount: reversalLines.length,
-      },
-    });
-    await recordAuditEvent({
-      tx,
-      companyId: input.companyId,
-      actorUserId: input.actorUserId,
-      action: 'JOURNAL_ENTRY_REVERSED',
-      entityType: 'journal_entry',
-      entityId: original.id,
-      before: { status: original.status, reversedById: original.reversedById },
-      after: { status: 'REVERSED', reversedById: reversal.id, reversalEntryNumber: entryNumber },
-    });
+      entryNumber,
+      // The correction is an event ON the reversal date, in the open period
+      // where it is actually being made (ADR-007) — not backdated to the
+      // original, which would drag it into the original's (closed) period.
+      transactionDate: reversalDate,
+      postingDate: reversalDate,
+      description,
+      status: 'POSTED',
+      // A distinct source keeps the reversal from colliding with the original
+      // on the "one POSTED per source" index (invariant 6): the original may
+      // carry an invoice/payment source, and copying it verbatim would be a
+      // second posting of that source. The authoritative link is reversalOfId;
+      // sourceId mirrors it so the source view points back too.
+      sourceType: 'REVERSAL',
+      sourceId: original.id,
+      reversalOfId: original.id,
+      createdBy: input.actorUserId,
+      postedAt: sql`now()`,
+    })
+    .returning();
+  const reversal = insertedRows[0];
+  if (reversal === undefined) throw new Error('reversal entry insert returned no row');
 
-    // The deferred balance trigger validates the reversal AT COMMIT (LL-030).
-    return await loadEntry(tx, reversal.id);
+  await tx.insert(schema.journalLines).values(
+    reversalLines.map((line) => ({ ...line, journalEntryId: reversal.id })),
+  );
+
+  // ---- Drive the original through the ONE permitted transition. -------------
+  // Setting ONLY status and reversed_by_id is exactly what the LL-030 trigger
+  // allows (POSTED→REVERSED, reversed_by_id NULL→set, all else unchanged). Any
+  // other column touched here, or a second reversal racing in, is rejected by
+  // the trigger as POSTED_ENTRY_IMMUTABLE.
+  const updated = await tx
+    .update(schema.journalEntries)
+    .set({ status: 'REVERSED', reversedById: reversal.id })
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, input.companyId),
+        eq(schema.journalEntries.id, original.id),
+      ),
+    )
+    .returning();
+  if (updated[0] === undefined) throw new Error('original entry vanished during reversal');
+
+  // ---- Audit, INSIDE the transaction (both facts, atomically). --------------
+  // The reversal is a posting like any other; the original records that it was
+  // reversed and by which entry. A rolled-back reversal leaves neither.
+  await recordAuditEvent({
+    tx,
+    companyId: input.companyId,
+    actorUserId: input.actorUserId,
+    action: 'JOURNAL_ENTRY_POSTED',
+    entityType: 'journal_entry',
+    entityId: reversal.id,
+    after: {
+      entryNumber,
+      sourceType: 'REVERSAL',
+      reversalOfId: original.id,
+      lineCount: reversalLines.length,
+    },
   });
+  await recordAuditEvent({
+    tx,
+    companyId: input.companyId,
+    actorUserId: input.actorUserId,
+    action: 'JOURNAL_ENTRY_REVERSED',
+    entityType: 'journal_entry',
+    entityId: original.id,
+    before: { status: original.status, reversedById: original.reversedById },
+    after: { status: 'REVERSED', reversedById: reversal.id, reversalEntryNumber: entryNumber },
+  });
+
+  // The deferred balance trigger validates the reversal AT COMMIT (LL-030).
+  return await loadEntry(tx, reversal.id);
 }

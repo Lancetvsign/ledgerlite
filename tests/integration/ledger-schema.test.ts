@@ -234,7 +234,11 @@ describe('company_counters (ADR-003)', () => {
   it('a counter row is seeded for each company at creation', async () => {
     const f = await fixture();
     const db = await getTestDb();
-    const r = await db.execute<{ next_entry_number: string }>(sql`select next_entry_number from company_counters where company_id=${f.companyId}`);
+    const r = await db.execute<{ next_entry_number: string; next_invoice_number: string }>(
+      sql`select next_entry_number, next_invoice_number from company_counters where company_id=${f.companyId}`,
+    );
     expect(r.rows[0]?.next_entry_number).toBe('1');
+    // The invoice-number counter (LL-042) shares this row and also starts at 1.
+    expect(r.rows[0]?.next_invoice_number).toBe('1');
   });
 });

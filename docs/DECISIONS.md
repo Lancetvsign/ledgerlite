@@ -839,3 +839,78 @@ This is explicitly **not** a violation of invariant 2:
 Multi-currency or per-invoice rounding rules arrive, or the consistency test ever proves
 insufficient — at which point a deferred CHECK/trigger recomputing the total in the
 database (not just the service) would make the guarantee structural.
+
+---
+
+## ADR-014 — Invoice posting: finalize, the ledger entry, and void
+
+**Status** Accepted · **Added by** LL-042 · **Decided by** product owner
+
+### Context
+
+LL-041 built the invoice DRAFT lifecycle and deferred finalize, ledger posting, and void.
+Finalizing an invoice is the first time a feature module drives the general ledger, which
+forced four choices the ticket left open: which accounts the entry uses, how finalize stays
+atomic with the posting, who may post, and how invoice numbers are assigned.
+
+### Decision
+
+**The entry.** Finalizing a DRAFT invoice (DRAFT→OPEN) posts one balanced entry, source-typed
+`INVOICE` with the invoice's id: **Dr Accounts Receivable = total** (tagged with the customer
+on the line), **Cr each revenue account = the sum of its lines' amounts**, **Cr Sales Tax
+Payable = tax** (only when tax > 0). Amounts are derived from the *stored, frozen* lines with
+`computeInvoicePosting` (decimal.js, ROUND_HALF_EVEN); the revenue credits sum to `subtotal`
+and, with the tax credit, equal the A/R debit exactly at NUMERIC(19,4). A regression test
+asserts the A/R debit equals the stored total equals a fresh recompute (ties ADR-013 to the
+ledger). A zero-total invoice cannot be finalized — there is no postable entry.
+
+**Accounts are resolved structurally.** A/R is the company's `ACCOUNTS_RECEIVABLE` system
+account (always seeded); Sales Tax Payable is `SALES_TAX_PAYABLE`, seeded in the STANDARD
+chart only. A new partial unique index on `accounts (company_id, system_account_type)` makes
+each role resolve to at most one account, so the posting target is unambiguous. A taxed
+invoice on a company with no Sales Tax Payable account fails with `TAX_ACCOUNT_NOT_CONFIGURED`
+rather than posting something wrong; tax-free invoices always post.
+
+**Atomicity.** The invoice's status/number change and its ledger entry commit in ONE
+transaction. To do that without a feature module inserting into `journal_entries` directly
+(AGENTS §4.8), the ledger's in-transaction posting and reversal mechanics were extracted into
+`postEntryCore`/`reverseEntryCore`, which a document service calls WITHIN its own transaction.
+The cores are mechanical: the caller authorizes and resolves the period before opening the tx,
+exactly as the manual path already did.
+
+**Authorization is at the document capability.** Finalize and void require `invoice.post`
+(ALL_WRITERS, incl. BOOKKEEPER — the documented "a bookkeeper works through documents" intent).
+The posting must NOT re-gate on `journal.post` (LEDGER_WRITERS), which would wrongly block a
+bookkeeper; the cores do not authorize, so the document capability is the single gate. Manual
+journal entries keep their own `journal.post` gate. Void reuses `invoice.post` (a separate
+`invoice.void` can split later).
+
+**Idempotency is source-once, not a key.** One POSTED entry per `(company, INVOICE, invoiceId)`
+is enforced by the existing `journal_entries_source_posted_once` index; the DRAFT-guarded,
+FOR UPDATE status transition closes the finalize race. No idempotency key is used — source-once
+is the stronger guarantee. (`updateInvoice` now also locks FOR UPDATE, so an edit can never
+clobber a concurrently-finalized invoice.)
+
+**Void.** Voiding an OPEN invoice reverses its posted entry through `reverseEntryCore` (a new
+`REVERSAL` entry that nets every account to zero, ADR-010) and marks the invoice VOID —
+atomically. The original entry is never edited (invariant 3). Only OPEN invoices void.
+
+**Invoice numbers.** Assigned at finalize from a per-company `company_counters.next_invoice_number`,
+GAPS ALLOWED: a plain atomic increment (contrast the gapless, FOR-UPDATE-held entry number of
+ADR-003), so a rolled-back finalize simply skips a number.
+
+### Consequences
+
+- An invoice's accounting is fully derived and auditable from journal lines; the invoice row
+  stores a document total (ADR-013) but never an account balance. A customer's open balance
+  still derives from posted A/R lines (LL-046).
+- A bookkeeper can run invoices end to end without the raw-journal capability.
+- Posting and reversal now have a documented, reusable in-transaction core other document
+  types (payments, LL-043) will use the same way.
+
+### Revisit if
+
+Gapless invoice numbering becomes a requirement (jurisdiction), void needs its own capability
+or must handle PAID invoices (payment application, LL-043), or per-line tax accounts / multiple
+tax authorities arrive — at which point the single `SALES_TAX_PAYABLE` resolution is replaced
+by a per-line tax-account reference.
