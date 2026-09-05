@@ -141,6 +141,13 @@
       "when": 1788622922558,
       "tag": "0019_credit_memos",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788627936985,
+      "tag": "0020_freeze_reversed_entries",
+      "breakpoints": true
     }
   ]
 }
