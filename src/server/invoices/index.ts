@@ -529,7 +529,7 @@ export async function voidInvoice(
   invoiceId: string,
   input: VoidInvoiceInput,
 ): Promise<InvoiceWithLines> {
-  await requirePermission(actorUserId, companyId, 'invoice.post');
+  await requirePermission(actorUserId, companyId, 'invoice.void');
 
   // Fast pre-check + resolve the reversal date's period BEFORE the tx (ADR-007;
   // never create a period inside the posting tx).

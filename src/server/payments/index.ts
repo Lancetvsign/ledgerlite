@@ -230,7 +230,7 @@ export async function voidPayment(
   paymentId: string,
   input: VoidPaymentInput,
 ): Promise<PaymentWithApplications> {
-  await requirePermission(actorUserId, companyId, 'payment.create');
+  await requirePermission(actorUserId, companyId, 'payment.void');
 
   const pre = await getDbTx()
     .select({ status: schema.payments.status })
@@ -298,6 +298,19 @@ export async function voidPayment(
         ),
       );
 
+    // Lock the applied invoices for the rest of this transaction, so the PAID -> OPEN
+    // revert below serialises against a concurrent receive / write-off / credit on the
+    // same invoice (LL-053 / Gate 3 item 6 — was safe via the implicit UPDATE lock; now
+    // explicit, matching the create paths which lock the invoice FOR UPDATE).
+    const appliedInvoiceIds = applied.map((a) => a.invoiceId);
+    if (appliedInvoiceIds.length > 0) {
+      await tx
+        .select({ id: schema.invoices.id })
+        .from(schema.invoices)
+        .where(and(eq(schema.invoices.companyId, companyId), inArray(schema.invoices.id, appliedInvoiceIds)))
+        .for('update');
+    }
+
     // Mark VOID first so this payment's applications drop out of applied totals,
     // then reverse the entry in THIS transaction (both commit together).
     await tx
@@ -318,7 +331,6 @@ export async function voidPayment(
     );
 
     // Any invoice this payment had fully paid is no longer fully paid → back to OPEN.
-    const appliedInvoiceIds = applied.map((a) => a.invoiceId);
     if (appliedInvoiceIds.length > 0) {
       await tx
         .update(schema.invoices)

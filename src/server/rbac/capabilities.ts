@@ -26,12 +26,16 @@ export const CAPABILITIES = [
   'invoice.view',
   'invoice.create',
   'invoice.post',
+  'invoice.void',
   'payment.view',
   'payment.create',
+  'payment.void',
   'writeoff.view',
   'writeoff.create',
+  'writeoff.void',
   'credit_memo.view',
   'credit_memo.create',
+  'credit_memo.void',
   'expense.view',
   'expense.create',
   'reconciliation.view',
@@ -97,6 +101,14 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   // Credit memos are day-to-day A/R work (like write-offs): any writer issues them.
   'credit_memo.view': EVERYONE,
   'credit_memo.create': ALL_WRITERS,
+  // Voiding a posted document is a reversal — a ledger correction — so it is a
+  // LEDGER_WRITERS action like manual reversals (journal.post), narrower than the
+  // create/post that ALL_WRITERS hold. A bookkeeper posts documents but does not undo
+  // them (LL-053 / Gate 3 item 4).
+  'invoice.void': LEDGER_WRITERS,
+  'payment.void': LEDGER_WRITERS,
+  'writeoff.void': LEDGER_WRITERS,
+  'credit_memo.void': LEDGER_WRITERS,
   'expense.view': EVERYONE,
   'expense.create': ALL_WRITERS,
   'reconciliation.view': EVERYONE,

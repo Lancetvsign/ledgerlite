@@ -176,7 +176,7 @@ export async function voidWriteoff(
   writeoffId: string,
   input: VoidWriteoffInput,
 ): Promise<Writeoff> {
-  await requirePermission(actorUserId, companyId, 'writeoff.create');
+  await requirePermission(actorUserId, companyId, 'writeoff.void');
 
   const pre = await getDbTx()
     .select({ status: schema.writeoffs.status })
@@ -232,6 +232,14 @@ export async function voidWriteoff(
     if (posted === undefined) {
       throw new Error(`posted write-off ${writeoffId} has no journal entry to reverse`);
     }
+
+    // Lock the invoice so the PAID -> OPEN revert serialises against a concurrent
+    // receive / write-off / credit on it (LL-053 / Gate 3 item 6 — now explicit).
+    await tx
+      .select({ id: schema.invoices.id })
+      .from(schema.invoices)
+      .where(and(eq(schema.invoices.companyId, companyId), eq(schema.invoices.id, writeoff.invoiceId)))
+      .for('update');
 
     // Mark VOID first so this write-off drops out of the invoice's reductions, then
     // reverse the entry in THIS transaction (both commit together).
