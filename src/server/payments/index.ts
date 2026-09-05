@@ -12,6 +12,7 @@ import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
+import { invoiceReductionsExpr, invoiceReductionsTotal } from '@/server/reports/open-balance';
 
 import { PaymentError } from './errors';
 
@@ -49,16 +50,6 @@ export function computePaymentAmount(
   return applications
     .reduce((sum, a) => sum.plus(toMoney(a.amountApplied)), new Decimal(0))
     .toFixed(4);
-}
-
-/** How much of an invoice is already applied by NON-VOID payments (decimal.js). */
-async function invoiceAppliedTotal(tx: Tx, companyId: string, invoiceId: string): Promise<Decimal> {
-  const rows = await tx.execute<{ amount_applied: string }>(sql`
-    select pa.amount_applied
-    from payment_applications pa
-    join payments p on p.company_id = pa.company_id and p.id = pa.payment_id
-    where pa.company_id = ${companyId} and pa.invoice_id = ${invoiceId} and p.status <> 'VOID'`);
-  return rows.rows.reduce((sum, r) => sum.plus(toMoney(r.amount_applied)), new Decimal(0));
 }
 
 export async function receivePayment(
@@ -143,7 +134,7 @@ export async function receivePayment(
       if (invoice.status !== 'OPEN') {
         throw new PaymentError('INVOICE_NOT_OPEN', 'Only an open invoice can receive a payment.');
       }
-      const open = toMoney(invoice.total).minus(await invoiceAppliedTotal(tx, companyId, app.invoiceId));
+      const open = toMoney(invoice.total).minus(await invoiceReductionsTotal(tx, companyId, app.invoiceId));
       const applying = toMoney(app.amountApplied);
       if (applying.greaterThan(open)) {
         throw new PaymentError(
@@ -405,15 +396,12 @@ export async function listOpenInvoices(actorUserId: string, companyId: string): 
     customer_id: string;
     invoice_date: string;
     total: string;
-    applied: string;
+    open_balance: string;
   }>(sql`
     select i.id, i.invoice_number, i.customer_id, i.invoice_date, i.total,
-           coalesce(sum(pa.amount_applied) filter (where p.status <> 'VOID'), 0)::text as applied
+           (i.total - ${invoiceReductionsExpr(companyId)})::numeric(19,4)::text as open_balance
     from invoices i
-    left join payment_applications pa on pa.company_id = i.company_id and pa.invoice_id = i.id
-    left join payments p on p.company_id = pa.company_id and p.id = pa.payment_id
     where i.company_id = ${companyId} and i.status = 'OPEN'
-    group by i.id
     order by i.invoice_date, i.created_at`);
   return rows.rows.map((r) => ({
     id: r.id,
@@ -421,7 +409,7 @@ export async function listOpenInvoices(actorUserId: string, companyId: string): 
     customerId: r.customer_id,
     invoiceDate: r.invoice_date,
     total: toMoney(r.total).toFixed(4),
-    openBalance: toMoney(r.total).minus(toMoney(r.applied)).toFixed(4),
+    openBalance: toMoney(r.open_balance).toFixed(4),
   }));
 }
 

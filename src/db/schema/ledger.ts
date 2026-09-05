@@ -45,6 +45,7 @@ export const journalSourceType = pgEnum('journal_source_type', [
   'JOURNAL_ENTRY',
   'OPENING_BALANCE',
   'REVERSAL',
+  'BAD_DEBT_WRITEOFF',
 ]);
 
 /**

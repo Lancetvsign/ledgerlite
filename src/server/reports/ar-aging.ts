@@ -9,6 +9,8 @@ import { isCalendarDate } from '@/lib/dates';
 import { toMoney } from '@/lib/decimal';
 import { requirePermission } from '@/server/authorization';
 
+import { invoiceReductionsExpr } from './open-balance';
+
 /**
  * Accounts Receivable aging — LL-046.
  *
@@ -90,8 +92,9 @@ export async function getArAging(
     throw new Error(`A/R aging asOfDate must be a calendar date (YYYY-MM-DD): ${asOfDate}`);
   }
 
-  // One open invoice per row, with its open balance (PostgreSQL does the money
-  // aggregation; we never sum raw applications in JavaScript).
+  // One open invoice per row, with its open balance = total − non-void reductions
+  // (payments applied + write-offs), the shared A/R derivation (LL-050). PostgreSQL
+  // does the money aggregation; we never sum raw reductions in JavaScript.
   const rows = await getDb().execute<{
     customer_id: string;
     customer_name: string;
@@ -104,13 +107,10 @@ export async function getArAging(
       cu.name             as customer_name,
       i.due_date          as due_date,
       i.invoice_date      as invoice_date,
-      (i.total - coalesce(sum(pa.amount_applied) filter (where p.status <> 'VOID'), 0))::numeric(19,4)::text as open_balance
+      (i.total - ${invoiceReductionsExpr(companyId)})::numeric(19,4)::text as open_balance
     from invoices i
     join customers cu on cu.company_id = i.company_id and cu.id = i.customer_id
-    left join payment_applications pa on pa.company_id = i.company_id and pa.invoice_id = i.id
-    left join payments p on p.company_id = pa.company_id and p.id = pa.payment_id
     where i.company_id = ${companyId} and i.status = 'OPEN'
-    group by i.id, cu.name
     order by cu.name`);
 
   const byCustomer = new Map<string, { name: string; buckets: Record<BucketKey, Decimal>; total: Decimal }>();

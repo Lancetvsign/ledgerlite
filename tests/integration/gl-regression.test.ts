@@ -23,6 +23,7 @@ import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
 import { receivePayment, voidPayment } from '@/server/payments';
+import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import {
   assertLedgerIntegrity,
   getJournalEntry,
@@ -39,6 +40,7 @@ import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
+import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
@@ -491,6 +493,52 @@ describe('GL regression suite (release-blocking)', () => {
 
     // Void the partial payment: the balance returns to A/R and both still agree.
     await voidPaymentReconciles(userId, company.id, partial, arId);
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T019 — a bad-debt write-off reduces subsidiary and control together and reconciles (LL-050)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Writeoff Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL050 Revenue', accountType: 'REVENUE' }));
+    const badDebt = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Bad Debt Expense', accountType: 'EXPENSE' }));
+    const mkInvoice = async (price: string): Promise<string> => {
+      const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10', lines: [{ accountId: rev.id, unitPrice: price }],
+      }));
+      await finalizeInvoice(userId, company.id, invoice.id);
+      return invoice.id;
+    };
+    await mkInvoice('100.00'); // stays fully open
+    const partial = await mkInvoice('200.00'); // 80 of it becomes uncollectible
+
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+    const agingNow = async (): Promise<string> => (await getArAging(userId, company.id, '2026-12-31')).totals.total;
+
+    // Before any write-off: control and subsidiary both 300.
+    expect(await arNow()).toBe('300.0000');
+    expect(await agingNow()).toBe('300.0000');
+
+    // Write off 80 of the 200 invoice (Dr Bad Debt Expense / Cr A/R): both drop by 80.
+    const writeoff = await writeOffInvoice(userId, company.id, writeOffInvoiceInput.parse({
+      invoiceId: partial, expenseAccountId: badDebt.id, writeoffDate: '2026-02-01', amount: '80.00',
+    }));
+    expect(await arNow()).toBe('220.0000'); // 300 − 80
+    expect(await agingNow()).toBe(await arNow());
+
+    // Void the write-off: the receivable returns and the two still agree.
+    await voidWriteoff(userId, company.id, writeoff.id, voidWriteoffInput.parse({}));
+    expect(await arNow()).toBe('300.0000');
+    expect(await agingNow()).toBe(await arNow());
+
     await assertLedgerIntegrity(company.id);
   });
 });

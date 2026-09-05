@@ -28,6 +28,8 @@ export const CAPABILITIES = [
   'invoice.post',
   'payment.view',
   'payment.create',
+  'writeoff.view',
+  'writeoff.create',
   'expense.view',
   'expense.create',
   'reconciliation.view',
@@ -86,6 +88,10 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   'invoice.post': ALL_WRITERS,
   'payment.view': EVERYONE,
   'payment.create': ALL_WRITERS,
+  // Bad-debt write-offs are day-to-day A/R work (like payments): any writer creates
+  // them; the accountant is not the only one who may reduce a receivable (LL-050).
+  'writeoff.view': EVERYONE,
+  'writeoff.create': ALL_WRITERS,
   'expense.view': EVERYONE,
   'expense.create': ALL_WRITERS,
   'reconciliation.view': EVERYONE,
