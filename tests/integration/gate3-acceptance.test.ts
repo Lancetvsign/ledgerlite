@@ -31,11 +31,13 @@ import { assertLedgerIntegrity } from '@/server/ledger';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { getArAging, getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
+import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput, voidInvoiceInput } from '@/validation/invoice';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
+import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 
@@ -45,6 +47,7 @@ interface Ctx {
   customerId: string;
   revId: string;
   cashId: string;
+  badDebtId: string;
 }
 
 async function makeUser(): Promise<string> {
@@ -72,7 +75,8 @@ async function setup(): Promise<Ctx> {
   const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
   const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Sales Revenue', accountType: 'REVENUE' }));
   const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Cash', accountType: 'ASSET' }));
-  return { userId, companyId: company.id, customerId: customer.id, revId: rev.id, cashId: cash.id };
+  const badDebt = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Bad Debt Expense', accountType: 'EXPENSE' }));
+  return { userId, companyId: company.id, customerId: customer.id, revId: rev.id, cashId: cash.id, badDebtId: badDebt.id };
 }
 
 /** The id of a system account (e.g. ACCOUNTS_RECEIVABLE, SALES_TAX_PAYABLE). */
@@ -187,6 +191,22 @@ describe('GATE 3 — A/R lifecycle acceptance; subsidiary reconciles to the GL c
     expect(finalAging.customers[0]!.total).toBe('1000.0000');
     await assertReconciles('1000.0000');
 
+    // 7) Bad-debt write-off — the SANCTIONED way to reduce A/R (LL-050). Write off
+    // $250 of invoice #1 (Dr Bad Debt Expense / Cr A/R): control and subsidiary drop
+    // together, and a void restores them. (A manual journal entry to A/R is instead
+    // structurally blocked — LL-050 PR2 / ADR-016.)
+    const writeoff = await writeOffInvoice(c.userId, c.companyId, writeOffInvoiceInput.parse({
+      invoiceId: inv1.id, expenseAccountId: c.badDebtId, writeoffDate: '2026-06-30', amount: '250.00',
+    }));
+    expect(await balanceOf(c, arId, AS_OF)).toBe('750.0000'); // 1,000 − 250
+    expect(await balanceOf(c, c.badDebtId, AS_OF)).toBe('250.0000'); // Bad Debt Expense
+    await assertReconciles('750.0000'); // invoice #1 now shows 750 open
+
+    // Void the write-off — the receivable returns and the books still reconcile.
+    const voidedWo = await voidWriteoff(c.userId, c.companyId, writeoff.id, voidWriteoffInput.parse({}));
+    expect(voidedWo.status).toBe('VOID');
+    await assertReconciles('1000.0000');
+
     // The full ledger integrity audit passes over everything posted here.
     await assertLedgerIntegrity(c.companyId);
   });
@@ -200,7 +220,7 @@ describe('GATE 3 — A/R lifecycle acceptance; subsidiary reconciles to the GL c
     const cols = await db.execute<{ table_name: string; column_name: string }>(sql`
       select table_name, column_name from information_schema.columns
       where table_schema = 'public'
-        and table_name in ('customers', 'invoices', 'invoice_lines', 'payments', 'payment_applications')
+        and table_name in ('customers', 'invoices', 'invoice_lines', 'payments', 'payment_applications', 'writeoffs')
         and (column_name ilike '%balance%' or column_name ilike '%outstanding%'
              or column_name ilike '%running%' or column_name ilike '%cached%')`);
     expect(cols.rows).toEqual([]);

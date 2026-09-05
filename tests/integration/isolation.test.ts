@@ -16,12 +16,14 @@ import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
+import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
+import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -261,6 +263,43 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'void the victim payment (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => voidPayment(attacker, victim.companyId, recordId, voidPaymentInput.parse({})),
+      },
+    ],
+  },
+  {
+    table: 'writeoffs',
+    seed: async (victim) => {
+      const customer = await createCustomer(victim.ownerUserId, victim.companyId,
+        createCustomerInput.parse({ name: 'Victim WO Payer' }));
+      const revenue = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Revenue WO', accountType: 'REVENUE' }));
+      const badDebt = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Bad Debt', accountType: 'EXPENSE' }));
+      const { invoice } = await createInvoice(victim.ownerUserId, victim.companyId, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10',
+        lines: [{ accountId: revenue.id, quantity: '1', unitPrice: '100.0000' }],
+      }));
+      await finalizeInvoice(victim.ownerUserId, victim.companyId, invoice.id);
+      const writeoff = await writeOffInvoice(victim.ownerUserId, victim.companyId, writeOffInvoiceInput.parse({
+        invoiceId: invoice.id, expenseAccountId: badDebt.id, writeoffDate: '2026-01-15', amount: '100.0000',
+      }));
+      return { recordId: writeoff.id };
+    },
+    attempts: [
+      {
+        operation: 'list write-offs (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listWriteoffs(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim write-off',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getWriteoff(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'void the victim write-off (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => voidWriteoff(attacker, victim.companyId, recordId, voidWriteoffInput.parse({})),
       },
     ],
   },

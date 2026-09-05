@@ -18,11 +18,13 @@ import { createInvoice, finalizeInvoice } from '@/server/invoices';
 import { receivePayment } from '@/server/payments';
 import { getArAging, getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
+import { writeOffInvoice } from '@/server/writeoffs';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { receivePaymentInput } from '@/validation/payment';
+import { writeOffInvoiceInput } from '@/validation/writeoff';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 
@@ -160,6 +162,18 @@ describe('getArAging — population and grouping', () => {
     }));
     const aging = await getArAging(c.userId, c.companyId, '2026-06-30');
     expect(aging.customers[0]!.buckets.d1to30).toBe('70.0000'); // 100 − 30
+    expect(aging.totals.total).toBe('70.0000');
+  });
+
+  it('a bad-debt write-off reduces the bucketed open balance', async () => {
+    const c = await setup();
+    const inv = await openInvoice(c, '100.00', '2026-06-15');
+    const badDebt = await createAccount(c.userId, c.companyId, createAccountInput.parse({ name: 'Bad Debt Expense', accountType: 'EXPENSE' }));
+    await writeOffInvoice(c.userId, c.companyId, writeOffInvoiceInput.parse({
+      invoiceId: inv, expenseAccountId: badDebt.id, writeoffDate: '2026-06-20', amount: '30.00',
+    }));
+    const aging = await getArAging(c.userId, c.companyId, '2026-06-30');
+    expect(aging.customers[0]!.buckets.d1to30).toBe('70.0000'); // 100 − 30 written off
     expect(aging.totals.total).toBe('70.0000');
   });
 

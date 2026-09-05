@@ -1033,3 +1033,54 @@ apply, a fully-paid invoice nets to zero and leaves the OPEN set, and a void rev
 Point-in-time historical aging, customer credits / unapplied payments (which would make the
 subsidiary richer than "open invoices"), or multi-currency arrive — each changes what "the A/R
 balance" means and how the subsidiary must reconcile to it.
+
+---
+
+## ADR-017 — Bad-debt write-offs are the sanctioned way to reduce A/R
+
+**Status** Accepted · **Added by** LL-050 (PR 1) · **Decided by** product owner
+
+### Context
+
+ADR-016 left one path that can silently break the aging⇔control reconciliation: a manual journal
+entry straight to the A/R control account. It cannot simply be forbidden, because reducing A/R for a
+debt a customer will not pay is a real, routine operation. The reconciliation holds only when every
+A/R movement is visible to the *subsidiary* (the aging of open invoices). So the sanctioned way to
+reduce A/R must be a document the subsidiary sees — and it must exist **before** the manual path is
+locked (LL-050 PR 2), so the capability is never lost.
+
+### Decision
+
+**A bad-debt write-off is a first-class document** (`writeoffs` table) that targets ONE open invoice
+and posts **Dr Bad Debt Expense / Cr Accounts Receivable** (the A/R line customer-tagged) through
+`LedgerService`, source-typed `BAD_DEBT_WRITEOFF` and source-once, voidable by reversal (ADR-010) —
+structurally the sibling of a customer payment (ADR-015).
+
+**It reduces the invoice's open balance in the subsidiary.** The open balance is now
+`total − Σ(non-void payment applications) − Σ(non-void write-offs)`. That derivation lives in ONE
+place (`src/server/reports/open-balance.ts`) and is used by the aging, `listOpenInvoices`, and the
+over-application guards, so they cannot drift — expressed as **correlated subqueries**, not two LEFT
+JOINs, so a second reduction source never fans out the aggregation. A write-off that clears the
+remaining balance marks the invoice **PAID** (settled); a void reopens it. **GL-T019** extends the
+release gate: a write-off drops subsidiary and control together and reconciles, and again after a void.
+
+**The expense account is caller-supplied** (validated in-company / ACTIVE / EXPENSE), mirroring the
+payment deposit-account guard — NOT a canonical system "Bad Debt Expense" account. This avoids a chart
+migration and a backfill for existing companies; a business points the write-off at whichever expense
+account it uses. Authorization is `writeoff.create` / `writeoff.view` (ALL_WRITERS / EVERYONE), the
+same day-to-day A/R grant as payments.
+
+### Consequences
+
+- A/R can be reduced for bad debt through a documented path the subsidiary sees — the prerequisite
+  for structurally locking manual posting to A/R (LL-050 PR 2).
+- Payments now also subtract write-offs, so you cannot over-collect on a partially-written-off invoice.
+- A fully written-off invoice reads as **PAID**. Reporting that must distinguish "collected" from
+  "written off" (e.g. customer statements, LL-054) may later want a distinct `WRITTEN_OFF` status —
+  the reconciliation holds either way, so it is a reporting nicety, not a correctness need.
+
+### Revisit if
+
+Customer credits / refunds (LL-051) add another reduction source — extend the SAME shared
+open-balance derivation, never a parallel copy; or a `WRITTEN_OFF` invoice status is wanted for
+reporting; or multi-currency arrives.
