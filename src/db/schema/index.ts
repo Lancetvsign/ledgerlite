@@ -9,3 +9,4 @@ export * from './ledger';
 export * from './invoices';
 export * from './payments';
 export * from './writeoffs';
+export * from './credit-memos';

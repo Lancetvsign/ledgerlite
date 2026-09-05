@@ -1130,3 +1130,52 @@ legitimate (tax corrections, year-end closing, opening-balance setup). The guard
 
 A second account gains a subsidiary that must reconcile (extend the guard to it); or an
 `OPENING_BALANCE` document is added (allowed automatically — it is not `JOURNAL_ENTRY`).
+
+---
+
+## ADR-019 — Customer credit memos are applied to a specific invoice
+
+**Status** Accepted · **Added by** LL-051 · **Decided by** product owner
+
+### Context
+
+A/R could be reduced by payments and bad-debt write-offs, but not by a **credit memo** — a
+return or allowance that reduces what a customer owes. ADR-016 also flagged that *unapplied*
+customer credit (a credit not tied to an invoice) and cash refunds would make the aging
+subsidiary "richer than open invoices" — the customer's net A/R could go below their open
+invoices, or negative, which the current subsidiary (a sum of OPEN-invoice balances) cannot
+represent. LL-051 delivers the reconciliation-clean subset and defers the rest.
+
+### Decision
+
+**A credit memo targets ONE open invoice** and posts **Dr Sales Returns & Allowances (a
+caller-supplied REVENUE/contra account) / Cr Accounts Receivable** (customer-tagged), through
+`LedgerService`, source-typed `CREDIT_MEMO`, source-once, voidable by reversal (ADR-010) — the
+structural sibling of the bad-debt write-off (ADR-017). It **reduces the invoice's open balance
+via the shared derivation**: `src/server/reports/open-balance.ts` now sums non-void payments,
+write-offs, AND credit memos, so the aging, `listOpenInvoices`, and every over-application guard
+see it automatically and the aging⇔control reconciliation (GL-T018) holds — extended as
+**GL-T020**. A credit memo that clears the invoice marks it PAID. The 0018 control-account guard
+already permits `CREDIT_MEMO` to touch A/R (it is not `JOURNAL_ENTRY`), so no trigger change.
+
+The returns account is **caller-supplied** (validated in-company / ACTIVE / REVENUE), mirroring
+the write-off's expense account (ADR-017). Authorization is `credit_memo.create` /
+`credit_memo.view` (ALL_WRITERS / EVERYONE).
+
+**Deferred (out of scope, a follow-up with its own ADR):** *unapplied customer credit* and *cash
+refunds*. Both require the aging subsidiary to carry credit balances (so it still reconciles when
+a customer's net A/R is below their open invoices or negative) — a change to the subsidiary model
+and the reconciliation invariant, not a clean extension of the existing derivation.
+
+### Consequences
+
+- Credit memos are the third reduction source, all flowing through the one shared derivation;
+  payments, write-offs, and credit memos each respect the others' reductions (you cannot
+  over-apply across them).
+- A fully credited invoice reads as **PAID** (the same reporting nicety as ADR-017; a distinct
+  `CREDITED`/`WRITTEN_OFF` status is a later option).
+
+### Revisit if
+
+Unapplied credit / cash refunds are needed (extend the subsidiary to carry credit balances); or a
+distinct terminal status is wanted for reporting; or multi-currency arrives.
