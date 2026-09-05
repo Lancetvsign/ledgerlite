@@ -30,6 +30,8 @@ export const CAPABILITIES = [
   'payment.create',
   'writeoff.view',
   'writeoff.create',
+  'credit_memo.view',
+  'credit_memo.create',
   'expense.view',
   'expense.create',
   'reconciliation.view',
@@ -92,6 +94,9 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   // them; the accountant is not the only one who may reduce a receivable (LL-050).
   'writeoff.view': EVERYONE,
   'writeoff.create': ALL_WRITERS,
+  // Credit memos are day-to-day A/R work (like write-offs): any writer issues them.
+  'credit_memo.view': EVERYONE,
+  'credit_memo.create': ALL_WRITERS,
   'expense.view': EVERYONE,
   'expense.create': ALL_WRITERS,
   'reconciliation.view': EVERYONE,

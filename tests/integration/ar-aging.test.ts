@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getAuth } from '@/lib/auth';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
+import { issueCreditMemo } from '@/server/credit-memos';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
 import { receivePayment } from '@/server/payments';
@@ -21,6 +22,7 @@ import { ensureAppUser } from '@/server/users';
 import { writeOffInvoice } from '@/server/writeoffs';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
+import { issueCreditMemoInput } from '@/validation/credit-memo';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
 import { receivePaymentInput } from '@/validation/payment';
@@ -174,6 +176,18 @@ describe('getArAging — population and grouping', () => {
     }));
     const aging = await getArAging(c.userId, c.companyId, '2026-06-30');
     expect(aging.customers[0]!.buckets.d1to30).toBe('70.0000'); // 100 − 30 written off
+    expect(aging.totals.total).toBe('70.0000');
+  });
+
+  it('a credit memo reduces the bucketed open balance', async () => {
+    const c = await setup();
+    const inv = await openInvoice(c, '100.00', '2026-06-15');
+    const returns = await createAccount(c.userId, c.companyId, createAccountInput.parse({ name: 'Sales Returns', accountType: 'REVENUE' }));
+    await issueCreditMemo(c.userId, c.companyId, issueCreditMemoInput.parse({
+      invoiceId: inv, revenueAccountId: returns.id, creditDate: '2026-06-20', amount: '30.00',
+    }));
+    const aging = await getArAging(c.userId, c.companyId, '2026-06-30');
+    expect(aging.customers[0]!.buckets.d1to30).toBe('70.0000'); // 100 − 30 credited
     expect(aging.totals.total).toBe('70.0000');
   });
 

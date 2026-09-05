@@ -22,6 +22,7 @@ import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
+import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import {
@@ -38,6 +39,7 @@ import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
+import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
@@ -536,6 +538,51 @@ describe('GL regression suite (release-blocking)', () => {
 
     // Void the write-off: the receivable returns and the two still agree.
     await voidWriteoff(userId, company.id, writeoff.id, voidWriteoffInput.parse({}));
+    expect(await arNow()).toBe('300.0000');
+    expect(await agingNow()).toBe(await arNow());
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T020 — a credit memo reduces subsidiary and control together and reconciles (LL-051)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Credit Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL051 Revenue', accountType: 'REVENUE' }));
+    const returns = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Sales Returns', accountType: 'REVENUE' }));
+    const mkInvoice = async (price: string): Promise<string> => {
+      const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10', lines: [{ accountId: rev.id, unitPrice: price }],
+      }));
+      await finalizeInvoice(userId, company.id, invoice.id);
+      return invoice.id;
+    };
+    await mkInvoice('100.00'); // stays fully open
+    const partial = await mkInvoice('200.00'); // 80 of it credited back
+
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+    const agingNow = async (): Promise<string> => (await getArAging(userId, company.id, '2026-12-31')).totals.total;
+
+    expect(await arNow()).toBe('300.0000');
+    expect(await agingNow()).toBe('300.0000');
+
+    // Credit 80 of the 200 invoice (Dr Sales Returns / Cr A/R): both drop by 80.
+    const memo = await issueCreditMemo(userId, company.id, issueCreditMemoInput.parse({
+      invoiceId: partial, revenueAccountId: returns.id, creditDate: '2026-02-01', amount: '80.00',
+    }));
+    expect(await arNow()).toBe('220.0000'); // 300 − 80
+    expect(await agingNow()).toBe(await arNow());
+
+    // Void the credit memo: the receivable returns and the two still agree.
+    await voidCreditMemo(userId, company.id, memo.id, voidCreditMemoInput.parse({}));
     expect(await arNow()).toBe('300.0000');
     expect(await agingNow()).toBe(await arNow());
 

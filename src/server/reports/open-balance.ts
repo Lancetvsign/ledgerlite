@@ -16,16 +16,16 @@ type Executor = PoolDatabase | Parameters<Parameters<PoolDatabase['transaction']
  * The single definition of an invoice's A/R reductions — LL-050.
  *
  * An OPEN invoice's open balance is `invoice.total − reductions`, where reductions
- * are the NON-VOID payment applications PLUS the NON-VOID bad-debt write-offs against
+ * are the NON-VOID payment applications, bad-debt write-offs, AND credit memos against
  * it. The aging subsidiary (`ar-aging`), the payment-application UI
  * (`listOpenInvoices`), and the over-application guards all derive open balance the
  * same way — so this lives ONCE, here, and they cannot drift (the drift was flagged
- * at Gate 3, and a write-off is a new reduction source that must not be forgotten).
+ * at Gate 3; each new reduction source — write-offs, credit memos, … — must be added
+ * here and nowhere else).
  *
- * Correlated subqueries, deliberately NOT two LEFT JOINs: joining both
- * payment_applications and writeoffs would multiply rows (a Cartesian fan-out) and
- * overstate the sums. Nothing is stored (invariant 2); PostgreSQL does the money
- * aggregation.
+ * Correlated subqueries, deliberately NOT LEFT JOINs: joining these reduction tables
+ * would multiply rows (a Cartesian fan-out) and overstate the sums. Nothing is stored
+ * (invariant 2); PostgreSQL does the money aggregation.
  */
 
 /**
@@ -44,6 +44,11 @@ export function invoiceReductionsExpr(companyId: string): SQL {
       select sum(w.amount)
       from writeoffs w
       where w.company_id = ${companyId} and w.invoice_id = i.id and w.status <> 'VOID'
+    ), 0)
+    + coalesce((
+      select sum(cm.amount)
+      from credit_memos cm
+      where cm.company_id = ${companyId} and cm.invoice_id = i.id and cm.status <> 'VOID'
     ), 0)
   )`;
 }
@@ -69,6 +74,11 @@ export async function invoiceReductionsTotal(
         select sum(w.amount)
         from writeoffs w
         where w.company_id = ${companyId} and w.invoice_id = ${invoiceId} and w.status <> 'VOID'
+      ), 0)
+      + coalesce((
+        select sum(cm.amount)
+        from credit_memos cm
+        where cm.company_id = ${companyId} and cm.invoice_id = ${invoiceId} and cm.status <> 'VOID'
       ), 0)
     )::text as reductions`);
   return toMoney(rows.rows[0]?.reductions ?? '0');

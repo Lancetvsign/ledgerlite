@@ -15,6 +15,7 @@ import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } f
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
+import { getCreditMemo, issueCreditMemo, listCreditMemos, voidCreditMemo } from '@/server/credit-memos';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
@@ -22,6 +23,7 @@ import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods'
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
+import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 import { ensureAppUser } from '@/server/users';
@@ -300,6 +302,43 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'void the victim write-off (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => voidWriteoff(attacker, victim.companyId, recordId, voidWriteoffInput.parse({})),
+      },
+    ],
+  },
+  {
+    table: 'credit_memos',
+    seed: async (victim) => {
+      const customer = await createCustomer(victim.ownerUserId, victim.companyId,
+        createCustomerInput.parse({ name: 'Victim CM Buyer' }));
+      const revenue = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Revenue CM', accountType: 'REVENUE' }));
+      const returns = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Sales Returns', accountType: 'REVENUE' }));
+      const { invoice } = await createInvoice(victim.ownerUserId, victim.companyId, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10',
+        lines: [{ accountId: revenue.id, quantity: '1', unitPrice: '100.0000' }],
+      }));
+      await finalizeInvoice(victim.ownerUserId, victim.companyId, invoice.id);
+      const memo = await issueCreditMemo(victim.ownerUserId, victim.companyId, issueCreditMemoInput.parse({
+        invoiceId: invoice.id, revenueAccountId: returns.id, creditDate: '2026-01-15', amount: '100.0000',
+      }));
+      return { recordId: memo.id };
+    },
+    attempts: [
+      {
+        operation: 'list credit memos (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listCreditMemos(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim credit memo',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getCreditMemo(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'void the victim credit memo (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => voidCreditMemo(attacker, victim.companyId, recordId, voidCreditMemoInput.parse({})),
       },
     ],
   },
