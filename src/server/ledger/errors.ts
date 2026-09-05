@@ -11,6 +11,8 @@ export type LedgerErrorCode =
    *  — A/R moves only through documents the aging subsidiary can see (LL-050 / ADR-018). */
   | 'CONTROL_ACCOUNT_MANUAL_POST'
   | 'UNBALANCED_JOURNAL_ENTRY'
+  /** The entry's per-side total exceeds the NUMERIC(19,4) ceiling (LL-052). */
+  | 'ENTRY_AMOUNT_OUT_OF_RANGE'
   | 'INSUFFICIENT_LINES'
   | 'INVALID_LINE'
   | 'IDEMPOTENCY_KEY_CONFLICT'

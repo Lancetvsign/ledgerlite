@@ -1179,3 +1179,47 @@ and the reconciliation invariant, not a clean extension of the existing derivati
 
 Unapplied credit / cash refunds are needed (extend the subsidiary to carry credit balances); or a
 distinct terminal status is wanted for reporting; or multi-currency arrives.
+
+---
+
+## ADR-020 — Ledger hardening: REVERSED entries immutable, entry totals bounded
+
+**Status** Accepted · **Added by** LL-052 · **Decided by** product owner ·
+Resolves Gate 2 §7 items 5–6 and Gate 3 §7 item 3.
+
+### Context
+
+Three low-severity items surfaced by the gates. Fingerprint freezing (Gate 2 item 6a) was already
+handled by migration 0011. The remaining two are defense-in-depth that make EXISTING invariants
+hold more completely; the third is a privacy-posture ratification.
+
+### Decision
+
+- **REVERSED entries are immutable too (invariant 3, migration 0020).** The LL-030 immutability
+  triggers guarded `status = 'POSTED'` only, so a reversed *original* — and its lines — remained
+  mutable after the POSTED→REVERSED transition. The triggers now freeze **both POSTED and REVERSED**:
+  only a DRAFT is editable, a POSTED entry still allows exactly the one POSTED→REVERSED transition,
+  and a REVERSED entry (and its lines) rejects any UPDATE/DELETE with `POSTED_ENTRY_IMMUTABLE`.
+  Function-replacement only (like 0011); reversal posting is unaffected (it only drives the transition,
+  never mutates a reversed row).
+- **Entry totals are bounded with a typed error (invariant 1).** A balanced entry whose per-side total
+  exceeds `NUMERIC(19,4)` (999,999,999,999,999.9999) was rejected only at COMMIT with an opaque
+  overflow. `validateBalance` now raises `ENTRY_AMOUNT_OUT_OF_RANGE` before any I/O, on the manual
+  posting path. Document services derive bounded amounts; a shared range assert across all posting
+  paths is a possible later extension.
+- **Customer contact fields in the audit trail are ratified (Gate 3 item 3).** email / phone /
+  billing address / notes remain in the `audit_events` JSON. Recording what changed is the audit
+  trail's purpose; the table is company-scoped and access-controlled; and contact info is **not** in
+  AGENTS §9's never-log list (passwords / tokens / DATABASE_URL / EIN-TIN / bank / receipts). Global
+  redaction would cut audit value app-wide for no real security gain. No code change.
+
+### Consequences
+
+- The audit trail of a reversed entry can never be silently rewritten — the reversed original is as
+  immutable as any posted entry.
+- An oversized manual entry fails fast and typed, instead of an opaque driver error at COMMIT.
+
+### Revisit if
+
+Document-path totals need the same magnitude guard (extract a shared assert); or a future data-class
+in the audit trail *is* a §9 secret (then redact it at the source, not globally).
