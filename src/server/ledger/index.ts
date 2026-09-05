@@ -228,6 +228,15 @@ function validateBalance(input: PostJournalEntryInput): void {
       `Debits (${debits.toString()}) must equal credits (${credits.toString()}).`,
     );
   }
+  // The per-side total must fit NUMERIC(19,4); a larger sum would otherwise be
+  // rejected only at COMMIT with an opaque overflow error (Gate 2 §7 item 5).
+  // debits == credits here, so checking one side suffices.
+  if (debits.greaterThan('999999999999999.9999')) {
+    throw new LedgerError(
+      'ENTRY_AMOUNT_OUT_OF_RANGE',
+      `Entry total ${debits.toString()} exceeds the maximum NUMERIC(19,4) value.`,
+    );
+  }
 }
 
 /** True when an error is the idempotency-key partial-unique violation. */
