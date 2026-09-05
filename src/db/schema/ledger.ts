@@ -26,8 +26,11 @@ import { companies, users } from './identity';
  * The invariants below are enforced BY THE DATABASE (constraints + triggers in
  * migration 0005), not by application code. Application code can be wrong; a
  * future feature module can forget; the database cannot. Read the migration in
- * full before trusting anything here — the triggers (deferred balance check,
- * posted-immutability) are hand-written SQL the schema file cannot express.
+ * full before trusting anything here — the triggers (deferred balance check and
+ * posted-immutability in 0006; the closed-period guard in 0010; the A/R
+ * control-account guard in 0018, which blocks a manual journal entry from posting to
+ * Accounts Receivable so the aging subsidiary always reconciles) are hand-written SQL
+ * the schema file cannot express.
  */
 
 /** DRAFT may be unbalanced/empty; POSTED is balanced and immutable; REVERSED is a posted entry undone by a reversal. */

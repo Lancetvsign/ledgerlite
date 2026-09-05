@@ -1020,13 +1020,13 @@ apply, a fully-paid invoice nets to zero and leaves the OPEN set, and a void rev
     amount. The invoice service now **rejects any line account that is a system account** (non-null
     `system_account_type`) via `assertLineAccountsPostable`, enforced at create/edit and again at
     finalize (`LINE_ACCOUNT_INVALID`), with regression tests.
-  - **Manual JE to A/R (still open — a policy decision).** The LL-035 manual-journal path can post
-    to ANY account, so a hand-posted entry to A/R would make the control diverge from the aging with
-    nothing detecting it (GL-T018 exercises only document-driven data). Unlike the invoice-line path,
-    a blanket lock is not obviously correct — bad-debt write-offs (Dr Bad Debt Expense / Cr A/R) and
-    opening balances (Dr A/R / Cr Opening Equity) are legitimate manual A/R entries — so the fix needs
-    a considered design (a dedicated write-off/adjustment document, or a narrower capability). Until
-    then this remains a known limitation, not an enforced guarantee.
+  - **Manual JE to A/R (CLOSED — LL-050 PR2 / ADR-018).** A manual journal entry
+    (`source_type = 'JOURNAL_ENTRY'`) posting to the A/R control account is now rejected by a
+    `BEFORE INSERT` trigger on `journal_lines` (migration 0018), so A/R moves only through
+    invoices, payments, and write-offs — all visible to the subsidiary. The sanctioned way to
+    reduce A/R for bad debt is the write-off document (ADR-017); other legitimate manual entries
+    (bad-debt via the write-off; opening balances via a future `OPENING_BALANCE` document) go
+    through documents, not raw manual A/R posts. The reconciliation is now structural, not assumed.
 
 ### Revisit if
 
@@ -1084,3 +1084,49 @@ same day-to-day A/R grant as payments.
 Customer credits / refunds (LL-051) add another reduction source — extend the SAME shared
 open-balance derivation, never a parallel copy; or a `WRITTEN_OFF` invoice status is wanted for
 reporting; or multi-currency arrives.
+
+---
+
+## ADR-018 — The A/R control account is locked from manual journal entry (structural)
+
+**Status** Accepted · **Added by** LL-050 (PR 2) · **Decided by** product owner
+
+### Context
+
+ADR-016 recorded the last open path that could break the aging⇔control reconciliation: a manual
+journal entry (`source_type = 'JOURNAL_ENTRY'`) posting straight to the Accounts Receivable control
+account. That moves the GL control without moving the aging subsidiary (which derives only from
+invoices, payments, and write-offs), and GL-T018 exercises only document-driven data, so nothing
+would catch it. ADR-017 (PR 1) delivered the sanctioned document path (bad-debt write-off); this ADR
+closes the manual path structurally.
+
+### Decision
+
+**A `BEFORE INSERT` trigger on `journal_lines` (migration 0018, `assert_no_manual_post_to_ar`)
+rejects a line posting to the A/R control account when the parent entry's `source_type` is
+`JOURNAL_ENTRY`.** It mirrors the closed-period guard (ADR-012): a structural rule the database
+enforces even when the application is bypassed (a raw INSERT), reading the parent entry's source
+type by `journal_entry_id` (the parent is inserted before its lines). The raw rejection
+(`CONTROL_ACCOUNT_MANUAL_POST`, SQLSTATE `restrict_violation`) maps to a typed `LedgerError` in
+`toLedgerDomainError`, which `postJournalEntry` already routes through.
+
+**Scope is A/R only** — the one control account with a subsidiary that must reconcile. The guard
+keys off the A/R `system_account_type`, not "any system account": Sales Tax Payable, Retained
+Earnings, and Opening Balance Equity have no subsidiary to break, and manual entries to them are
+legitimate (tax corrections, year-end closing, opening-balance setup). The guard keys off the manual
+`JOURNAL_ENTRY` source, not an allow-list of document types, so a future document that posts to A/R
+(e.g. LL-051 credit memos) is allowed automatically — no coupling to this trigger.
+
+### Consequences
+
+- The aging⇔control reconciliation (GL-T018) is now **structural**, not assumed: A/R moves only
+  through invoices, payments, write-offs, and their reversals — all visible to the subsidiary.
+- Manual A/R adjustments must go through a document. Opening A/R balances, if ever needed, will need
+  a sanctioned `OPENING_BALANCE` document (not yet built) rather than a raw manual entry.
+- `control-account-guard.test.ts` proves it in raw SQL (service bypassed) and confirms the A/R-only
+  scope (a manual entry to Sales Tax Payable still posts) and that every document path still reaches A/R.
+
+### Revisit if
+
+A second account gains a subsidiary that must reconcile (extend the guard to it); or an
+`OPENING_BALANCE` document is added (allowed automatically — it is not `JOURNAL_ENTRY`).

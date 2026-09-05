@@ -95,5 +95,14 @@ export function toLedgerDomainError(error: unknown): unknown {
       'The accounting period for this posting date is closed.',
     );
   }
+  // The A/R control-account guard (migration 0018) raises this when a manual journal
+  // entry tries to post to Accounts Receivable — A/R moves only through invoices,
+  // payments, and write-offs, so the aging subsidiary always reconciles (ADR-018).
+  if (/CONTROL_ACCOUNT_MANUAL_POST/.test(text)) {
+    return new LedgerError(
+      'CONTROL_ACCOUNT_MANUAL_POST',
+      'A manual journal entry cannot post to the Accounts Receivable control account; use an invoice, payment, or write-off.',
+    );
+  }
   return error;
 }
