@@ -7,6 +7,9 @@ export type LedgerErrorCode =
   | 'INACTIVE_ACCOUNT'
   | 'ACCOUNT_NOT_FOUND'
   | 'PERIOD_CLOSED'
+  /** A manual journal entry may not post to the Accounts Receivable control account
+   *  — A/R moves only through documents the aging subsidiary can see (LL-050 / ADR-018). */
+  | 'CONTROL_ACCOUNT_MANUAL_POST'
   | 'UNBALANCED_JOURNAL_ENTRY'
   | 'INSUFFICIENT_LINES'
   | 'INVALID_LINE'
