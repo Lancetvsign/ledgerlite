@@ -23,7 +23,7 @@ import { toMoney } from '@/lib/decimal';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
-import { createInvoice, finalizeInvoice } from '@/server/invoices';
+import { createInvoice, finalizeInvoice, voidInvoice } from '@/server/invoices';
 import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
@@ -40,7 +40,7 @@ import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
-import { createInvoiceInput } from '@/validation/invoice';
+import { createInvoiceInput, voidInvoiceInput } from '@/validation/invoice';
 import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
@@ -636,6 +636,64 @@ describe('GL regression suite (release-blocking)', () => {
     const sum = toMoney(acmeStmt.closingBalance).plus(toMoney(betaStmt.closingBalance));
     expect(arControl).toBe('260.0000');
     expect(sum.toFixed(4)).toBe(arControl);
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T022 — voiding an invoice with a live write-off or credit memo is refused, keeping subsidiary ⇔ control (Gate 4)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Void Adj Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const customer = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'GLT022 Revenue', accountType: 'REVENUE' }));
+    const badDebt = await createAccount(userId, company.id, createAccountInput.parse({ name: 'GLT022 Bad Debt', accountType: 'EXPENSE' }));
+    const returns = await createAccount(userId, company.id, createAccountInput.parse({ name: 'GLT022 Returns', accountType: 'REVENUE' }));
+    const mkInvoice = async (price: string): Promise<string> => {
+      const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+        customerId: customer.id, invoiceDate: '2026-01-10', lines: [{ accountId: rev.id, unitPrice: price }],
+      }));
+      await finalizeInvoice(userId, company.id, invoice.id);
+      return invoice.id;
+    };
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+    const agingNow = async (): Promise<string> => (await getArAging(userId, company.id, '2026-12-31')).totals.total;
+
+    // Write-off arm: invoice 100, partial write-off 30 → invoice stays OPEN.
+    const inv = await mkInvoice('100.00');
+    const wo = await writeOffInvoice(userId, company.id, writeOffInvoiceInput.parse({
+      invoiceId: inv, expenseAccountId: badDebt.id, writeoffDate: '2026-02-01', amount: '30.00',
+    }));
+    expect(await arNow()).toBe('70.0000');
+    expect(await agingNow()).toBe('70.0000');
+    // Voiding the invoice now is REFUSED — otherwise the write-off's Cr A/R would
+    // strand and drive the control to −30 while the aging drops the VOID invoice to 0.
+    await expect(voidInvoice(userId, company.id, inv, voidInvoiceInput.parse({})))
+      .rejects.toMatchObject({ code: 'INVOICE_HAS_ADJUSTMENTS' });
+    expect(await arNow()).toBe('70.0000'); // nothing changed
+    expect(await agingNow()).toBe(await arNow()); // still reconciles
+    // Void the write-off first, THEN the invoice → both net to zero.
+    await voidWriteoff(userId, company.id, wo.id, voidWriteoffInput.parse({}));
+    await voidInvoice(userId, company.id, inv, voidInvoiceInput.parse({ reversalDate: '2026-02-05' }));
+    expect(await arNow()).toBe('0.0000');
+    expect(await agingNow()).toBe('0.0000');
+
+    // Credit-memo arm: invoice 200, partial credit 50 → OPEN; void likewise refused.
+    const inv2 = await mkInvoice('200.00');
+    const cm = await issueCreditMemo(userId, company.id, issueCreditMemoInput.parse({
+      invoiceId: inv2, revenueAccountId: returns.id, creditDate: '2026-02-01', amount: '50.00',
+    }));
+    await expect(voidInvoice(userId, company.id, inv2, voidInvoiceInput.parse({})))
+      .rejects.toMatchObject({ code: 'INVOICE_HAS_ADJUSTMENTS' });
+    await voidCreditMemo(userId, company.id, cm.id, voidCreditMemoInput.parse({}));
+    await voidInvoice(userId, company.id, inv2, voidInvoiceInput.parse({ reversalDate: '2026-02-05' }));
+    expect(await agingNow()).toBe(await arNow()); // reconciles to the control
 
     await assertLedgerIntegrity(company.id);
   });

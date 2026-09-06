@@ -1027,6 +1027,15 @@ apply, a fully-paid invoice nets to zero and leaves the OPEN set, and a void rev
     reduce A/R for bad debt is the write-off document (ADR-017); other legitimate manual entries
     (bad-debt via the write-off; opening balances via a future `OPENING_BALANCE` document) go
     through documents, not raw manual A/R posts. The reconciliation is now structural, not assumed.
+  - **Voiding an invoice that has live reductions (CLOSED — Gate 4).** Sprint 5 added write-offs
+    (ADR-017) and credit memos (ADR-019) as A/R reduction sources, but `voidInvoice` guarded only
+    against live *payments* (`INVOICE_HAS_PAYMENTS`). Voiding an invoice carrying a *partial*
+    write-off or credit memo (which leaves it OPEN) reversed the invoice's **full** A/R while the
+    reduction's Cr A/R remained — driving the customer's A/R negative and dropping the VOID invoice
+    from the aging, breaking the tie. `voidInvoice` now **refuses** when non-void write-offs or
+    credit memos reference the invoice (`INVOICE_HAS_ADJUSTMENTS`) — void those first, symmetric
+    with payments. Payments, write-offs, and credit memos are the only movers of an invoice's open
+    balance (`open-balance.ts`), so this guard is complete. Release-gate regression **GL-T022**.
 
 ### Revisit if
 
