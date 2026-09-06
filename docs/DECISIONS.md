@@ -1223,3 +1223,43 @@ hold more completely; the third is a privacy-posture ratification.
 
 Document-path totals need the same magnitude guard (extract a shared assert); or a future data-class
 in the audit trail *is* a §9 secret (then redact it at the source, not globally).
+
+---
+
+## ADR-021 — Voiding a posted document requires a distinct capability (LEDGER_WRITERS)
+
+**Status** Accepted · **Added by** LL-053 · **Decided by** product owner ·
+Resolves Gate 3 §7 items 4 and 6.
+
+### Context
+
+Voiding a posted document (invoice / payment / write-off / credit memo) reverses its ledger
+entry — a correction, materially heavier than creating the document. Until now each void
+authorized with the document's *create/post* capability (ALL_WRITERS), so any writer, including a
+BOOKKEEPER, could void (Gate 3 item 4). Separately, three of the void paths reverted an invoice's
+status without an explicit row lock (Gate 3 item 6, safe via the implicit UPDATE lock).
+
+### Decision
+
+- **Distinct void capabilities.** New `invoice.void` / `payment.void` / `writeoff.void` /
+  `credit_memo.void`, each granted **LEDGER_WRITERS** (OWNER/ADMIN/ACCOUNTANT). This mirrors manual
+  reversals, which already require `journal.post` = LEDGER_WRITERS — a void is a reversal, so the
+  same role set corrects it. A BOOKKEEPER still creates and posts documents but no longer voids
+  them; an ACCOUNTANT (the ledger role) can. Chosen over MANAGERS-only so the accountant who works
+  the ledger can also correct it.
+- **Explicit `FOR UPDATE` in the void paths.** `voidPayment` / `voidWriteoff` / `voidCreditMemo` now
+  lock the target invoice(s) `FOR UPDATE` before reverting PAID→OPEN, matching the create paths.
+  Behavior is unchanged (correctness already held); the lock is now explicit rather than implicit.
+
+### Consequences
+
+- Void is a narrower, more deliberate action, consistent with manual reversals.
+- The void↔receive/write-off/credit race on an invoice's status is serialized by an explicit lock.
+- Deferred to follow-ups (LOW, out of scope): submit-once **idempotency** for `receivePayment` and
+  the manual JE (Gate 2 item 9 / Gate 3 item 5 — needs a payment idempotency column + form tokens),
+  and the `writeoffs`/`credit-memos` shared-core refactor the reviews flagged.
+
+### Revisit if
+
+A role between BOOKKEEPER and ACCOUNTANT should void some document types but not others (split the
+grant per document); or the deferred idempotency work is scheduled.
