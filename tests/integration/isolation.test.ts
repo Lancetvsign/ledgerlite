@@ -14,6 +14,7 @@ import { requireCompanyMembership, requirePermission } from '@/server/authorizat
 import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
+import { createVendor, deactivateVendor, listVendors, updateVendor } from '@/server/vendors';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { getCreditMemo, issueCreditMemo, listCreditMemos, voidCreditMemo } from '@/server/credit-memos';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
@@ -22,6 +23,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
+import { createVendorInput, updateVendorInput } from '@/validation/vendor';
 import { createInvoiceInput } from '@/validation/invoice';
 import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
@@ -164,6 +166,38 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate the victim customer (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => deactivateCustomer(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    table: 'vendors',
+    seed: async (victim) => {
+      const vendor = await createVendor(victim.ownerUserId, victim.companyId,
+        createVendorInput.parse({ name: 'Victim Vendor', vendorNumber: 'V-1' }));
+      return { recordId: vendor.id };
+    },
+    attempts: [
+      {
+        operation: 'list vendors (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listVendors(attacker, victim.companyId),
+      },
+      {
+        operation: 'create a vendor in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          createVendor(attacker, victim.companyId, createVendorInput.parse({ name: 'Injected' })),
+      },
+      {
+        operation: 'update the victim vendor',
+        expect: 'denied',
+        run: (attacker, victim, recordId) =>
+          updateVendor(attacker, victim.companyId, recordId, updateVendorInput.parse({ name: 'Hijacked' })),
+      },
+      {
+        operation: 'deactivate the victim vendor (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => deactivateVendor(attacker, victim.companyId, recordId),
       },
     ],
   },

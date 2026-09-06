@@ -18,6 +18,7 @@ import {
 
 import { accounts } from './accounts';
 import { customers } from './customers';
+import { vendors } from './vendors';
 import { companies, users } from './identity';
 
 /**
@@ -175,6 +176,17 @@ export const journalLines = pgTable(
       columns: [table.companyId, table.customerId],
       foreignColumns: [customers.companyId, customers.id],
       name: 'journal_lines_customer_same_company_fk',
+    }).onDelete('restrict'),
+    // Invariant 2 (tenancy) for the optional vendor tag — LL-060 (Accounts Payable).
+    // The mirror of the customer tag above: a line can never reference another
+    // company's vendor. vendor_id is nullable and Postgres MATCH SIMPLE skips the
+    // check when NULL, so untagged lines are unaffected; a tagged line must resolve
+    // in THIS company. The column predates this FK (it shipped unconstrained); the
+    // constraint arrives with the vendors table so A/P lines are tenant-safe.
+    foreignKey({
+      columns: [table.companyId, table.vendorId],
+      foreignColumns: [vendors.companyId, vendors.id],
+      name: 'journal_lines_vendor_same_company_fk',
     }).onDelete('restrict'),
     // Invariant 5 — deterministic line ordering within an entry.
     unique('journal_lines_entry_line_number_unique').on(table.journalEntryId, table.lineNumber),
