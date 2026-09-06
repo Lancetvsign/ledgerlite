@@ -18,6 +18,8 @@ import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
+import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
+import { toMoney } from '@/lib/decimal';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
@@ -33,7 +35,7 @@ import {
   reverseJournalEntry,
 } from '@/server/ledger';
 import { closePeriod } from '@/server/periods';
-import { getArAging, getTrialBalance } from '@/server/reports';
+import { getArAging, getCustomerStatement, getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -585,6 +587,55 @@ describe('GL regression suite (release-blocking)', () => {
     await voidCreditMemo(userId, company.id, memo.id, voidCreditMemoInput.parse({}));
     expect(await arNow()).toBe('300.0000');
     expect(await agingNow()).toBe(await arNow());
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T021 — each customer’s statement decomposes the A/R control, summing to it (LL-054)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Statement Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const acme = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Acme' }));
+    const beta = await createCustomer(userId, company.id, createCustomerInput.parse({ name: 'Beta' }));
+    const rev = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL054 Revenue', accountType: 'REVENUE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL054 Cash', accountType: 'ASSET' }));
+    const returns = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL054 Returns', accountType: 'REVENUE' }));
+    const mkInvoice = async (customerId: string, price: string): Promise<string> => {
+      const { invoice } = await createInvoice(userId, company.id, createInvoiceInput.parse({
+        customerId, invoiceDate: '2026-01-10', lines: [{ accountId: rev.id, unitPrice: price }],
+      }));
+      await finalizeInvoice(userId, company.id, invoice.id);
+      return invoice.id;
+    };
+    // Acme: 100 invoiced, 40 paid → 60. Beta: 250 invoiced, 50 credited → 200.
+    const acmeInv = await mkInvoice(acme.id, '100.00');
+    await receivePayment(userId, company.id, receivePaymentInput.parse({
+      customerId: acme.id, paymentDate: '2026-01-20', depositAccountId: cash.id,
+      applications: [{ invoiceId: acmeInv, amountApplied: '40.00' }],
+    }));
+    const betaInv = await mkInvoice(beta.id, '250.00');
+    await issueCreditMemo(userId, company.id, issueCreditMemoInput.parse({
+      invoiceId: betaInv, revenueAccountId: returns.id, creditDate: '2026-01-25', amount: '50.00',
+    }));
+
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const asOf = '2026-12-31';
+    const arControl = (await getTrialBalance(userId, company.id, asOf)).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+
+    const acmeStmt = (await getCustomerStatement(userId, company.id, acme.id, '2026-01-01', asOf))!;
+    const betaStmt = (await getCustomerStatement(userId, company.id, beta.id, '2026-01-01', asOf))!;
+    // Each customer's closing is their slice of the control (the per-customer GL-T018).
+    expect(acmeStmt.closingBalance).toBe('60.0000');
+    expect(betaStmt.closingBalance).toBe('200.0000');
+    // …and the slices sum to the control exactly (decimal.js, never JS number).
+    const sum = toMoney(acmeStmt.closingBalance).plus(toMoney(betaStmt.closingBalance));
+    expect(arControl).toBe('260.0000');
+    expect(sum.toFixed(4)).toBe(arControl);
 
     await assertLedgerIntegrity(company.id);
   });

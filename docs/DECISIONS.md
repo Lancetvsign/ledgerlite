@@ -1263,3 +1263,50 @@ status without an explicit row lock (Gate 3 item 6, safe via the implicit UPDATE
 
 A role between BOOKKEEPER and ACCOUNTANT should void some document types but not others (split the
 grant per document); or the deferred idempotency work is scheduled.
+
+---
+
+## ADR-022 — The customer statement is a ledger-derived period statement
+
+**Status** Accepted · **Added by** LL-054 · **Decided by** product owner ·
+Extends [ADR-016](#adr-016--the-ar-aging-report-is-the-subsidiary-ledger).
+
+### Context
+
+A customer statement shows one customer their Accounts Receivable: what they owed at the start of a
+period, what moved it, and what they owe at the end. The LL-054 ticket sketched two things at once —
+an "open items" list (each OPEN invoice's current open balance) *and* a period activity/opening/
+closing statement. Those answer different questions and rest on different foundations.
+
+### Decision
+
+- **A period statement, derived from the customer-tagged A/R ledger lines.** `getCustomerStatement(
+  actorUserId, companyId, customerId, fromDate, toDate)` returns opening balance, dated activity
+  with a running balance, and closing balance — each computed as `Σ(debit − credit)` over the A/R
+  journal lines tagged with that customer (the trial balance's `posting_date <=` point-in-time rule).
+  The signature is a **date range**, not a single `asOf`: an opening balance is only meaningful
+  relative to a period start. Money is a `string` summed with decimal.js; `report.view`; a
+  cross-company `customerId` returns `null` (no existence leak, §6). No schema, no stored balance.
+- **This is exact and historical because A/R is fully customer-tagged.** Every document *and* every
+  reversal posts its A/R line customer-tagged (`reverseEntryCore` preserves the tag), and manual
+  posting to the A/R control is forbidden (ADR-018). So a customer's A/R balance is entirely
+  reconstructible from their tagged lines at any date.
+- **Reconciliation invariant (GL-T021).** A customer's closing balance equals that customer's
+  contribution to the GL A/R control as of `toDate`; summed over all customers it equals the control
+  — the per-customer analogue of the subsidiary⇔control reconciliation (GL-T018).
+- **The "open items" list is deliberately out of scope here.** The *current* open-invoice view for a
+  customer is the aging report's job (LL-046 / ADR-016), which LL-055 will surface. A *historical*
+  open-items-as-of-a-past-date needs the point-in-time aging ADR-016 explicitly deferred.
+
+### Consequences
+
+- The statement reconciles to the aging and the control by construction; it needs no new table,
+  balance column, or migration.
+- A statement can be produced for any past period, correctly, including reversed activity (which
+  appears as its own REVERSAL row and nets its original).
+- A customer's statement does not itemize *which invoices remain open* — that is the aging's role.
+
+### Revisit if
+
+Customers need an itemized open-items section on the statement (add it from the shared open-balance
+derivation), or a historical open-items-as-of-date view is scheduled (needs point-in-time aging).
