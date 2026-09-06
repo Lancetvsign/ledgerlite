@@ -34,3 +34,11 @@ export const PAYMENTS_USER = {
   password: 'synthetic-password-1',
   name: 'Payments Tester',
 };
+
+/** LL-055 reporting-UI specs — its own session, isolated from the others. */
+export const REPORTS_STORAGE = 'tests/e2e/.auth/reports.json';
+export const REPORTS_USER = {
+  email: 'e2e-reports@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Reports Tester',
+};

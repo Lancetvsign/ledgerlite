@@ -64,6 +64,9 @@ export default async function AccountPage() {
           <Link href="/payments" data-testid="payments-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Payments →
           </Link>
+          <Link href="/reports" data-testid="reports-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+            Reports →
+          </Link>
           {roleHasCapability(active.role, 'journal.create') && (
             <Link href="/journal/new" data-testid="new-journal-entry-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
               New Journal Entry →
