@@ -10,6 +10,14 @@ export type InvoiceErrorCode =
   | 'INVOICE_NOT_OPEN'
   /** The invoice has live (non-void) payments applied; void those first (LL-043). */
   | 'INVOICE_HAS_PAYMENTS'
+  /**
+   * The invoice has live (non-void) write-offs or credit memos against it; void
+   * those first (Gate 4 / LL-050 / LL-051). Voiding the invoice reverses its FULL
+   * A/R, but a reduction's Cr A/R would remain — driving the customer's A/R negative
+   * and breaking the aging⇔control reconciliation (GL-T018/T022). Symmetric with
+   * INVOICE_HAS_PAYMENTS.
+   */
+  | 'INVOICE_HAS_ADJUSTMENTS'
   /** Finalizing a zero-total invoice would produce no postable entry. */
   | 'INVOICE_ZERO_TOTAL'
   /** The billed customer does not exist in this company. */

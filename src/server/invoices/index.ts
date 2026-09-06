@@ -521,7 +521,8 @@ export async function finalizeInvoice(
  * Void an OPEN invoice: reverse its posted entry and mark the invoice VOID —
  * atomically, in one transaction. The original entry is never edited (invariant
  * 3); the reversal is a new entry that nets it to exactly zero on every account
- * (ADR-010). Authorized at `invoice.post`, same as finalize.
+ * (ADR-010). Authorized at `invoice.void` (LEDGER_WRITERS) — a void is a ledger
+ * correction, distinct from create/post (LL-053 / ADR-021).
  */
 export async function voidInvoice(
   actorUserId: string,
@@ -582,6 +583,28 @@ export async function voidInvoice(
       throw new InvoiceError(
         'INVOICE_HAS_PAYMENTS',
         'Void the payments applied to this invoice before voiding it.',
+      );
+    }
+
+    // Symmetric with payments (Gate 4): an invoice with LIVE (non-void) write-offs
+    // or credit memos cannot be voided either. Voiding reverses the invoice's FULL
+    // A/R, but each reduction's Cr A/R would remain — driving the customer's A/R
+    // negative and breaking the aging⇔control tie (GL-T018/T022), since a VOID
+    // invoice leaves the aging population while its reductions' A/R credits do not.
+    // Void the write-offs / credit memos first. These are the two reduction sources
+    // added in Sprint 5 (LL-050/LL-051); they and payments are the only movers of an
+    // invoice's open balance (open-balance.ts), so this guard is now complete.
+    const liveAdjustments = await tx.execute<{ n: string }>(sql`
+      select (
+        (select count(*) from writeoffs w
+           where w.company_id = ${companyId} and w.invoice_id = ${invoiceId} and w.status <> 'VOID')
+        + (select count(*) from credit_memos cm
+           where cm.company_id = ${companyId} and cm.invoice_id = ${invoiceId} and cm.status <> 'VOID')
+      )::text n`);
+    if (Number(liveAdjustments.rows[0]?.n ?? '0') > 0) {
+      throw new InvoiceError(
+        'INVOICE_HAS_ADJUSTMENTS',
+        'Void the write-offs and credit memos applied to this invoice before voiding it.',
       );
     }
 
