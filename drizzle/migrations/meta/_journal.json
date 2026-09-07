@@ -155,6 +155,13 @@
       "when": 1788720145118,
       "tag": "0021_spooky_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788782004566,
+      "tag": "0022_known_silver_samurai",
+      "breakpoints": true
     }
   ]
 }

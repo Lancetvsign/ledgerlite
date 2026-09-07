@@ -70,6 +70,9 @@ export const companyCounters = pgTable('company_counters', {
    * atomic increment at finalize, so a rolled-back finalize may skip a number.
    */
   nextInvoiceNumber: bigint('next_invoice_number', { mode: 'number' }).notNull().default(1),
+  /** Per-company bill-number counter (LL-061) — same gaps-allowed atomic increment
+   *  at finalize as invoice numbers, the A/P mirror. */
+  nextBillNumber: bigint('next_bill_number', { mode: 'number' }).notNull().default(1),
 });
 
 export const journalEntries = pgTable(

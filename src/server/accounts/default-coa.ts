@@ -47,7 +47,7 @@ export const STANDARD_CHART: readonly DefaultAccount[] = [
   { accountNumber: '1010', name: 'Savings', accountType: 'ASSET', accountSubtype: 'bank' },
   { accountNumber: '1200', name: 'Undeposited Funds', accountType: 'ASSET', accountSubtype: 'current_asset' },
   // Liabilities
-  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable' },
+  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable', systemAccountType: 'ACCOUNTS_PAYABLE' },
   { accountNumber: '2100', name: 'Credit Card', accountType: 'LIABILITY', accountSubtype: 'credit_card' },
   { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability', systemAccountType: 'SALES_TAX_PAYABLE' },
   // Equity
