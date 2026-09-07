@@ -443,11 +443,11 @@ export async function finalizeBill(
  * Authorized at `bill.void` (LEDGER_WRITERS) — a void is a ledger correction (LL-053).
  *
  * NOTE — reduction guard (Gate-4 lesson, memory `ledgerlite-ar-reduction-sources`):
- * bills have no reductions yet, so there is nothing to strand. When LL-062 (bill
- * payments) and LL-063 (vendor credits) land, this MUST gain a symmetric guard —
- * refuse the void when live bill-payments or vendor-credits reference the bill
- * (BILL_HAS_PAYMENTS / BILL_HAS_ADJUSTMENTS) — or voiding a partially-reduced bill
- * would drive the vendor's A/P negative and break the aging⇔control tie.
+ * voiding a bill reverses its FULL A/P, so it must refuse when a live reduction would
+ * be stranded. Bill payments (BILL_HAS_PAYMENTS, LL-062) and vendor credits
+ * (BILL_HAS_ADJUSTMENTS, LL-063) are the ONLY movers of a bill's open balance
+ * (bill-open-balance.ts), so guarding both makes the void complete — the A/P mirror of
+ * `voidInvoice`'s INVOICE_HAS_PAYMENTS + INVOICE_HAS_ADJUSTMENTS.
  */
 export async function voidBill(
   actorUserId: string,
@@ -497,9 +497,7 @@ export async function voidBill(
     // ledgerlite-ar-reduction-sources): a bill with LIVE (non-void) bill payments
     // cannot be voided — voiding reverses the bill's FULL A/P while each payment's
     // Dr A/P would remain, driving the vendor's A/P negative and breaking the
-    // aging⇔control tie. Void the bill payments first. LL-063 extends this to vendor
-    // credits (BILL_HAS_ADJUSTMENTS); together they are the only movers of a bill's
-    // open balance (bill-open-balance.ts).
+    // aging⇔control tie. Void the bill payments first.
     const livePayments = await tx.execute<{ n: string }>(sql`
       select count(*)::text n
       from bill_payment_applications bpa
@@ -507,6 +505,18 @@ export async function voidBill(
       where bpa.company_id = ${companyId} and bpa.bill_id = ${billId} and bp.status <> 'VOID'`);
     if (Number(livePayments.rows[0]?.n ?? '0') > 0) {
       throw new BillError('BILL_HAS_PAYMENTS', 'Void the payments applied to this bill before voiding it.');
+    }
+
+    // Symmetric with INVOICE_HAS_ADJUSTMENTS (LL-063): a bill with LIVE (non-void)
+    // vendor credits cannot be voided either — the other mover of a bill's open
+    // balance (bill-open-balance.ts). Void the vendor credits first. With both guards
+    // the void is complete: no live reduction can be stranded.
+    const liveCredits = await tx.execute<{ n: string }>(sql`
+      select count(*)::text n
+      from vendor_credits vc
+      where vc.company_id = ${companyId} and vc.bill_id = ${billId} and vc.status <> 'VOID'`);
+    if (Number(liveCredits.rows[0]?.n ?? '0') > 0) {
+      throw new BillError('BILL_HAS_ADJUSTMENTS', 'Void the vendor credits applied to this bill before voiding it.');
     }
 
     const entryRows = await tx

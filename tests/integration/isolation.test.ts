@@ -19,6 +19,7 @@ import { getBillPayment, listBillPayments, payBill } from '@/server/bill-payment
 import { createBill, finalizeBill, getBill, listBills, updateBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { getCreditMemo, issueCreditMemo, listCreditMemos, voidCreditMemo } from '@/server/credit-memos';
+import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit } from '@/server/vendor-credits';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
@@ -30,6 +31,7 @@ import { createInvoiceInput } from '@/validation/invoice';
 import { createBillInput } from '@/validation/bill';
 import { payBillInput } from '@/validation/bill-payment';
 import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
+import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 import { ensureAppUser } from '@/server/users';
@@ -337,12 +339,18 @@ const REGISTRY: IsolationDescriptor[] = [
       const vendor = await createVendor(victim.ownerUserId, victim.companyId, createVendorInput.parse({ name: 'Victim Vend BP' }));
       const expense = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Expense BP', accountType: 'EXPENSE' }));
       const cash = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Cash BP', accountType: 'ASSET' }));
-      // The harness's company uses the 'system-only' chart (A/R only, no A/P). Tag a
-      // liability account as the A/P control so finalizeBill / payBill can resolve it.
-      const ap = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim A/P BP', accountType: 'LIABILITY' }));
+      // The harness's company uses the 'system-only' chart (A/R only, no A/P) and every
+      // descriptor attacks the SAME victim, so another A/P descriptor may already have
+      // tagged an A/P control and (company_id, system_account_type) is UNIQUE. Resolve-or-
+      // create so this seed is order-independent, then finalizeBill / payBill can resolve it.
       const db = await getTestDb();
       const { sql: rawSql } = await import('drizzle-orm');
-      await db.execute(rawSql`update accounts set system_account_type = 'ACCOUNTS_PAYABLE' where id = ${ap.id}`);
+      const existingAp = await db.execute<{ id: string }>(
+        rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type = 'ACCOUNTS_PAYABLE' limit 1`);
+      if (existingAp.rows[0] === undefined) {
+        const ap = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim A/P BP', accountType: 'LIABILITY' }));
+        await db.execute(rawSql`update accounts set system_account_type = 'ACCOUNTS_PAYABLE' where id = ${ap.id}`);
+      }
       const { bill } = await createBill(victim.ownerUserId, victim.companyId, createBillInput.parse({
         vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: expense.id, unitPrice: '100.0000' }],
       }));
@@ -504,6 +512,54 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'void the victim credit memo (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => voidCreditMemo(attacker, victim.companyId, recordId, voidCreditMemoInput.parse({})),
+      },
+    ],
+  },
+  {
+    table: 'vendor_credits',
+    seed: async (victim) => {
+      const vendor = await createVendor(victim.ownerUserId, victim.companyId,
+        createVendorInput.parse({ name: 'Victim VC Vendor' }));
+      const supplies = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Supplies VC', accountType: 'EXPENSE' }));
+      // The harness's company uses the 'system-only' chart (A/R only, no A/P) and every
+      // descriptor attacks the SAME victim — the bill_payments descriptor may already
+      // have tagged an A/P control, and (company_id, system_account_type) is UNIQUE. So
+      // resolve-or-create: reuse the existing A/P, else tag a liability as one, so
+      // finalizeBill / issueVendorCredit can resolve it.
+      const db = await getTestDb();
+      const { sql: rawSql } = await import('drizzle-orm');
+      const existingAp = await db.execute<{ id: string }>(
+        rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type = 'ACCOUNTS_PAYABLE' limit 1`);
+      if (existingAp.rows[0] === undefined) {
+        const ap = await createAccount(victim.ownerUserId, victim.companyId,
+          createAccountInput.parse({ name: 'Victim A/P VC', accountType: 'LIABILITY' }));
+        await db.execute(rawSql`update accounts set system_account_type = 'ACCOUNTS_PAYABLE' where id = ${ap.id}`);
+      }
+      const { bill } = await createBill(victim.ownerUserId, victim.companyId, createBillInput.parse({
+        vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: supplies.id, unitPrice: '100.0000' }],
+      }));
+      await finalizeBill(victim.ownerUserId, victim.companyId, bill.id);
+      const credit = await issueVendorCredit(victim.ownerUserId, victim.companyId, issueVendorCreditInput.parse({
+        billId: bill.id, expenseAccountId: supplies.id, creditDate: '2026-01-15', amount: '100.0000',
+      }));
+      return { recordId: credit.id };
+    },
+    attempts: [
+      {
+        operation: 'list vendor credits (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listVendorCredits(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim vendor credit',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getVendorCredit(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'void the victim vendor credit (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => voidVendorCredit(attacker, victim.companyId, recordId, voidVendorCreditInput.parse({})),
       },
     ],
   },

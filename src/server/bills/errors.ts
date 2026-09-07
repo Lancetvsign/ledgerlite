@@ -12,9 +12,17 @@ export type BillErrorCode =
    * The bill has live (non-void) bill payments applied; void those first (LL-062).
    * Voiding the bill reverses its FULL A/P, but a payment's Dr A/P would remain,
    * driving the vendor's A/P negative and breaking the aging⇔control tie — the A/P
-   * twin of INVOICE_HAS_PAYMENTS. (LL-063 extends this to vendor credits.)
+   * twin of INVOICE_HAS_PAYMENTS.
    */
   | 'BILL_HAS_PAYMENTS'
+  /**
+   * The bill has live (non-void) vendor credits applied; void those first (LL-063).
+   * Same hazard as BILL_HAS_PAYMENTS: voiding the bill reverses its FULL A/P while
+   * each credit's Dr A/P would remain — the A/P twin of INVOICE_HAS_ADJUSTMENTS.
+   * Payments and vendor credits are the only movers of a bill's open balance, so
+   * with both guards the void is complete.
+   */
+  | 'BILL_HAS_ADJUSTMENTS'
   /** Finalizing a zero-total bill would produce no postable entry. */
   | 'BILL_ZERO_TOTAL'
   /** The vendor does not exist in this company. */

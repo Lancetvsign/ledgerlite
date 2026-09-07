@@ -13,3 +13,4 @@ export * from './credit-memos';
 export * from './vendors';
 export * from './bills';
 export * from './bill-payments';
+export * from './vendor-credits';
