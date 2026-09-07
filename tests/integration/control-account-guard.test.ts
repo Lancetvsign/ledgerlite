@@ -169,6 +169,28 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     expect(Number(cnt.rows[0]?.n)).toBe(1); // committed — an INVOICE-source A/R line is allowed
     await assertLedgerIntegrity(c.companyId);
   });
+
+  it('rejects a raw-SQL manual (JOURNAL_ENTRY) line into Accounts Payable (LL-062 — generalized guard)', async () => {
+    const c = await setup();
+    const apId = await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE');
+    const db = await getTestDb();
+    // The generalized 0023 trigger now guards A/P too — a manual line into it is refused,
+    // structurally, exactly like A/R.
+    await expectRejectsOnChain(
+      db.transaction(async (tx) => {
+        const r = await tx.execute<{ id: string }>(sql`
+          insert into journal_entries
+            (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
+          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95200)
+          returning id`);
+        await tx.execute(sql`
+          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
+          values (${r.rows[0]!.id}, ${c.companyId}, ${apId}, 1, '1.0000', '0.0000')`);
+      }),
+      /CONTROL_ACCOUNT_MANUAL_POST/,
+    );
+    await assertLedgerIntegrity(c.companyId);
+  });
 });
 
 describe('A/R control-account guard through the service (typed error; A/R-only scope)', () => {

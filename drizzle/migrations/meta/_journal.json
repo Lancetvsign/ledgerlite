@@ -162,6 +162,13 @@
       "when": 1788782004566,
       "tag": "0022_known_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788787773151,
+      "tag": "0023_busy_spitfire",
+      "breakpoints": true
     }
   ]
 }

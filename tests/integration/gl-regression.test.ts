@@ -23,6 +23,7 @@ import { toMoney } from '@/lib/decimal';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
+import { payBill, voidBillPayment } from '@/server/bill-payments';
 import { createBill, finalizeBill, voidBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, voidInvoice } from '@/server/invoices';
 import { createVendor } from '@/server/vendors';
@@ -48,6 +49,7 @@ import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/jo
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 import { createBillInput, voidBillInput } from '@/validation/bill';
+import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { createVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -727,6 +729,42 @@ describe('GL regression suite (release-blocking)', () => {
     // Voiding the bill reverses the entry: the payable returns to zero.
     await voidBill(userId, company.id, bill.id, voidBillInput.parse({ reversalDate: '2026-01-20' }));
     expect(await apNow()).toBe('0.0000');
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T024 — a bill payment reduces the A/P control; void restores it (LL-062)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Bill Pay Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+    const rent = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL062 Rent', accountType: 'EXPENSE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL062 Cash', accountType: 'ASSET' }));
+    const db = await getTestDb();
+    const apId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_PAYABLE'`)).rows[0]!.id;
+    const apNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === apId)?.balance ?? '0.0000';
+
+    const { bill } = await createBill(userId, company.id, createBillInput.parse({
+      vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: rent.id, unitPrice: '300.00' }],
+    }));
+    await finalizeBill(userId, company.id, bill.id);
+    expect(await apNow()).toBe('300.0000');
+
+    // Pay 120 of it → A/P drops to 180.
+    const { payment } = await payBill(userId, company.id, payBillInput.parse({
+      vendorId: vendor.id, paymentDate: '2026-01-20', cashAccountId: cash.id,
+      applications: [{ billId: bill.id, amountApplied: '120.00' }],
+    }));
+    expect(await apNow()).toBe('180.0000');
+
+    // Void the payment → the payable returns to 300.
+    await voidBillPayment(userId, company.id, payment.id, voidBillPaymentInput.parse({}));
+    expect(await apNow()).toBe('300.0000');
 
     await assertLedgerIntegrity(company.id);
   });
