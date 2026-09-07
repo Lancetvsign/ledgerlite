@@ -493,6 +493,22 @@ export async function voidBill(
       throw new BillError('BILL_NOT_OPEN', 'Only an open bill can be voided.');
     }
 
+    // Symmetric with INVOICE_HAS_PAYMENTS (Gate-4 lesson, memory
+    // ledgerlite-ar-reduction-sources): a bill with LIVE (non-void) bill payments
+    // cannot be voided — voiding reverses the bill's FULL A/P while each payment's
+    // Dr A/P would remain, driving the vendor's A/P negative and breaking the
+    // aging⇔control tie. Void the bill payments first. LL-063 extends this to vendor
+    // credits (BILL_HAS_ADJUSTMENTS); together they are the only movers of a bill's
+    // open balance (bill-open-balance.ts).
+    const livePayments = await tx.execute<{ n: string }>(sql`
+      select count(*)::text n
+      from bill_payment_applications bpa
+      join bill_payments bp on bp.company_id = bpa.company_id and bp.id = bpa.bill_payment_id
+      where bpa.company_id = ${companyId} and bpa.bill_id = ${billId} and bp.status <> 'VOID'`);
+    if (Number(livePayments.rows[0]?.n ?? '0') > 0) {
+      throw new BillError('BILL_HAS_PAYMENTS', 'Void the payments applied to this bill before voiding it.');
+    }
+
     const entryRows = await tx
       .select({ id: schema.journalEntries.id })
       .from(schema.journalEntries)

@@ -8,6 +8,13 @@ export type BillErrorCode =
   | 'BILL_NOT_DRAFT'
   /** Only an OPEN bill may be voided (DRAFT is discarded, not voided; PAID/VOID cannot). */
   | 'BILL_NOT_OPEN'
+  /**
+   * The bill has live (non-void) bill payments applied; void those first (LL-062).
+   * Voiding the bill reverses its FULL A/P, but a payment's Dr A/P would remain,
+   * driving the vendor's A/P negative and breaking the aging⇔control tie — the A/P
+   * twin of INVOICE_HAS_PAYMENTS. (LL-063 extends this to vendor credits.)
+   */
+  | 'BILL_HAS_PAYMENTS'
   /** Finalizing a zero-total bill would produce no postable entry. */
   | 'BILL_ZERO_TOTAL'
   /** The vendor does not exist in this company. */

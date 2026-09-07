@@ -15,7 +15,8 @@ import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } f
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createVendor, deactivateVendor, listVendors, updateVendor } from '@/server/vendors';
-import { createBill, getBill, listBills, updateBill } from '@/server/bills';
+import { getBillPayment, listBillPayments, payBill } from '@/server/bill-payments';
+import { createBill, finalizeBill, getBill, listBills, updateBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { getCreditMemo, issueCreditMemo, listCreditMemos, voidCreditMemo } from '@/server/credit-memos';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
@@ -27,6 +28,7 @@ import { createCustomerInput, updateCustomerInput } from '@/validation/customer'
 import { createVendorInput, updateVendorInput } from '@/validation/vendor';
 import { createInvoiceInput } from '@/validation/invoice';
 import { createBillInput } from '@/validation/bill';
+import { payBillInput } from '@/validation/bill-payment';
 import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
@@ -324,6 +326,70 @@ const REGISTRY: IsolationDescriptor[] = [
             rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
           const rows = await db.execute(
             rawSql`select id from bill_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
+  {
+    table: 'bill_payments',
+    seed: async (victim) => {
+      const vendor = await createVendor(victim.ownerUserId, victim.companyId, createVendorInput.parse({ name: 'Victim Vend BP' }));
+      const expense = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Expense BP', accountType: 'EXPENSE' }));
+      const cash = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Cash BP', accountType: 'ASSET' }));
+      // The harness's company uses the 'system-only' chart (A/R only, no A/P). Tag a
+      // liability account as the A/P control so finalizeBill / payBill can resolve it.
+      const ap = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim A/P BP', accountType: 'LIABILITY' }));
+      const db = await getTestDb();
+      const { sql: rawSql } = await import('drizzle-orm');
+      await db.execute(rawSql`update accounts set system_account_type = 'ACCOUNTS_PAYABLE' where id = ${ap.id}`);
+      const { bill } = await createBill(victim.ownerUserId, victim.companyId, createBillInput.parse({
+        vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: expense.id, unitPrice: '100.0000' }],
+      }));
+      await finalizeBill(victim.ownerUserId, victim.companyId, bill.id);
+      const { payment } = await payBill(victim.ownerUserId, victim.companyId, payBillInput.parse({
+        vendorId: vendor.id, paymentDate: '2026-01-20', cashAccountId: cash.id,
+        applications: [{ billId: bill.id, amountApplied: '100.0000' }],
+      }));
+      return { recordId: payment.id };
+    },
+    attempts: [
+      {
+        operation: 'list bill payments (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listBillPayments(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim bill payment',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getBillPayment(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'create a bill payment in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          payBill(attacker, victim.companyId, payBillInput.parse({
+            vendorId: '00000000-0000-0000-0000-000000000000', paymentDate: '2026-01-20',
+            cashAccountId: '00000000-0000-0000-0000-000000000000',
+            applications: [{ billId: '00000000-0000-0000-0000-000000000000', amountApplied: '1' }],
+          })),
+      },
+    ],
+  },
+  {
+    table: 'bill_payment_applications',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'bill payment applications are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from bill_payment_applications where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
           return rows.rows;
         },
       },
