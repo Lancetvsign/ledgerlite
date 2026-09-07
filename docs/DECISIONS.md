@@ -1377,3 +1377,56 @@ ADR-019's deferral.
 
 Unapplied vendor credit / vendor refunds are needed (extend the subsidiary to carry credit
 balances); or a distinct terminal status is wanted for reporting; or multi-currency arrives.
+
+---
+
+## ADR-024 — A/P aging and the vendor statement reconcile to the A/P control (A/P mirror of ADR-016/022)
+
+**Status** Accepted · **Added by** LL-064 · **Decided by** product owner
+
+### Context
+
+A/P had documents (bills, payments, vendor credits) but no **subsidiary reporting**: no aging of
+open bills, no per-vendor statement. These are the A/P analogues of the A/R aging (ADR-016) and the
+customer statement (ADR-022), and — because A/P is now structurally locked to document movement
+(ADR-018/023) and every A/P line is vendor-tagged — they can be derived exactly, with the same
+subsidiary⇔control reconciliation A/R enjoys.
+
+### Decision
+
+Two **pure reporting services** (no schema, no stored balance — invariant 2), gated on
+`report.view`, read through the HTTP client (`getDb()`):
+
+- **`getApAging(asOf)`** — each OPEN bill's open balance (`total − Σ non-void bill-payments +
+  vendor-credits`, the shared `bill-open-balance.ts` derivation) bucketed by age per vendor. Its
+  **grand total equals the derived A/P control** (the A/P analogue of GL-T018), age-independent.
+- **`getVendorStatement(vendorId, fromDate, toDate)`** — opening / dated activity with a running
+  balance / closing, from the vendor-tagged A/P journal lines. A/P is credit-natural, so a vendor's
+  balance is `Σ(credit − debit)` — the sign **mirror** of the customer statement's `debit − credit`.
+  Statement columns are `charge` (a credit to A/P — a bill) and `payment` (a debit to A/P — a
+  payment or vendor credit). A vendor's closing is that vendor's slice of the A/P control as of
+  `toDate`; summed over all vendors it equals the control (every A/P line is vendor-tagged and
+  manual A/P posting is forbidden, so the decomposition is complete).
+
+Both reconciliations — aging grand total == control, and Σ vendor-statement closings == control —
+are asserted together across a bill → payment → credit → void lifecycle as **GL-T026** (the ticket
+spec's "GL-T023" was a stale reference; GL-T023–T025 already exist).
+
+The A/R and A/P agings share their bucket cutoffs and decimal.js accumulation, extracted to
+`src/server/reports/aging.ts` so the two subsidiaries cannot drift (the same single-source
+discipline as `bill-open-balance.ts`). A cross-company / unknown `vendorId` returns `null` (no leak,
+§6); `asOf` / date ranges are validated calendar dates.
+
+### Consequences
+
+- The full A/P subsidiary now reconciles to the GL control both in aggregate (aging) and per vendor
+  (statement), by construction — no new table, balance column, or migration.
+- A vendor statement is exact for any past period, including reversed activity (a REVERSAL row nets
+  its original, because reversals preserve the vendor tag).
+- Aging bucket logic lives once; a change to the cutoffs moves both A/R and A/P together.
+
+### Revisit if
+
+A historical open-items-as-of-a-past-date aging is scheduled (needs point-in-time aging, still
+deferred per ADR-016); or unapplied vendor credit / credit balances arrive (ADR-023 revisit); or
+multi-currency arrives.
