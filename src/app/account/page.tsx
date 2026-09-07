@@ -58,11 +58,20 @@ export default async function AccountPage() {
           <Link href="/customers" data-testid="customers-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Customers →
           </Link>
+          <Link href="/vendors" data-testid="vendors-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+            Vendors →
+          </Link>
           <Link href="/invoices" data-testid="invoices-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Invoices →
           </Link>
           <Link href="/payments" data-testid="payments-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Payments →
+          </Link>
+          <Link href="/bills" data-testid="bills-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+            Bills →
+          </Link>
+          <Link href="/bill-payments" data-testid="bill-payments-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+            Bill Payments →
           </Link>
           <Link href="/reports" data-testid="reports-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Reports →
