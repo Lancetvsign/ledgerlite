@@ -44,6 +44,9 @@ export const CAPABILITIES = [
   'bill_payment.view',
   'bill_payment.create',
   'bill_payment.void',
+  'vendor_credit.view',
+  'vendor_credit.create',
+  'vendor_credit.void',
   'reconciliation.view',
   'reconciliation.complete',
   'report.view',
@@ -129,6 +132,11 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   'bill_payment.view': EVERYONE,
   'bill_payment.create': ALL_WRITERS,
   'bill_payment.void': LEDGER_WRITERS,
+  // Vendor credits are day-to-day A/P work (the mirror of A/R credit memos): any
+  // writer issues them; voiding one is a ledger correction, so LEDGER_WRITERS (LL-063).
+  'vendor_credit.view': EVERYONE,
+  'vendor_credit.create': ALL_WRITERS,
+  'vendor_credit.void': LEDGER_WRITERS,
   'reconciliation.view': EVERYONE,
   'reconciliation.complete': ALL_WRITERS,
   'report.view': EVERYONE,

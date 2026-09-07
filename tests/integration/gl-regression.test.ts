@@ -27,6 +27,7 @@ import { payBill, voidBillPayment } from '@/server/bill-payments';
 import { createBill, finalizeBill, voidBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, voidInvoice } from '@/server/invoices';
 import { createVendor } from '@/server/vendors';
+import { issueVendorCredit, voidVendorCredit } from '@/server/vendor-credits';
 import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
@@ -50,6 +51,7 @@ import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
 import { createBillInput, voidBillInput } from '@/validation/bill';
 import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
+import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -764,6 +766,40 @@ describe('GL regression suite (release-blocking)', () => {
 
     // Void the payment → the payable returns to 300.
     await voidBillPayment(userId, company.id, payment.id, voidBillPaymentInput.parse({}));
+    expect(await apNow()).toBe('300.0000');
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T025 — a vendor credit reduces the A/P control; void restores it (LL-063)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Vendor Credit Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+    const supplies = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL063 Supplies', accountType: 'EXPENSE' }));
+    const db = await getTestDb();
+    const apId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_PAYABLE'`)).rows[0]!.id;
+    const apNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === apId)?.balance ?? '0.0000';
+
+    const { bill } = await createBill(userId, company.id, createBillInput.parse({
+      vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: supplies.id, unitPrice: '300.00' }],
+    }));
+    await finalizeBill(userId, company.id, bill.id);
+    expect(await apNow()).toBe('300.0000');
+
+    // Credit 120 of it (a return) → Dr A/P / Cr Supplies → A/P drops to 180.
+    const credit = await issueVendorCredit(userId, company.id, issueVendorCreditInput.parse({
+      billId: bill.id, expenseAccountId: supplies.id, creditDate: '2026-01-20', amount: '120.00',
+    }));
+    expect(await apNow()).toBe('180.0000');
+
+    // Void the credit → the payable returns to 300.
+    await voidVendorCredit(userId, company.id, credit.id, voidVendorCreditInput.parse({}));
     expect(await apNow()).toBe('300.0000');
 
     await assertLedgerIntegrity(company.id);

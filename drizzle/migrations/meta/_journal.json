@@ -169,6 +169,13 @@
       "when": 1788787773151,
       "tag": "0023_busy_spitfire",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788792291703,
+      "tag": "0024_handy_thor",
+      "breakpoints": true
     }
   ]
 }

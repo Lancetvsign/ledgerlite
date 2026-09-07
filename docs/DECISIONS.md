@@ -1319,3 +1319,61 @@ closing statement. Those answer different questions and rest on different founda
 
 Customers need an itemized open-items section on the statement (add it from the shared open-balance
 derivation), or a historical open-items-as-of-date view is scheduled (needs point-in-time aging).
+
+---
+
+## ADR-023 — Vendor credits are applied to a specific bill (the A/P mirror of ADR-019)
+
+**Status** Accepted · **Added by** LL-063 · **Decided by** product owner
+
+### Context
+
+A/P could be reduced by a bill payment (ADR-018/LL-062) but not by a **vendor credit** (debit
+memo) — a return or allowance that reduces what we owe a vendor without cash. It is the last A/P
+reduction source and the structural mirror of the customer credit memo (ADR-019). The Gate-4
+lesson (memory `ledgerlite-ar-reduction-sources`) is explicit that adding a reduction source must
+extend BOTH the shared open-balance derivation AND the document's void guard, or the aging⇔control
+tie breaks; LL-062 deliberately left `voidBill` with only `BILL_HAS_PAYMENTS`, and this ADR closes
+the loop.
+
+### Decision
+
+**A vendor credit targets ONE open bill** and posts **Dr Accounts Payable (vendor-tagged) / Cr a
+caller-supplied EXPENSE/contra account**, through `LedgerService`, source-typed `VENDOR_CREDIT`,
+source-once, voidable by reversal (ADR-010) — the exact mirror of the credit memo (ADR-019), with
+the posting direction flipped (A/P is a credit-natural liability, so the reduction is the DEBIT
+leg). It **reduces the bill's open balance via the shared derivation**:
+`src/server/reports/bill-open-balance.ts` now sums non-void bill payments AND vendor credits, so
+the aging (LL-064), `listOpenBills`, and every over-application guard see it automatically and the
+A/P aging⇔control reconciliation holds — extended as **GL-T025**. A vendor credit that clears the
+bill marks it PAID. The 0023 control-account guard already permits `VENDOR_CREDIT` to touch A/P (it
+is not `JOURNAL_ENTRY`), so **no trigger change** — a pure additive migration (0024).
+
+The expense account is **caller-supplied** (validated in-company / ACTIVE / EXPENSE), mirroring the
+credit memo's REVENUE requirement. Authorization is `vendor_credit.create` / `vendor_credit.view` /
+`vendor_credit.void` (ALL_WRITERS / EVERYONE / LEDGER_WRITERS).
+
+`voidBill` gains **`BILL_HAS_ADJUSTMENTS`**: it already refused a bill with live payments, and now
+also refuses one with live vendor credits. Payments and vendor credits are the ONLY movers of a
+bill's open balance, so with both guards the void is complete — the A/P twin of `voidInvoice`'s
+`INVOICE_HAS_PAYMENTS` + `INVOICE_HAS_ADJUSTMENTS` (ADR-017/019).
+
+**Deferred (out of scope, a follow-up with its own ADR):** *unapplied vendor credit* (a credit not
+tied to a bill) and *vendor refunds* — both need the A/P subsidiary to carry credit balances (so it
+still reconciles when a vendor's net A/P is below their open bills or negative), the A/P analogue of
+ADR-019's deferral.
+
+### Consequences
+
+- Vendor credits are the second A/P reduction source, both flowing through the one shared
+  derivation; a payment and a credit each respect the other's reductions (no over-application
+  across them), and a bill cannot be voided out from under a live reduction.
+- A fully credited bill reads as **PAID** (the same reporting nicety as ADR-019; a distinct
+  `CREDITED` status is a later option).
+- The A/P reduction-source loop is now closed exactly like A/R: derivation + void guard + GL
+  regression + ADR all move together.
+
+### Revisit if
+
+Unapplied vendor credit / vendor refunds are needed (extend the subsidiary to carry credit
+balances); or a distinct terminal status is wanted for reporting; or multi-currency arrives.

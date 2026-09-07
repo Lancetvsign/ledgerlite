@@ -17,15 +17,15 @@ type Executor = PoolDatabase | Parameters<Parameters<PoolDatabase['transaction']
  * `open-balance.ts`).
  *
  * An OPEN bill's open balance is `bill.total − reductions`, where reductions are the
- * NON-VOID bill payments applied to it (and, once LL-063 lands, vendor credits). The
- * A/P aging subsidiary (`ap-aging`, LL-064), the bill-payment UI (`listOpenBills`),
- * and the over-application guard all derive open balance the same way — so this lives
+ * NON-VOID bill payments applied to it AND non-void vendor credits against it (LL-063).
+ * The A/P aging subsidiary (`ap-aging`, LL-064), the bill-payment UI (`listOpenBills`),
+ * and the over-application guards all derive open balance the same way — so this lives
  * ONCE, here, and they cannot drift. Each new A/P reduction source (vendor credits, …)
  * must be added here and nowhere else (memory `ledgerlite-ar-reduction-sources`).
  *
- * Correlated subquery, deliberately NOT a LEFT JOIN: joining the reduction table would
- * multiply rows and overstate the sum. Nothing is stored (invariant 2); PostgreSQL does
- * the money aggregation.
+ * Correlated subqueries, deliberately NOT LEFT JOINs: joining these reduction tables
+ * would multiply rows (a Cartesian fan-out) and overstate the sums. Nothing is stored
+ * (invariant 2); PostgreSQL does the money aggregation.
  */
 
 /**
@@ -39,6 +39,11 @@ export function billReductionsExpr(companyId: string): SQL {
       from bill_payment_applications bpa
       join bill_payments bp on bp.company_id = bpa.company_id and bp.id = bpa.bill_payment_id
       where bpa.company_id = ${companyId} and bpa.bill_id = b.id and bp.status <> 'VOID'
+    ), 0)
+    + coalesce((
+      select sum(vc.amount)
+      from vendor_credits vc
+      where vc.company_id = ${companyId} and vc.bill_id = b.id and vc.status <> 'VOID'
     ), 0)
   )`;
 }
@@ -59,6 +64,11 @@ export async function billReductionsTotal(
         from bill_payment_applications bpa
         join bill_payments bp on bp.company_id = bpa.company_id and bp.id = bpa.bill_payment_id
         where bpa.company_id = ${companyId} and bpa.bill_id = ${billId} and bp.status <> 'VOID'
+      ), 0)
+      + coalesce((
+        select sum(vc.amount)
+        from vendor_credits vc
+        where vc.company_id = ${companyId} and vc.bill_id = ${billId} and vc.status <> 'VOID'
       ), 0)
     )::text as reductions`);
   return toMoney(rows.rows[0]?.reductions ?? '0');
