@@ -23,6 +23,8 @@ export const CAPABILITIES = [
   'journal.post',
   'customer.view',
   'customer.manage',
+  'vendor.view',
+  'vendor.manage',
   'invoice.view',
   'invoice.create',
   'invoice.post',
@@ -89,6 +91,10 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   // Customers are day-to-day A/R work (like invoices): any writer manages them.
   'customer.view': EVERYONE,
   'customer.manage': ALL_WRITERS,
+  // Vendors are the A/P mirror of customers — day-to-day work, any writer manages
+  // them (LL-060).
+  'vendor.view': EVERYONE,
+  'vendor.manage': ALL_WRITERS,
   'invoice.view': EVERYONE,
   'invoice.create': ALL_WRITERS,
   'invoice.post': ALL_WRITERS,
