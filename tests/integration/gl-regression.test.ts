@@ -39,7 +39,7 @@ import {
   reverseJournalEntry,
 } from '@/server/ledger';
 import { closePeriod } from '@/server/periods';
-import { getArAging, getCustomerStatement, getTrialBalance } from '@/server/reports';
+import { getApAging, getArAging, getCustomerStatement, getTrialBalance, getVendorStatement } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -801,6 +801,62 @@ describe('GL regression suite (release-blocking)', () => {
     // Void the credit → the payable returns to 300.
     await voidVendorCredit(userId, company.id, credit.id, voidVendorCreditInput.parse({}));
     expect(await apNow()).toBe('300.0000');
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T026 — A/P aging and vendor statements decompose the A/P control across a lifecycle (LL-064)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL AP Subsidiary Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+    const supplies = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL064 Supplies', accountType: 'EXPENSE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL064 Cash', accountType: 'ASSET' }));
+    const db = await getTestDb();
+    const apId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_PAYABLE'`)).rows[0]!.id;
+    const apNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === apId)?.balance ?? '0.0000';
+
+    // The subsidiary⇔control tie AND the per-vendor decomposition must hold at every step.
+    const reconciles = async (): Promise<string> => {
+      const control = await apNow();
+      const aging = await getApAging(userId, company.id, '2026-12-31');
+      expect(aging.totals.total).toBe(control); // aging grand total == A/P control
+      const stmt = (await getVendorStatement(userId, company.id, vendor.id, '2026-01-01', '2026-12-31'))!;
+      expect(stmt.closingBalance).toBe(control); // the sole vendor's closing == the whole control
+      return control;
+    };
+
+    const { bill } = await createBill(userId, company.id, createBillInput.parse({
+      vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: supplies.id, unitPrice: '300.00' }],
+    }));
+    await finalizeBill(userId, company.id, bill.id);
+    expect(await reconciles()).toBe('300.0000');
+
+    // Pay 120 → 180.
+    const { payment } = await payBill(userId, company.id, payBillInput.parse({
+      vendorId: vendor.id, paymentDate: '2026-01-20', cashAccountId: cash.id,
+      applications: [{ billId: bill.id, amountApplied: '120.00' }],
+    }));
+    expect(await reconciles()).toBe('180.0000');
+
+    // Credit 60 → 120.
+    const credit = await issueVendorCredit(userId, company.id, issueVendorCreditInput.parse({
+      billId: bill.id, expenseAccountId: supplies.id, creditDate: '2026-01-25', amount: '60.00',
+    }));
+    expect(await reconciles()).toBe('120.0000');
+
+    // Void the credit → 180; void the payment → 300. The tie holds through the void lifecycle.
+    // Explicit in-window reversal dates (not the default "today") so the reversal always lands
+    // on or before the 2026-12-31 asOf and the report⇔control assertions are time-independent.
+    await voidVendorCredit(userId, company.id, credit.id, voidVendorCreditInput.parse({ reversalDate: '2026-02-01' }));
+    expect(await reconciles()).toBe('180.0000');
+    await voidBillPayment(userId, company.id, payment.id, voidBillPaymentInput.parse({ reversalDate: '2026-02-01' }));
+    expect(await reconciles()).toBe('300.0000');
 
     await assertLedgerIntegrity(company.id);
   });

@@ -9,6 +9,7 @@ import { isCalendarDate } from '@/lib/dates';
 import { toMoney } from '@/lib/decimal';
 import { requirePermission } from '@/server/authorization';
 
+import { type AgingBuckets, type BucketKey, bucketFor, daysPastDue, fixBuckets, zeroBuckets } from './aging';
 import { invoiceReductionsExpr } from './open-balance';
 
 /**
@@ -27,13 +28,6 @@ import { invoiceReductionsExpr } from './open-balance';
  * and computed with decimal.js (ADR-004).
  */
 
-export interface AgingBuckets {
-  readonly current: string;
-  readonly d1to30: string;
-  readonly d31to60: string;
-  readonly d61to90: string;
-  readonly d90plus: string;
-}
 export interface ArAgingCustomer {
   readonly customerId: string;
   readonly customerName: string;
@@ -44,42 +38,6 @@ export interface ArAging {
   readonly asOfDate: string;
   readonly customers: readonly ArAgingCustomer[];
   readonly totals: AgingBuckets & { readonly total: string };
-}
-
-type BucketKey = keyof AgingBuckets;
-
-function bucketFor(daysPastDue: number): BucketKey {
-  if (daysPastDue <= 0) return 'current';
-  if (daysPastDue <= 30) return 'd1to30';
-  if (daysPastDue <= 60) return 'd31to60';
-  if (daysPastDue <= 90) return 'd61to90';
-  return 'd90plus';
-}
-
-/** Whole-day difference asOf − due for two calendar dates (UTC midnight, DST-free). */
-function daysPastDue(asOf: string, due: string): number {
-  const a = Date.parse(`${asOf}T00:00:00Z`);
-  const d = Date.parse(`${due}T00:00:00Z`);
-  return Math.round((a - d) / 86_400_000);
-}
-
-function zeroBuckets(): Record<BucketKey, Decimal> {
-  return {
-    current: new Decimal(0),
-    d1to30: new Decimal(0),
-    d31to60: new Decimal(0),
-    d61to90: new Decimal(0),
-    d90plus: new Decimal(0),
-  };
-}
-function fixBuckets(b: Record<BucketKey, Decimal>): AgingBuckets {
-  return {
-    current: b.current.toFixed(4),
-    d1to30: b.d1to30.toFixed(4),
-    d31to60: b.d31to60.toFixed(4),
-    d61to90: b.d61to90.toFixed(4),
-    d90plus: b.d90plus.toFixed(4),
-  };
 }
 
 export async function getArAging(

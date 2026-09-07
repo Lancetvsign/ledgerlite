@@ -1,6 +1,11 @@
 export { getTrialBalance } from './trial-balance';
 export type { TrialBalance, TrialBalanceRow } from './trial-balance';
+export type { AgingBuckets } from './aging';
 export { getArAging } from './ar-aging';
-export type { ArAging, ArAgingCustomer, AgingBuckets } from './ar-aging';
+export type { ArAging, ArAgingCustomer } from './ar-aging';
+export { getApAging } from './ap-aging';
+export type { ApAging, ApAgingVendor } from './ap-aging';
 export { getCustomerStatement } from './customer-statement';
 export type { CustomerStatement, CustomerStatementLine } from './customer-statement';
+export { getVendorStatement } from './vendor-statement';
+export type { VendorStatement, VendorStatementLine } from './vendor-statement';
