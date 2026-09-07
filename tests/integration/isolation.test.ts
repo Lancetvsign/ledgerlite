@@ -15,6 +15,7 @@ import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } f
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createVendor, deactivateVendor, listVendors, updateVendor } from '@/server/vendors';
+import { createBill, getBill, listBills, updateBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, getInvoice, listInvoices, updateInvoice } from '@/server/invoices';
 import { getCreditMemo, issueCreditMemo, listCreditMemos, voidCreditMemo } from '@/server/credit-memos';
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
@@ -25,6 +26,7 @@ import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createVendorInput, updateVendorInput } from '@/validation/vendor';
 import { createInvoiceInput } from '@/validation/invoice';
+import { createBillInput } from '@/validation/bill';
 import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-memo';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
@@ -246,6 +248,50 @@ const REGISTRY: IsolationDescriptor[] = [
     ],
   },
   {
+    table: 'bills',
+    seed: async (victim) => {
+      const vendor = await createVendor(victim.ownerUserId, victim.companyId,
+        createVendorInput.parse({ name: 'Victim Vendor B' }));
+      const account = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Victim Expense', accountType: 'EXPENSE' }));
+      const { bill } = await createBill(victim.ownerUserId, victim.companyId, createBillInput.parse({
+        vendorId: vendor.id, billDate: '2026-01-10',
+        lines: [{ accountId: account.id, quantity: '1', unitPrice: '100.0000' }],
+      }));
+      return { recordId: bill.id };
+    },
+    attempts: [
+      {
+        operation: 'list bills (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listBills(attacker, victim.companyId),
+      },
+      {
+        operation: 'read the victim bill',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getBill(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'create a bill in the victim company',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          createBill(attacker, victim.companyId, createBillInput.parse({
+            vendorId: '00000000-0000-0000-0000-000000000000', billDate: '2026-01-10',
+            lines: [{ accountId: '00000000-0000-0000-0000-000000000000', quantity: '1', unitPrice: '1' }],
+          })),
+      },
+      {
+        operation: 'edit the victim bill',
+        expect: 'denied',
+        run: (attacker, victim, recordId) =>
+          updateBill(attacker, victim.companyId, recordId, createBillInput.parse({
+            vendorId: '00000000-0000-0000-0000-000000000000', billDate: '2026-01-10',
+            lines: [{ accountId: '00000000-0000-0000-0000-000000000000', quantity: '1', unitPrice: '1' }],
+          })),
+      },
+    ],
+  },
+  {
     table: 'invoice_lines',
     seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
     attempts: [
@@ -259,6 +305,25 @@ const REGISTRY: IsolationDescriptor[] = [
             rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
           const rows = await db.execute(
             rawSql`select id from invoice_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
+      },
+    ],
+  },
+  {
+    table: 'bill_lines',
+    seed: (victim) => Promise.resolve({ recordId: victim.companyId }),
+    attempts: [
+      {
+        operation: 'bill lines are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from bill_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
           return rows.rows;
         },
       },

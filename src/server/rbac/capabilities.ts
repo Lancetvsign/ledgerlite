@@ -40,6 +40,7 @@ export const CAPABILITIES = [
   'credit_memo.void',
   'expense.view',
   'expense.create',
+  'bill.void',
   'reconciliation.view',
   'reconciliation.complete',
   'report.view',
@@ -117,6 +118,9 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   'credit_memo.void': LEDGER_WRITERS,
   'expense.view': EVERYONE,
   'expense.create': ALL_WRITERS,
+  // Voiding a bill is a reversal (a ledger correction) — LEDGER_WRITERS, like the
+  // other document voids (LL-061). Bills are created/finalized under expense.create.
+  'bill.void': LEDGER_WRITERS,
   'reconciliation.view': EVERYONE,
   'reconciliation.complete': ALL_WRITERS,
   'report.view': EVERYONE,

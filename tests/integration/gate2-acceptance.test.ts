@@ -169,18 +169,19 @@ describe('GATE 2 — manual acceptance scenario, derived purely from journal lin
 
   it('stores no ACCOUNT balance anywhere — proven from the schema, not the code', async () => {
     const db = await getTestDb();
-    // No column resembles a stored account/ledger balance (invariant 2). The ONE
-    // exemption is the invoice DOCUMENT totals (subtotal/tax_total/total on
-    // `invoices`): those are a property of the source document, always
-    // service-derived from its lines (ADR-013), not an account balance — a
-    // customer's open balance still derives from journal lines. Any balance/total
-    // column on any OTHER table is still a failure.
+    // No column resembles a stored account/ledger balance (invariant 2). The ONLY
+    // exemptions are the DOCUMENT totals on `invoices` (subtotal/tax_total/total)
+    // and on `bills` (total, LL-061): those are a property of the source document,
+    // always service-derived from its lines (ADR-013), not an account balance — a
+    // customer's / vendor's open balance still derives from journal lines. Any
+    // balance/total column on any OTHER table is still a failure.
     const cols = await db.execute<{ table_name: string; column_name: string }>(sql`
       select table_name, column_name from information_schema.columns
       where table_schema = 'public'
         and (column_name ilike '%balance%' or column_name ilike '%running_total%'
              or column_name = 'total' or column_name ilike '%cached%')
-        and not (table_name = 'invoices' and column_name in ('subtotal', 'tax_total', 'total'))`);
+        and not (table_name = 'invoices' and column_name in ('subtotal', 'tax_total', 'total'))
+        and not (table_name = 'bills' and column_name = 'total')`);
     expect(cols.rows).toEqual([]);
   });
 });

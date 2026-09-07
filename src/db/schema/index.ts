@@ -11,3 +11,4 @@ export * from './payments';
 export * from './writeoffs';
 export * from './credit-memos';
 export * from './vendors';
+export * from './bills';

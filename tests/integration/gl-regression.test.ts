@@ -23,7 +23,9 @@ import { toMoney } from '@/lib/decimal';
 import { createAccount } from '@/server/accounts';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
+import { createBill, finalizeBill, voidBill } from '@/server/bills';
 import { createInvoice, finalizeInvoice, voidInvoice } from '@/server/invoices';
+import { createVendor } from '@/server/vendors';
 import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
@@ -45,6 +47,8 @@ import { issueCreditMemoInput, voidCreditMemoInput } from '@/validation/credit-m
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
 import { voidWriteoffInput, writeOffInvoiceInput } from '@/validation/writeoff';
+import { createBillInput, voidBillInput } from '@/validation/bill';
+import { createVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
@@ -694,6 +698,35 @@ describe('GL regression suite (release-blocking)', () => {
     await voidCreditMemo(userId, company.id, cm.id, voidCreditMemoInput.parse({}));
     await voidInvoice(userId, company.id, inv2, voidInvoiceInput.parse({ reversalDate: '2026-02-05' }));
     expect(await agingNow()).toBe(await arNow()); // reconciles to the control
+
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T023 — finalizing a bill moves the A/P control by its total; void nets to zero (LL-061)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Bill Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+    const rent = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL061 Rent', accountType: 'EXPENSE' }));
+    const db = await getTestDb();
+    const apId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_PAYABLE'`)).rows[0]!.id;
+    const apNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === apId)?.balance ?? '0.0000';
+
+    const { bill } = await createBill(userId, company.id, createBillInput.parse({
+      vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: rent.id, unitPrice: '750.00' }],
+    }));
+    await finalizeBill(userId, company.id, bill.id);
+    // A/P (a LIABILITY, credit-natural) carries the bill total; Dr Expense / Cr A/P.
+    expect(await apNow()).toBe('750.0000');
+
+    // Voiding the bill reverses the entry: the payable returns to zero.
+    await voidBill(userId, company.id, bill.id, voidBillInput.parse({ reversalDate: '2026-01-20' }));
+    expect(await apNow()).toBe('0.0000');
 
     await assertLedgerIntegrity(company.id);
   });
