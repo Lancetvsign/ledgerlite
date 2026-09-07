@@ -47,9 +47,13 @@ CREATE INDEX "bill_payments_company_status_idx" ON "bill_payments" USING btree (
 -- either control account (A/R or A/P) is rejected structurally, so the aging⇔control tie
 -- holds even when the application is bypassed. Replaces the A/R-only function/trigger with
 -- a generically-named control-account guard (AGENTS §0 — the name matches what it does).
-DROP TRIGGER "journal_lines_no_manual_ar_post" ON "journal_lines";--> statement-breakpoint
-DROP FUNCTION "assert_no_manual_post_to_ar"();--> statement-breakpoint
-CREATE FUNCTION "assert_no_manual_post_to_control_account"() RETURNS trigger
+-- Idempotent (IF EXISTS + CREATE OR REPLACE), like the 0018/0020 trigger functions:
+-- the CI clean-slate step drops tables and enums but NOT functions/triggers, and the
+-- ephemeral branch is forked from a dev that already ran this migration, so a plain
+-- DROP/CREATE would hit "does not exist" / "already exists" on re-apply.
+DROP TRIGGER IF EXISTS "journal_lines_no_manual_ar_post" ON "journal_lines";--> statement-breakpoint
+DROP FUNCTION IF EXISTS "assert_no_manual_post_to_ar"();--> statement-breakpoint
+CREATE OR REPLACE FUNCTION "assert_no_manual_post_to_control_account"() RETURNS trigger
   LANGUAGE plpgsql AS $$
 DECLARE
   v_system_type text;
@@ -80,6 +84,7 @@ BEGIN
   RETURN NEW;
 END;
 $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "journal_lines_no_manual_control_post" ON "journal_lines";--> statement-breakpoint
 CREATE TRIGGER "journal_lines_no_manual_control_post"
   BEFORE INSERT ON "journal_lines"
   FOR EACH ROW
