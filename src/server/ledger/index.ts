@@ -141,6 +141,20 @@ export async function postEntryCore(
     throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${postingDate} is closed.`);
   }
 
+  // The per-side total must fit NUMERIC(19,4); a larger sum would otherwise be rejected
+  // only at COMMIT with an opaque overflow (Gate 2 §7 item 5). Document callers build
+  // their own balanced lines and skip validateBalance (the manual path's check), so the
+  // guard lives HERE too — every document path (bills, invoices, payments, credits) is
+  // covered uniformly, not just finalizeBill (Gate 5). Lines are balanced by
+  // construction, so checking the debit side suffices.
+  const sideTotal = sumMoney(input.lines.map((l) => l.debit));
+  if (sideTotal.greaterThan('999999999999999.9999')) {
+    throw new LedgerError(
+      'ENTRY_AMOUNT_OUT_OF_RANGE',
+      `Entry total ${sideTotal.toString()} exceeds the maximum NUMERIC(19,4) value.`,
+    );
+  }
+
   // ---- Allocate the gapless entry number (ADR-003) --------------------------
   // SELECT … FOR UPDATE inside this transaction, so a rollback reuses the
   // number and the sequence stays gapless. Serialises concurrent postings to

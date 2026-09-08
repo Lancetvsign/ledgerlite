@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { isUuid } from '@/lib/uuid';
 import { listCustomers } from '@/server/customers';
 import { getCustomerStatement } from '@/server/reports';
 
@@ -41,8 +42,10 @@ export default async function StatementPage({
 
   // Only run the report once a customer is chosen and the dates are sane. A
   // cross-company/unknown customerId returns null (no existence leak, §6).
+  // A malformed customerId (crafted ?customerId=abc) reads as not-found — the same notice
+  // a real miss gets — never a 500 (Gate 5).
   const statement =
-    customerId !== '' && !datesInvalid
+    customerId !== '' && isUuid(customerId) && !datesInvalid
       ? await getCustomerStatement(ctx.userId, ctx.companyId, customerId, from, to)
       : null;
 

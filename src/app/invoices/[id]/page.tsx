@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listCustomers } from '@/server/customers';
@@ -37,6 +38,7 @@ export default async function InvoiceDetailPage({
   if (membership === null) redirect('/account');
 
   const { id } = await params;
+  if (!isUuid(id)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   const loaded = await getInvoice(user.id, membership.companyId, id);
   if (loaded === null) redirect('/invoices?error=notfound');
   const { invoice, lines } = loaded;

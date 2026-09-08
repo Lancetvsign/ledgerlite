@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { isUuid } from '@/lib/uuid';
 import { getVendorStatement } from '@/server/reports';
 import { listVendors } from '@/server/vendors';
 
@@ -40,8 +41,10 @@ export default async function VendorStatementPage({
 
   // Only run the report once a vendor is chosen and the dates are sane. A
   // cross-company/unknown vendorId returns null (no existence leak, §6).
+  // A malformed vendorId (crafted ?vendorId=abc) reads as not-found — the same notice a
+  // real miss gets — never a 500 (Gate 5).
   const statement =
-    vendorId !== '' && !datesInvalid
+    vendorId !== '' && isUuid(vendorId) && !datesInvalid
       ? await getVendorStatement(ctx.userId, ctx.companyId, vendorId, from, to)
       : null;
 
