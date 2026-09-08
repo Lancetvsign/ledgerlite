@@ -78,7 +78,8 @@ async function reverseInNewTransaction(
   input: ReverseJournalEntryInput,
   reversalDate: string,
 ): Promise<PostedEntry> {
-  return await getDbTx().transaction((tx) => reverseEntryCore(tx, input, reversalDate));
+  // The manual reversal API confines itself to MANUAL entries (LL-066).
+  return await getDbTx().transaction((tx) => reverseEntryCore(tx, input, reversalDate, true));
 }
 
 /**
@@ -96,6 +97,12 @@ export async function reverseEntryCore(
   tx: Tx,
   input: ReverseJournalEntryInput,
   reversalDate: string,
+  /**
+   * When true (the manual `reverseJournalEntry` path), the entry must be a MANUAL
+   * entry — a `JOURNAL_ENTRY`, or a reversal rooted in one. Document services pass
+   * false (the default): they legitimately reverse their own document entries (LL-066).
+   */
+  manualOnly = false,
 ): Promise<PostedEntry> {
   // ---- Load and LOCK the original, scoped to this company. ------------------
   // FOR UPDATE serialises concurrent reversals of the same entry: the second
@@ -125,6 +132,37 @@ export async function reverseEntryCore(
   }
   if (original.status === 'REVERSED' || original.reversedById !== null) {
     throw new LedgerError('ENTRY_ALREADY_REVERSED', 'This entry has already been reversed.');
+  }
+
+  // ---- Manual reversal is confined to MANUAL entries (LL-066 / ADR-025). ----
+  // `reverseJournalEntry` (the public manual API) passes manualOnly; document voids
+  // (voidInvoice/voidBill/…) do not. A document's own entry — AND a document void's
+  // REVERSAL — must be undone through the document's void, which keeps the subsidiary
+  // in step; a manual reversal of either would move A/R or A/P without it. Walk the
+  // reversal chain to its ROOT: a manual entry is a `JOURNAL_ENTRY`, or a reversal
+  // rooted in one. Reads inside the tx, over immutable POSTED/REVERSED rows, so
+  // race-safe; the `seen` set is a cycle guard (chains are short and acyclic anyway).
+  if (manualOnly) {
+    let rootSource = original.sourceType;
+    let parentId = original.reversalOfId;
+    const seen = new Set<string>([original.id]);
+    while (rootSource === 'REVERSAL' && parentId !== null && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parentRows = await tx
+        .select({ sourceType: schema.journalEntries.sourceType, reversalOfId: schema.journalEntries.reversalOfId })
+        .from(schema.journalEntries)
+        .where(and(eq(schema.journalEntries.companyId, input.companyId), eq(schema.journalEntries.id, parentId)))
+        .limit(1);
+      if (parentRows[0] === undefined) break;
+      rootSource = parentRows[0].sourceType;
+      parentId = parentRows[0].reversalOfId;
+    }
+    if (rootSource !== 'JOURNAL_ENTRY') {
+      throw new LedgerError(
+        'DOCUMENT_REVERSAL_REQUIRES_VOID',
+        "This entry belongs to a document; undo it through the document's void, not a manual reversal.",
+      );
+    }
   }
 
   // ---- Company still active (parity with posting; atomic in-tx). ------------

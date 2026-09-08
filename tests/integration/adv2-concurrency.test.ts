@@ -99,7 +99,7 @@ beforeEach(async () => {
 describe('ADV2 concurrency attacks', () => {
   it('C1 — 12 simultaneous identical idempotent posts collapse to one entry', async () => {
     const c = await setup();
-    const args = { sourceType: 'INVOICE' as const, sourceId: 'INV-C1', idempotencyKey: 'idem-C1' };
+    const args = { sourceType: 'JOURNAL_ENTRY' as const, sourceId: 'INV-C1', idempotencyKey: 'idem-C1' };
     const results = await Promise.allSettled(
       Array.from({ length: 12 }, () =>
         post(c, [{ accountId: c.cashId, debit: '15.0000' }, { accountId: c.revId, credit: '15.0000' }], args)),
@@ -118,7 +118,7 @@ describe('ADV2 concurrency attacks', () => {
     const results = await Promise.allSettled(
       Array.from({ length: 10 }, (_, i) =>
         post(c, [{ accountId: c.cashId, debit: '20.0000' }, { accountId: c.revId, credit: '20.0000' }],
-          { sourceType: 'INVOICE', sourceId: 'INV-C2', idempotencyKey: `idem-C2-${String(i)}` })),
+          { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-C2', idempotencyKey: `idem-C2-${String(i)}` })),
     );
     // Exactly one wins the "one POSTED per source" index; the other nine collide
     // and are turned away (IDEMPOTENCY_KEY_CONFLICT) — never a second POSTED.

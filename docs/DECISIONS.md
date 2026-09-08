@@ -1406,14 +1406,14 @@ Two **pure reporting services** (no schema, no stored balance — invariant 2), 
   Statement columns are `charge` (a credit to A/P — a bill) and `payment` (a debit to A/P — a
   payment or vendor credit). A vendor's closing is that vendor's slice of the A/P control as of
   `toDate`; summed over all vendors it equals the control (every A/P line is vendor-tagged, and a
-  manual `JOURNAL_ENTRY` line into A/P is refused by the 0023 trigger, so the decomposition holds for
-  every path a user can reach). **Scope caveat (Gate 5).** Like the A/R guard (ADR-018), the 0023
-  lock is a *denylist on the labelled manual path*: it stops `source_type = 'JOURNAL_ENTRY'`, not a
-  service caller who posts a document *source type* through `postJournalEntry`, nor a direct
-  `reverseJournalEntry` of a document's entry. Neither is reachable from the UI today (the journal UI
-  hardcodes `JOURNAL_ENTRY`; nothing calls `reverseJournalEntry` from `src/app`), but the "moves only
-  through documents" guarantee is not yet *structural against the service layer*. Closing that —
-  pinning the manual entry point and refusing document-entry reversal — is **[LL-066](tickets/LL-066.md)**.
+  manual line into A/P is refused, so the decomposition holds for every path). **Scope note (Gate 5,
+  now DISCHARGED by LL-066 / ADR-025).** At Gate 5 the 0023 lock was a *denylist on the labelled
+  manual path* — it stopped `source_type = 'JOURNAL_ENTRY'`, but not a service caller who posted a
+  document *source type* through `postJournalEntry`, nor a `reverseJournalEntry` of a document's
+  entry. **LL-066 closed both** (ADR-025): the manual posting API is pinned to `JOURNAL_ENTRY`, the
+  manual reversal API is confined to manual-rooted entries, and a 0025 `BEFORE UPDATE` trigger makes
+  the relabel path structural — so "A/P moves only through its documents" now holds at the service
+  layer, not just the UI.
 
 Both reconciliations — aging grand total == control, and Σ vendor-statement closings == control —
 are asserted together across a bill → payment → credit → void lifecycle as **GL-T026** (the ticket
@@ -1437,3 +1437,59 @@ discipline as `bill-open-balance.ts`). A cross-company / unknown `vendorId` retu
 A historical open-items-as-of-a-past-date aging is scheduled (needs point-in-time aging, still
 deferred per ADR-016); or unapplied vendor credit / credit balances arrive (ADR-023 revisit); or
 multi-currency arrives.
+
+---
+
+## ADR-025 — The control-account lock is complete: the manual ledger APIs are confined to manual entries
+
+**Status** Accepted · **Added by** LL-066 · **Decided by** product owner
+
+### Context
+
+ADR-018 (A/R) and ADR-023 (A/P) lock a control account against manual journal entry via a database
+trigger that fires only when the parent entry's `source_type = 'JOURNAL_ENTRY'`. Gate 5's correctness
+review showed this is a *denylist on the labelled manual path*: two service-layer routes still moved a
+control account without its subsidiary — not reachable from the UI, but not structural against a
+service caller either. (1) `postJournalEntry` (the manual posting API) accepted any `sourceType`, so a
+caller could post a `'BILL_PAYMENT'`/`'EXPENSE'`-sourced A/P line and slip past the trigger. (2)
+`reverseJournalEntry` (the manual reversal API) would reverse ANY posted entry, including a document's
+own entry or a document void's reversal — re-moving A/R/A/P while the document/aging did not. A third,
+raw-SQL vector: the trigger is `BEFORE INSERT` only, and a DRAFT entry's `source_type` is mutable, so a
+DRAFT `EXPENSE` entry with A/P lines could be relabelled to a POSTED `JOURNAL_ENTRY`.
+
+### Decision
+
+The **manual ledger APIs post and reverse only MANUAL entries**; documents keep their own path.
+
+- **`postJournalEntry` accepts only `sourceType = 'JOURNAL_ENTRY'`** (`MANUAL_SOURCE_TYPE_REQUIRED`).
+  Documents are unaffected — they post through `postEntryCore`, never `postJournalEntry`. The shared
+  `postEntryCore` still accepts every source (documents need it); the pin lives in the public manual
+  API only.
+- **`reverseJournalEntry` reverses only a manual-rooted entry** (`DOCUMENT_REVERSAL_REQUIRES_VOID`).
+  It walks the reversal chain to its ROOT and requires a `JOURNAL_ENTRY` — so a manual entry and a
+  re-reversal of a *manual* reversal are allowed, but a document's entry AND a document void's
+  reversal are refused. Documents are undone through their own void (`voidInvoice`/`voidBill`/… →
+  `reverseEntryCore`, which the manual guard does not gate), keeping the subsidiary in step.
+- **A `BEFORE UPDATE` trigger (migration 0025)** rejects relabelling an entry to a POSTED
+  `JOURNAL_ENTRY` while it carries A/R/A/P lines — making the manual-post lock structural (it holds
+  under raw SQL, not just through the service). Defense-in-depth: the app never UPDATEs an entry to
+  POSTED.
+
+Together these discharge ADR-024's Gate-5 scope note: "a control account moves only through its
+documents" now holds at the service layer, not just the UI. The denylist *form* of the triggers is
+kept (Gate 4 item 2 ratified it); this constrains the *callers* the triggers were trusting.
+
+### Consequences
+
+- The only way to move A/R or A/P is a document (invoice/payment/write-off/credit-memo on A/R;
+  bill/bill-payment/vendor-credit on A/P). No manual posting or manual reversal can touch them.
+- **Opening balances** legitimately need to set A/R/A/P and are not documents — they are deferred and
+  will get their own posting path (not `postJournalEntry`) plus a trigger exception when scheduled.
+- Ledger-core tests that used a document `sourceType` as an arbitrary fixture now use `JOURNAL_ENTRY`
+  (the faithful choice — they exercise the *manual/core* mechanics).
+
+### Revisit if
+
+An opening-balance feature is scheduled (needs a sanctioned non-document A/R/A/P path); or a new
+document source type is added (it posts via `postEntryCore`, so it is covered automatically — no
+change here).
