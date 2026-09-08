@@ -199,7 +199,7 @@ describe('ADV3 reversal edge cases', () => {
     const { entry: a } = await post(c, [
       { accountId: c.cashId, debit: '40.0000' },
       { accountId: c.revId, credit: '40.0000' },
-    ], { sourceType: 'INVOICE', sourceId: 'INV-R7', idempotencyKey: 'idem-R7-a' });
+    ], { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-R7', idempotencyKey: 'idem-R7-a' });
     await reverse(c, a.id, '2026-03-10'); // original now REVERSED, leaves the source-posted index
     // Re-post the SAME (sourceType, sourceId) with a fresh key: ALLOWED, because the
     // prior is no longer POSTED (it left the partial "one POSTED per source" index
@@ -207,7 +207,7 @@ describe('ADV3 reversal edge cases', () => {
     const reposted = await post(c, [
       { accountId: c.cashId, debit: '40.0000' },
       { accountId: c.revId, credit: '40.0000' },
-    ], { sourceType: 'INVOICE', sourceId: 'INV-R7', idempotencyKey: 'idem-R7-b' });
+    ], { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-R7', idempotencyKey: 'idem-R7-b' });
     expect(reposted.entry.status).toBe('POSTED');
     // …but there is still at most one POSTED entry for that source.
     const db = await getTestDb();

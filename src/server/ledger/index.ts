@@ -33,6 +33,19 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
   // ---- 1. Authorization -----------------------------------------------------
   await requirePermission(input.actorUserId, input.companyId, 'journal.post');
 
+  // The manual posting API posts MANUAL entries only. Every other source type
+  // (INVOICE, BILL_PAYMENT, VENDOR_CREDIT, …) belongs to a document service that
+  // posts via `postEntryCore` — accepting a document source here would let a caller
+  // post a control-account line under a non-`JOURNAL_ENTRY` source and dodge the 0023
+  // guard, moving A/R or A/P without its subsidiary (LL-066 / ADR-025). Documents are
+  // unaffected: they never call this function.
+  if (input.sourceType !== 'JOURNAL_ENTRY') {
+    throw new LedgerError(
+      'MANUAL_SOURCE_TYPE_REQUIRED',
+      'A manual journal entry must have source type JOURNAL_ENTRY; documents post through their own service.',
+    );
+  }
+
   // ---- 5 & 6. Balance and structural validation (pure — before any I/O) -----
   // Done early: no reason to touch the database for input that cannot post.
   validateStructure(input);

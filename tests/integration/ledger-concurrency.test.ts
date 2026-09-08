@@ -35,7 +35,7 @@ async function setup(): Promise<Ctx> {
 function invoicePost(c: Ctx, sourceId: string, key: string, amount = '100.0000') {
   return postJournalEntryInput.parse({
     companyId: c.companyId, actorUserId: c.userId, transactionDate: '2026-01-10',
-    sourceType: 'INVOICE', sourceId, idempotencyKey: key,
+    sourceType: 'JOURNAL_ENTRY', sourceId, idempotencyKey: key,
     lines: [{ accountId: c.cashId, debit: amount }, { accountId: c.revId, credit: amount }],
   });
 }
@@ -85,7 +85,7 @@ describe('idempotency semantics', () => {
     const c = { companyId: crypto.randomUUID(), userId: crypto.randomUUID(), cashId: crypto.randomUUID(), revId: crypto.randomUUID() };
     const parsed = postJournalEntryInput.safeParse({
       companyId: c.companyId, actorUserId: c.userId, transactionDate: '2026-01-10',
-      sourceType: 'INVOICE', sourceId: 'INV-1',
+      sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-1',
       lines: [{ accountId: c.cashId, debit: '1' }, { accountId: c.revId, credit: '1' }],
     });
     expect(parsed.success).toBe(false);

@@ -176,6 +176,13 @@
       "when": 1788792291703,
       "tag": "0024_handy_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788880574689,
+      "tag": "0025_control_lock_before_update",
+      "breakpoints": true
     }
   ]
 }

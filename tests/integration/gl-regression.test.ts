@@ -186,11 +186,11 @@ describe('GL regression suite (release-blocking)', () => {
     const first = await post(c, [
       { accountId: c.cashId, debit: '10' },
       { accountId: c.revId, credit: '10' },
-    ], { sourceType: 'INVOICE', sourceId: 'INV-5', idempotencyKey: key });
+    ], { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-5', idempotencyKey: key });
     const second = await post(c, [
       { accountId: c.cashId, debit: '10' },
       { accountId: c.revId, credit: '10' },
-    ], { sourceType: 'INVOICE', sourceId: 'INV-5', idempotencyKey: key });
+    ], { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-5', idempotencyKey: key });
     expect(second.entry.id).toBe(first.entry.id); // the same entry, not a new one
     expect(await entryCount(c.companyId)).toBe(1);
     await assertLedgerIntegrity(c.companyId);
@@ -337,7 +337,7 @@ describe('GL regression suite (release-blocking)', () => {
     const { entry: orig } = await post(c, [
       { accountId: c.cashId, debit: '40' },
       { accountId: c.revId, credit: '40' },
-    ], { sourceType: 'INVOICE', sourceId: 'INV-13', idempotencyKey: 'idem-GL-T013' });
+    ], { sourceType: 'JOURNAL_ENTRY', sourceId: 'INV-13', idempotencyKey: 'idem-GL-T013' });
 
     const { entry: rvsl } = await reverseJournalEntry(
       reverseJournalEntryInput.parse({ companyId: c.companyId, actorUserId: c.userId, entryId: orig.id }),
@@ -360,7 +360,7 @@ describe('GL regression suite (release-blocking)', () => {
   it('GL-T014 — concurrent identical postings produce exactly one entry', async () => {
     const c = await setup();
     const args = {
-      sourceType: 'INVOICE' as const,
+      sourceType: 'JOURNAL_ENTRY' as const,
       sourceId: 'INV-14',
       idempotencyKey: 'idem-GL-T014',
     };
@@ -858,6 +858,51 @@ describe('GL regression suite (release-blocking)', () => {
     await voidBillPayment(userId, company.id, payment.id, voidBillPaymentInput.parse({ reversalDate: '2026-02-01' }));
     expect(await reconciles()).toBe('300.0000');
 
+    await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T027 — neither manual bypass can move A/P without its subsidiary (LL-066)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Manual Lock Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+    const supplies = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL066 Supplies', accountType: 'EXPENSE' }));
+    const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'LL066 Cash', accountType: 'ASSET' }));
+    const db = await getTestDb();
+    const apId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_PAYABLE'`)).rows[0]!.id;
+    const apNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === apId)?.balance ?? '0.0000';
+    const reconciles = async (): Promise<string> => {
+      const control = await apNow();
+      expect((await getApAging(userId, company.id, '2026-12-31')).totals.total).toBe(control);
+      return control;
+    };
+
+    const { bill } = await createBill(userId, company.id, createBillInput.parse({
+      vendorId: vendor.id, billDate: '2026-01-10', lines: [{ accountId: supplies.id, unitPrice: '300.00' }],
+    }));
+    await finalizeBill(userId, company.id, bill.id);
+    expect(await reconciles()).toBe('300.0000');
+
+    // Bypass 1: a manual post of a document source into A/P — refused before any I/O.
+    expect(await codeOf(postJournalEntry(postJournalEntryInput.parse({
+      companyId: company.id, actorUserId: userId, transactionDate: '2026-02-01', sourceType: 'BILL_PAYMENT',
+      lines: [{ accountId: apId, debit: '100.00' }, { accountId: cash.id, credit: '100.00' }],
+    })))).toBe('MANUAL_SOURCE_TYPE_REQUIRED');
+
+    // Bypass 2: manually reversing the bill's own EXPENSE entry — refused.
+    const expenseEntry = (await db.execute<{ id: string }>(sql`
+      select id from journal_entries where company_id = ${company.id} and source_type = 'EXPENSE' and source_id = ${bill.id} and status = 'POSTED'`)).rows[0]!.id;
+    expect(await codeOf(reverseJournalEntry(reverseJournalEntryInput.parse({
+      companyId: company.id, actorUserId: userId, entryId: expenseEntry, reversalDate: '2026-02-01',
+    })))).toBe('DOCUMENT_REVERSAL_REQUIRES_VOID');
+
+    // Both bypasses refused — the A/P control and aging are untouched.
+    expect(await reconciles()).toBe('300.0000');
     await assertLedgerIntegrity(company.id);
   });
 });

@@ -138,17 +138,18 @@ describe('ADV5 structural / line-level attacks', () => {
     await assertLedgerIntegrity(c.companyId);
   });
 
-  it('S5 — a direct REVERSAL-sourced post (no reversal_of_id) posts as an ordinary balanced entry', async () => {
+  it('S5 — the manual posting API refuses a non-JOURNAL_ENTRY source (LL-066)', async () => {
     const c = await setup();
-    // sourceType REVERSAL is a legal enum value; a caller could pass it directly.
-    // It should behave as any balanced entry and not corrupt integrity.
-    const { entry } = await rawPost(c, [
+    // sourceType REVERSAL (like any document source) is a legal enum value, but the
+    // manual API posts only JOURNAL_ENTRY — a document source belongs to its own
+    // service (posting via postEntryCore), and accepting one here would let a caller
+    // land a control-account line under a non-JOURNAL_ENTRY source and dodge the 0023
+    // guard, moving A/R or A/P without its subsidiary (ADR-025).
+    expect(await codeOf(rawPost(c, [
       { accountId: c.cashId, debit: '3.0000' },
       { accountId: c.revId, credit: '3.0000' },
-    ], { sourceType: 'REVERSAL' });
-    expect(entry.status).toBe('POSTED');
-    expect(entry.reversalOfId).toBeNull();
-    await assertLedgerIntact(c.companyId);
+    ], { sourceType: 'REVERSAL' }))).toBe('MANUAL_SOURCE_TYPE_REQUIRED');
+    expect(await entryCount(c.companyId)).toBe(0); // nothing posted
     await assertLedgerIntegrity(c.companyId);
   });
 
