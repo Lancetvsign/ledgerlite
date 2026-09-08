@@ -19,7 +19,7 @@ import { createAccount } from '@/server/accounts';
 import { BillPaymentError, payBill, voidBillPayment } from '@/server/bill-payments';
 import { createBill, finalizeBill } from '@/server/bills';
 import { createCompanyWithOwner } from '@/server/companies';
-import { assertLedgerIntegrity } from '@/server/ledger';
+import { assertLedgerIntegrity, LedgerError } from '@/server/ledger';
 import { getApAging, getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { issueVendorCredit, voidVendorCredit } from '@/server/vendor-credits';
@@ -212,6 +212,119 @@ describe('A/P lock order — two payments touching the same bills in opposite or
 
     expect(results.map(codeOf)).toEqual(['OK', 'OK']); // neither deadlocked, both applied
     expect(await apControl(c)).toBe('140.0000'); // 200 − (30 on A + 30 on B)
+    await assertLedgerIntegrity(c.companyId);
+  });
+});
+
+async function billPaymentCount(companyId: string): Promise<number> {
+  const db = await getTestDb();
+  const r = await db.execute<{ n: string }>(sql`select count(*)::text n from bill_payments where company_id = ${companyId}`);
+  return Number(r.rows[0]?.n);
+}
+
+describe('A/P submit-once idempotency — a keyed retry never disburses twice (LL-067)', () => {
+  it('N simultaneous payments with the SAME key collapse to ONE payment', async () => {
+    const c = await setup();
+    const billId = await openBill(c, '100.00');
+    const key = crypto.randomUUID();
+    const makeInput = () => payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '40.00' }], idempotencyKey: key,
+    });
+
+    const results = await Promise.allSettled(Array.from({ length: 6 }, () => payBill(c.userId, c.companyId, makeInput())));
+    // Every call SUCCEEDS and returns the SAME payment — the winner posts, the rest
+    // collide on the key and resolve to it (no error, no second disbursement).
+    const ids = new Set(results.flatMap((r) => (r.status === 'fulfilled' ? [r.value.payment.id] : [])));
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    expect(ids.size).toBe(1);
+    expect(await billPaymentCount(c.companyId)).toBe(1); // one row, not six
+    expect(await apControl(c)).toBe('60.0000'); // 100 − 40, never 100 − 240
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a resubmit LARGER than the remaining balance still returns the original (early key check)', async () => {
+    const c = await setup();
+    const billId = await openBill(c, '100.00');
+    const key = crypto.randomUUID();
+    const input = payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '60.00' }], idempotencyKey: key,
+    });
+    const first = await payBill(c.userId, c.companyId, input); // open now 40
+    // Retrying the SAME request (60) would OVERAPPLY the now-40 open balance — but the key
+    // is resolved BEFORE that check, so the retry is a no-op returning the original.
+    const retry = await payBill(c.userId, c.companyId, input);
+    expect(retry.payment.id).toBe(first.payment.id);
+    expect(await billPaymentCount(c.companyId)).toBe(1);
+    expect(await apControl(c)).toBe('40.0000'); // 100 − 60 (once)
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a sequential resubmit with the same key returns the original; a new key posts a second', async () => {
+    const c = await setup();
+    const billId = await openBill(c, '100.00');
+    const key = crypto.randomUUID();
+    const input = payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '30.00' }], idempotencyKey: key,
+    });
+    const first = await payBill(c.userId, c.companyId, input);
+    const retry = await payBill(c.userId, c.companyId, input); // same key + content
+    expect(retry.payment.id).toBe(first.payment.id); // the original, not a new one
+    expect(await billPaymentCount(c.companyId)).toBe(1);
+    expect(await apControl(c)).toBe('70.0000'); // 100 − 30 (once)
+
+    // A different key is a genuinely new intent → a second payment posts.
+    await payBill(c.userId, c.companyId, payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-02', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '20.00' }], idempotencyKey: crypto.randomUUID(),
+    }));
+    expect(await billPaymentCount(c.companyId)).toBe(2);
+    expect(await apControl(c)).toBe('50.0000'); // 100 − 30 − 20
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('the same key with DIFFERENT content is refused (IDEMPOTENCY_KEY_CONFLICT), never silently merged', async () => {
+    const c = await setup();
+    const billA = await openBill(c, '100.00');
+    const billB = await openBill(c, '100.00');
+    const key = crypto.randomUUID();
+    await payBill(c.userId, c.companyId, payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+      applications: [{ billId: billA, amountApplied: '40.00' }], idempotencyKey: key,
+    }));
+    // Same key, a payment of the SAME total against a DIFFERENT bill — the request
+    // fingerprint differs, so the retry is a conflict, not a false match.
+    let code = '';
+    try {
+      await payBill(c.userId, c.companyId, payBillInput.parse({
+        vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+        applications: [{ billId: billB, amountApplied: '40.00' }], idempotencyKey: key,
+      }));
+    } catch (e) {
+      expect(e).toBeInstanceOf(LedgerError);
+      code = (e as LedgerError).code;
+    }
+    expect(code).toBe('IDEMPOTENCY_KEY_CONFLICT');
+    expect(await billPaymentCount(c.companyId)).toBe(1); // the second never posted
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a keyless payment still posts (backward compatible)', async () => {
+    const c = await setup();
+    const billId = await openBill(c, '100.00');
+    // Two keyless payments are two distinct disbursements — no idempotency applies.
+    await payBill(c.userId, c.companyId, payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-01', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '10.00' }],
+    }));
+    await payBill(c.userId, c.companyId, payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-02-02', cashAccountId: c.cashId,
+      applications: [{ billId, amountApplied: '10.00' }],
+    }));
+    expect(await billPaymentCount(c.companyId)).toBe(2);
+    expect(await apControl(c)).toBe('80.0000'); // 100 − 10 − 10
     await assertLedgerIntegrity(c.companyId);
   });
 });

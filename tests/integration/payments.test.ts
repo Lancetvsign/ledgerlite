@@ -441,3 +441,53 @@ describe('listOpenInvoices — open balances for the payment UI (LL-045)', () =>
     expect(listA.some((o) => o.id === bInv)).toBe(false); // another company's invoice never appears
   });
 });
+
+describe('A/R submit-once idempotency — a keyed retry never receives twice (LL-067)', () => {
+  async function arControl(c: Ctx): Promise<string> {
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(
+      sql`select id from accounts where company_id = ${c.companyId} and system_account_type = 'ACCOUNTS_RECEIVABLE' limit 1`,
+    )).rows[0]!.id;
+    const tb = await getTrialBalance(c.userId, c.companyId, '2026-12-31');
+    return tb.rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+  }
+
+  it('N simultaneous receipts with the SAME key collapse to ONE payment', async () => {
+    const c = await setup();
+    const invId = await openInvoice(c, '100.00');
+    const key = crypto.randomUUID();
+    const input = () => receivePaymentInput.parse({
+      customerId: c.customerId, paymentDate: '2026-01-15', depositAccountId: c.cashId,
+      applications: [{ invoiceId: invId, amountApplied: '40.00' }], idempotencyKey: key,
+    });
+    const results = await Promise.allSettled(Array.from({ length: 6 }, () => receivePayment(c.userId, c.companyId, input())));
+    const ids = new Set(results.flatMap((r) => (r.status === 'fulfilled' ? [r.value.payment.id] : [])));
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    expect(ids.size).toBe(1);
+    expect((await listPayments(c.userId, c.companyId)).length).toBe(1); // one payment, not six
+    expect(await arControl(c)).toBe('60.0000'); // 100 − 40, never 100 − 240
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a resubmit with the same key returns the original; a keyless receipt is a new payment', async () => {
+    const c = await setup();
+    const invId = await openInvoice(c, '100.00');
+    const key = crypto.randomUUID();
+    const input = receivePaymentInput.parse({
+      customerId: c.customerId, paymentDate: '2026-01-15', depositAccountId: c.cashId,
+      applications: [{ invoiceId: invId, amountApplied: '30.00' }], idempotencyKey: key,
+    });
+    const first = await receivePayment(c.userId, c.companyId, input);
+    const retry = await receivePayment(c.userId, c.companyId, input);
+    expect(retry.payment.id).toBe(first.payment.id);
+    expect((await listPayments(c.userId, c.companyId)).length).toBe(1);
+    // A keyless receipt is a distinct intent.
+    await receivePayment(c.userId, c.companyId, receivePaymentInput.parse({
+      customerId: c.customerId, paymentDate: '2026-01-16', depositAccountId: c.cashId,
+      applications: [{ invoiceId: invId, amountApplied: '20.00' }],
+    }));
+    expect((await listPayments(c.userId, c.companyId)).length).toBe(2);
+    expect(await arControl(c)).toBe('50.0000'); // 100 − 30 − 20
+    await assertLedgerIntegrity(c.companyId);
+  });
+});

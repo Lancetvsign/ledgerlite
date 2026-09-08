@@ -49,12 +49,15 @@ export function PaymentForm({
   openInvoices,
   depositAccounts,
   defaultDate,
+  idempotencyKey,
   notice,
 }: {
   customers: Option[];
   openInvoices: OpenInvoiceOption[];
   depositAccounts: Option[];
   defaultDate: string;
+  /** A per-render request id — submit-once idempotency (LL-067). */
+  idempotencyKey: string;
   notice: string | null;
 }) {
   const [customerText, setCustomerText] = useState('');
@@ -101,6 +104,7 @@ export function PaymentForm({
       </datalist>
 
       <form action={receivePaymentAction} data-testid="payment-form" className="flex flex-col gap-4">
+        <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         <div className="flex flex-wrap gap-4">
           <label className="flex flex-1 flex-col gap-1 text-sm">
             Customer

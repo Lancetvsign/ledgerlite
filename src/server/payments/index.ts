@@ -10,7 +10,14 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import {
+  findIdempotentDocument,
+  fingerprintRequest,
+  isIdempotencyViolation,
+  LedgerError,
+  postEntryCore,
+  reverseEntryCore,
+} from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 import { invoiceReductionsExpr, invoiceReductionsTotal } from '@/server/reports/open-balance';
 
@@ -76,7 +83,38 @@ export async function receivePayment(
     throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${input.paymentDate} is closed.`);
   }
 
-  return await getDbTx().transaction(async (tx) => {
+  // Submit-once idempotency (LL-067). Fingerprint the REQUEST — its applications matter,
+  // and the derived posting (Dr cash / Cr A/R) would not capture WHICH invoices. A retry
+  // that collides on the key resolves to the ORIGINAL payment instead of posting twice.
+  const idempotencyKey = input.idempotencyKey;
+  const fingerprint =
+    idempotencyKey === undefined
+      ? undefined
+      : fingerprintRequest({
+          kind: 'customer_payment',
+          companyId,
+          customerId: input.customerId,
+          paymentDate: input.paymentDate,
+          depositAccountId: input.depositAccountId,
+          method: input.method ?? '',
+          reference: input.reference ?? '',
+          memo: input.memo ?? '',
+          applications: [...input.applications]
+            .map((a) => ({ invoiceId: a.invoiceId, amountApplied: a.amountApplied }))
+            .sort((x, y) => x.invoiceId.localeCompare(y.invoiceId)),
+        });
+  const loadDoc = (id: string): Promise<PaymentWithApplications> => loadPayment(getDbTx(), companyId, id);
+
+  // A retry whose key already posted returns the ORIGINAL here — BEFORE the
+  // state-dependent validation below, which the winner's own posting would now make
+  // fail (e.g. the invoice's reduced open balance → OVERAPPLIED). A no-op, not an error.
+  if (idempotencyKey !== undefined) {
+    const prior = await findIdempotentDocument(companyId, idempotencyKey, fingerprint!, loadDoc);
+    if (prior !== null) return prior;
+  }
+
+  const runPayment = (): Promise<PaymentWithApplications> =>
+    getDbTx().transaction(async (tx) => {
     const arAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_RECEIVABLE');
     if (arAccountId === null) {
       throw new PaymentError('AR_ACCOUNT_NOT_CONFIGURED', 'No Accounts Receivable account is configured.');
@@ -196,9 +234,10 @@ export async function receivePayment(
       description: input.reference !== undefined ? `Payment ${input.reference}` : 'Customer payment',
       sourceType: 'CUSTOMER_PAYMENT',
       sourceId: payment.id,
+      idempotencyKey,
       lines: ledgerLines,
     };
-    await postEntryCore(tx, ledgerInput, input.paymentDate, undefined);
+    await postEntryCore(tx, ledgerInput, input.paymentDate, fingerprint);
 
     if (fullyPaid.length > 0) {
       await tx
@@ -225,6 +264,20 @@ export async function receivePayment(
 
     return await loadPayment(tx, companyId, payment.id);
   });
+
+  // No key → post directly. With a key, a retry that collides on the idempotency index
+  // resolves to the ORIGINAL payment (fingerprint-verified) — a double-submit is a no-op.
+  if (idempotencyKey === undefined) return await runPayment();
+  try {
+    return await runPayment();
+  } catch (error) {
+    // A truly-concurrent first submit lost the (company, key) unique index at post time.
+    if (isIdempotencyViolation(error)) {
+      const resolved = await findIdempotentDocument(companyId, idempotencyKey, fingerprint!, loadDoc);
+      if (resolved !== null) return resolved;
+    }
+    throw error;
+  }
 }
 
 export async function voidPayment(

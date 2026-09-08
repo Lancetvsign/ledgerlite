@@ -9,7 +9,14 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import {
+  findIdempotentDocument,
+  fingerprintRequest,
+  isIdempotencyViolation,
+  LedgerError,
+  postEntryCore,
+  reverseEntryCore,
+} from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 import { billReductionsTotal } from '@/server/reports/bill-open-balance';
 
@@ -53,7 +60,34 @@ export async function issueVendorCredit(
     throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${input.creditDate} is closed.`);
   }
 
-  return await getDbTx().transaction(async (tx) => {
+  // Submit-once idempotency (LL-067). Fingerprint the REQUEST (the bill it credits and
+  // the amount); a retry that collides on the key resolves to the ORIGINAL credit
+  // instead of crediting the vendor twice.
+  const idempotencyKey = input.idempotencyKey;
+  const fingerprint =
+    idempotencyKey === undefined
+      ? undefined
+      : fingerprintRequest({
+          kind: 'vendor_credit',
+          companyId,
+          billId: input.billId,
+          expenseAccountId: input.expenseAccountId,
+          creditDate: input.creditDate,
+          amount: input.amount,
+          reason: input.reason ?? '',
+        });
+  const loadDoc = (id: string): Promise<VendorCredit> => loadVendorCredit(getDbTx(), companyId, id);
+
+  // A retry whose key already posted returns the ORIGINAL here — BEFORE the
+  // state-dependent validation below (the bill must still be OPEN, the credit ≤ its open
+  // balance), which the winner's own credit would now make fail. A no-op, not an error.
+  if (idempotencyKey !== undefined) {
+    const prior = await findIdempotentDocument(companyId, idempotencyKey, fingerprint!, loadDoc);
+    if (prior !== null) return prior;
+  }
+
+  const runCredit = (): Promise<VendorCredit> =>
+    getDbTx().transaction(async (tx) => {
     const apAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_PAYABLE');
     if (apAccountId === null) {
       throw new VendorCreditError('AP_ACCOUNT_NOT_CONFIGURED', 'No Accounts Payable account is configured.');
@@ -140,9 +174,10 @@ export async function issueVendorCredit(
       description: `Vendor credit for bill ${bill.billNumber ?? bill.id}`,
       sourceType: 'VENDOR_CREDIT',
       sourceId: credit.id,
+      idempotencyKey,
       lines: ledgerLines,
     };
-    await postEntryCore(tx, ledgerInput, input.creditDate, undefined);
+    await postEntryCore(tx, ledgerInput, input.creditDate, fingerprint);
 
     // A vendor credit that clears the remaining balance settles the bill.
     if (clearsBill) {
@@ -170,6 +205,20 @@ export async function issueVendorCredit(
 
     return await loadVendorCredit(tx, companyId, credit.id);
   });
+
+  // No key → post directly. With a key, a retry that collides on the idempotency index
+  // resolves to the ORIGINAL credit (fingerprint-verified) — a double-submit is a no-op.
+  if (idempotencyKey === undefined) return await runCredit();
+  try {
+    return await runCredit();
+  } catch (error) {
+    // A truly-concurrent first submit lost the (company, key) unique index at post time.
+    if (isIdempotencyViolation(error)) {
+      const resolved = await findIdempotentDocument(companyId, idempotencyKey, fingerprint!, loadDoc);
+      if (resolved !== null) return resolved;
+    }
+    throw error;
+  }
 }
 
 export async function voidVendorCredit(

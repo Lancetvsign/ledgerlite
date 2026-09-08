@@ -63,6 +63,7 @@ export async function receivePaymentAction(formData: FormData): Promise<void> {
     method: opt(formData.get('method')),
     reference: opt(formData.get('reference')),
     memo: opt(formData.get('memo')),
+    idempotencyKey: opt(formData.get('idempotencyKey')),
     applications: applicationsFrom(formData),
   });
   if (!parsed.success) redirect('/payments/new?error=invalid');
