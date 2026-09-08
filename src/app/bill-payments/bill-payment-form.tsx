@@ -49,12 +49,15 @@ export function BillPaymentForm({
   openBills,
   cashAccounts,
   defaultDate,
+  idempotencyKey,
   notice,
 }: {
   vendors: Option[];
   openBills: OpenBillOption[];
   cashAccounts: Option[];
   defaultDate: string;
+  /** A per-render request id — submit-once idempotency (LL-067). */
+  idempotencyKey: string;
   notice: string | null;
 }) {
   const [vendorText, setVendorText] = useState('');
@@ -101,6 +104,7 @@ export function BillPaymentForm({
       </datalist>
 
       <form action={payBillAction} data-testid="bill-payment-form" className="flex flex-col gap-4">
+        <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         <div className="flex flex-wrap gap-4">
           <label className="flex flex-1 flex-col gap-1 text-sm">
             Vendor

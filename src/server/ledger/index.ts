@@ -267,7 +267,7 @@ function validateBalance(input: PostJournalEntryInput): void {
 }
 
 /** True when an error is the idempotency-key partial-unique violation. */
-function isIdempotencyViolation(error: unknown): boolean {
+export function isIdempotencyViolation(error: unknown): boolean {
   const message = String((error as { cause?: unknown }).cause ?? error);
   return /journal_entries_idempotency_unique|duplicate key/i.test(message);
 }
@@ -307,7 +307,57 @@ async function resolveIdempotentRetry(
   return await loadEntry(db, prior.id);
 }
 
+/**
+ * The document analogue of `resolveIdempotentRetry` — LL-067. Returns the ORIGINAL
+ * document for a key that already posted, or `null` if none has. A document service
+ * (payBill / receivePayment / issueVendorCredit) calls this in TWO places:
+ *
+ *   1. BEFORE its state-dependent business validation, so a network retry after a lost
+ *      response returns the original instead of re-running checks against state the
+ *      winner already changed (e.g. an OPEN-balance check the winner's own posting
+ *      would now fail — the retry must be a no-op, not an OVERAPPLIED error);
+ *   2. in the catch, when a truly-concurrent first submit lost the `(company, key)`
+ *      unique index at post time.
+ *
+ * It finds the prior entry by (company, key), verifies the request fingerprint (a key
+ * reused for DIFFERENT content is a caller bug → IDEMPOTENCY_KEY_CONFLICT, never a wrong
+ * document), and `load`s the document its `sourceId` points at. `null` means "no committed
+ * prior" → the caller proceeds (pre-check) or rethrows the original error (catch).
+ */
+export async function findIdempotentDocument<T>(
+  companyId: string,
+  idempotencyKey: string,
+  fingerprint: string,
+  load: (documentId: string) => Promise<T>,
+): Promise<T | null> {
+  const rows = await getDbTx()
+    .select({
+      sourceId: schema.journalEntries.sourceId,
+      fingerprint: schema.journalEntries.idempotencyFingerprint,
+    })
+    .from(schema.journalEntries)
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, companyId),
+        eq(schema.journalEntries.idempotencyKey, idempotencyKey),
+      ),
+    )
+    .limit(1);
+  const prior = rows[0];
+  if (prior === undefined || prior.sourceId === null) {
+    return null; // no committed prior — caller proceeds / rethrows.
+  }
+  if (prior.fingerprint !== fingerprint) {
+    throw new LedgerError(
+      'IDEMPOTENCY_KEY_CONFLICT',
+      'This idempotency key was already used for a different request.',
+    );
+  }
+  return await load(prior.sourceId);
+}
+
 export { reverseJournalEntry, reverseEntryCore } from './reversal';
+export { fingerprintRequest } from './fingerprint';
 export { getJournalEntry } from './queries';
 export type { JournalEntryView, JournalEntryLineView } from './queries';
 export type { PostedEntry } from './internal';

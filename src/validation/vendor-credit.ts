@@ -24,6 +24,9 @@ export const issueVendorCreditInput = z.object({
     // Positive without touching JS numbers: > 0 iff it contains a non-zero digit.
     .refine((v) => /[1-9]/.test(v), 'Amount must be positive.'),
   reason: z.string().trim().max(1000).optional().transform((v) => (v === '' ? undefined : v)),
+  /** Optional client-generated request id for submit-once idempotency (LL-067): a retry
+   *  with the SAME key returns the original credit instead of crediting twice. Never money. */
+  idempotencyKey: z.uuid().optional(),
 });
 export type IssueVendorCreditInput = z.infer<typeof issueVendorCreditInput>;
 

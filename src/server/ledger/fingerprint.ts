@@ -38,3 +38,29 @@ export function fingerprintPosting(input: PostJournalEntryInput): string {
 
   return createHash('sha256').update(material).digest('hex');
 }
+
+/**
+ * A stable hash of a document REQUEST's material content — LL-067 (submit-once
+ * idempotency). Distinct from `fingerprintPosting`: a document's derived ledger posting
+ * (e.g. Dr A/P total / Cr cash) does NOT capture WHICH bills/invoices the applications
+ * targeted, nor the document's own row id (fresh per retry). So the document services
+ * fingerprint the REQUEST itself — the caller passes the material fields (ids, dates,
+ * amounts, and its applications, pre-sorted so order is immaterial), and this hashes them
+ * with object keys canonicalised (sorted) recursively, so an identical resubmit matches
+ * and a key reused for different content does not.
+ */
+export function fingerprintRequest(material: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalize(material))).digest('hex');
+}
+
+/** Recursively sort object keys so serialization is order-independent (arrays keep order). */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, canonicalize(v)] as const);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}

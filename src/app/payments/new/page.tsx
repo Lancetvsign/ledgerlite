@@ -66,6 +66,7 @@ export default async function NewPaymentPage({
       openInvoices={openInvoiceOptions}
       depositAccounts={depositAccounts}
       defaultDate={today}
+      idempotencyKey={crypto.randomUUID()}
       notice={paymentNotice(params.error)}
     />
   );

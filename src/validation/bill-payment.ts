@@ -31,6 +31,12 @@ export const payBillInput = z.object({
   applications: z
     .array(billPaymentApplicationInput)
     .min(1, 'A bill payment must apply to at least one bill.'),
+  /**
+   * Optional client-generated request id for submit-once idempotency (LL-067). A
+   * double-submit / retry with the SAME key returns the original payment instead of
+   * disbursing twice. Never money — a UUID the form mints per render.
+   */
+  idempotencyKey: z.uuid().optional(),
 });
 export type PayBillInput = z.infer<typeof payBillInput>;
 

@@ -64,6 +64,7 @@ export default async function NewBillPaymentPage({
       openBills={openBillOptions}
       cashAccounts={cashAccounts}
       defaultDate={today}
+      idempotencyKey={crypto.randomUUID()}
       notice={billPaymentNotice(params.error)}
     />
   );

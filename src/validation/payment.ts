@@ -33,6 +33,10 @@ export const receivePaymentInput = z.object({
   applications: z
     .array(paymentApplicationInput)
     .min(1, 'A payment must apply to at least one invoice.'),
+  /** Optional client-generated request id for submit-once idempotency (LL-067): a
+   *  double-submit / retry with the SAME key returns the original payment instead of
+   *  posting twice. Never money — a UUID the form mints per render. */
+  idempotencyKey: z.uuid().optional(),
 });
 export type ReceivePaymentInput = z.infer<typeof receivePaymentInput>;
 

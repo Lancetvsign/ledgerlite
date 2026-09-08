@@ -1493,3 +1493,53 @@ kept (Gate 4 item 2 ratified it); this constrains the *callers* the triggers wer
 An opening-balance feature is scheduled (needs a sanctioned non-document A/R/A/P path); or a new
 document source type is added (it posts via `postEntryCore`, so it is covered automatically — no
 change here).
+
+---
+
+## ADR-026 — Document submit-once idempotency reuses the journal key, fingerprinting the REQUEST
+
+**Status** Accepted · **Added by** LL-067 · **Decided by** product owner
+
+### Context
+
+Gate 5 finding 2: `receivePayment`, `payBill`, and `issueVendorCredit` minted a new document per
+call with no idempotency key, so a client retry after a lost response created a SECOND document — a
+partial payment/credit posted twice, over-disbursing cash while the subsidiary and control stayed in
+step (so reconciliation would not flag it). Invariant 6 requires retries to be idempotent.
+
+### Decision
+
+A client-supplied **idempotency key** (an optional UUID the form mints per render) makes a
+double-submit / network-retry of one payment or credit a no-op that returns the ORIGINAL document.
+**No schema change** — it reuses the `journal_entries.idempotency_key` + `idempotency_fingerprint`
+columns and the partial unique index from LL-032, at the document layer:
+
+- The service computes a **request fingerprint** and posts the entry with the key + fingerprint.
+- A retry resolves to the original document via `findIdempotentDocument` (the prior entry's
+  `source_id`), in TWO places: **before** the service's state-dependent validation (so a network
+  retry does not re-run an OPEN-balance check the winner's own posting would now fail with
+  `OVERAPPLIED` — the retry must be a no-op, not an error), AND in the catch, where a truly-concurrent
+  first submit lost the `(company, key)` unique index at `postEntryCore` (its fresh row rolls back).
+  Fingerprint mismatch → `IDEMPOTENCY_KEY_CONFLICT` (a key reused for different content is a caller
+  bug, never silently merged). A **keyless** call is unchanged (the index is partial on
+  `idempotency_key is not null`).
+
+**Fingerprint the REQUEST, not the derived posting** (`fingerprintRequest`, distinct from
+`fingerprintPosting`). A document's ledger posting — e.g. `Dr A/P total / Cr cash` — captures the
+total and accounts but NOT which bills/invoices the applications targeted, so two same-total payments
+to different bills under one key would falsely match; and the posting embeds the document's own
+`sourceId`, which is fresh per retry. So the fingerprint is over the request's material fields (ids,
+dates, amounts, and its applications, pre-sorted), with object keys canonicalised.
+
+### Consequences
+
+- The two money-movers (`receivePayment`, `payBill`) and `issueVendorCredit` are submit-once when a
+  key is supplied; the payments UI wires a per-render hidden key, so a double-click or retry is safe.
+- The `journal_entries.idempotency_key` column now serves both the manual path (LL-032) and documents
+  — one mechanism, one partial unique index.
+
+### Revisit if
+
+`issueCreditMemo` / `writeOffInvoice` (the A/R reduction siblings) need the same guard — a small
+extension of the shared `findIdempotentDocument` + `fingerprintRequest` helpers; or a document-
+table `idempotency_key` column is preferred (heavier, considered and rejected here for equal safety).
