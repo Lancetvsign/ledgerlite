@@ -139,25 +139,34 @@ jobs:
   # exposing a database credential to code from an untrusted fork would be worse
   # than losing the coverage.
   # ---------------------------------------------------------------------------
-  integration:
-    name: Integration (ephemeral Neon branch)
+  integration-shards:
+    name: Integration shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # The database-backed suite runs its files serially against one Neon branch
-    # (parallel files would truncate tables mid-assertion — see vitest.config.mts),
-    # and Neon compute latency varies run to run. Through Sprint 4 real durations were
-    # ~3–16 min; Sprints 5–6 grew the suite (A/R + A/P documents, reconciliation and
-    # concurrency scenarios) to a steady ~27–30 min, which began timing out a GREEN
-    # suite at the old 30-min cap (three consecutive PR timeouts at Gate 5). Raised to
-    # 45 for slow-Neon-day headroom. Splitting into parallel jobs stays rejected for now
-    # (it adds a second concurrent Neon branch, and contention — not test count — drives
-    # the slow runs); a proper sharding investigation is ticketed (LL-070).
+    # The database-backed suite is SHARDED across parallel jobs (LL-070). It grew through
+    # Sprints 5–6 (A/R + A/P documents, reconciliation and concurrency scenarios) to
+    # ~27 min serially, and on a contended Neon day crawled to ~42 min — timing out a
+    # GREEN suite at the cap or blowing per-test timeouts (fixed to 90s in vitest.config).
+    # Each shard runs a vitest `--shard` slice of the FILES serially against its OWN
+    # ephemeral Neon branch — so shards never contend on one database (the earlier
+    # objection to splitting assumed a shared branch; a branch per shard removes it), and
+    # wall-clock is ~total/N. The `integration` aggregator below (which keeps the required
+    # check name) gates the merge on all shards. To raise N, edit BOTH the `matrix.shard`
+    # list AND the `--shard=…/N` divisor in the test step below (they must match) — once
+    # Neon concurrent-compute headroom is confirmed. 45 stays as a per-shard safety cap.
     timeout-minutes: 45
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    strategy:
+      # Do not cancel the other shard when one fails — we want the full picture, and the
+      # aggregator reds the required check regardless.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     env:
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
-      # Branch name is unique per run, so a re-run never collides with itself.
-      BRANCH_NAME: test/pr-${{ github.event.pull_request.number || 'push' }}-run-${{ github.run_id }}
+      # A DISTINCT ephemeral Neon branch per shard (so shards never share a database),
+      # unique per run so a re-run never collides with itself.
+      BRANCH_NAME: test/pr-${{ github.event.pull_request.number || 'push' }}-run-${{ github.run_id }}-shard-${{ matrix.shard }}
       APP_ENV: test
     steps:
       # This job FAILS rather than skips when secrets are absent. A skipped job
@@ -227,10 +236,15 @@ jobs:
       - name: Mark branch as a disposable test database
         run: npm run db:mark-test -- --host "${{ steps.neon.outputs.endpoint_id }}"
 
+      # vitest `--shard=i/N` splits the FILES across shards; each shard still runs its
+      # own slice serially (fileParallelism: false) against its own Neon branch.
       - name: Integration tests
-        run: npm run test:integration
+        run: npm run test:integration -- --shard=${{ matrix.shard }}/2
 
+      # A whole-history migration replay — identical on every shard's branch, so once
+      # is enough. Run it on shard 1 only rather than paying for it N times.
       - name: Verify migration mechanics
+        if: matrix.shard == 1
         run: npm run db:verify
 
       # `always()` so a failure above still cleans up. A leaked branch on every
@@ -242,6 +256,39 @@ jobs:
           npx --yes neonctl@2.15.0 branches delete "$BRANCH_NAME" \
             --project-id "$NEON_PROJECT_ID" || \
             echo "::warning title=Branch cleanup failed::$BRANCH_NAME may still exist; the reaper will remove it"
+
+  # ---------------------------------------------------------------------------
+  # AGGREGATOR — keeps the required-check name after sharding (LL-070).
+  #
+  # Branch protection requires a check literally named
+  # "Integration (ephemeral Neon branch)". A matrix job reports one status PER shard
+  # ("Integration shard 1", "Integration shard 2"), so this tiny job carries the
+  # required name and fails unless EVERY shard succeeded. `always()` so it runs even
+  # when a shard fails (a shard failure => needs result != 'success' => this reds);
+  # the guard is `== 'success'` (not `!= 'failure'`) on purpose, so a cancelled or
+  # skipped shard also reds the check — an unrun integration suite must never read as
+  # a pass in an accounting codebase.
+  #
+  # The fork guard mirrors the shard runner's: on a fork PR the shards are skipped (no
+  # secrets), so this aggregator is skipped too — GitHub counts a skipped REQUIRED check
+  # as satisfied, preserving the pre-sharding behaviour (forks intentionally forgo the
+  # DB suite rather than expose a credential — see the runner's guard comment). `always()`
+  # only defeats the implicit success-of-needs gate so a FAILED shard still reds this.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration (ephemeral Neon branch)
+    runs-on: ubuntu-latest
+    needs: [integration-shards]
+    if: always() && (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push')
+    steps:
+      - name: Require every integration shard to have succeeded
+        run: |
+          result='${{ needs.integration-shards.result }}'
+          echo "integration-shards result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error title=Integration shards did not all pass::result=$result"
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # RELEASE GATE — the general-ledger regression suite (LL-036).
