@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { LedgerError } from '@/server/ledger';
@@ -79,6 +80,7 @@ export async function receivePaymentAction(formData: FormData): Promise<void> {
 export async function voidPaymentAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const paymentId = idOf(formData, 'paymentId');
+  if (!isUuid(paymentId)) redirect('/payments?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidPaymentInput.safeParse({ reason: opt(formData.get('reason')) });
   const reason = parsedReason.success ? parsedReason.data : voidPaymentInput.parse({});
   try {

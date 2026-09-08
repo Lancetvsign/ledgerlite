@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { getBillPayment } from '@/server/bill-payments';
@@ -39,6 +40,7 @@ export default async function BillPaymentDetailPage({
   if (membership === null) redirect('/account');
 
   const { id } = await params;
+  if (!isUuid(id)) redirect('/bill-payments?error=notfound'); // malformed id → not-found, not a 500
   const loaded = await getBillPayment(user.id, membership.companyId, id);
   if (loaded === null) redirect('/bill-payments?error=notfound');
   const { payment, applications } = loaded;

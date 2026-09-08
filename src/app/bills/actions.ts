@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { BillError, createBill, finalizeBill, voidBill } from '@/server/bills';
@@ -93,6 +94,7 @@ export async function createBillAction(formData: FormData): Promise<void> {
 export async function finalizeBillAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const billId = idOf(formData, 'billId');
+  if (!isUuid(billId)) redirect('/bills?error=notfound'); // malformed id → not-found, not a 500
   try {
     await finalizeBill(userId, companyId, billId);
   } catch (error) {
@@ -104,6 +106,7 @@ export async function finalizeBillAction(formData: FormData): Promise<void> {
 export async function voidBillAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const billId = idOf(formData, 'billId');
+  if (!isUuid(billId)) redirect('/bills?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidBillInput.safeParse({ reason: opt(formData.get('reason')) });
   const reason = parsedReason.success ? parsedReason.data : voidBillInput.parse({});
   try {

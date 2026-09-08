@@ -110,9 +110,12 @@ export async function payBill(
       throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment cannot pay from a control account (Accounts Receivable / Payable).');
     }
 
-    // Lock and validate each applied bill; collect those this payment fully pays.
+    // Lock and validate each applied bill; collect those this payment fully pays. Lock
+    // the bills in a deterministic (id-sorted) order so two concurrent payments touching
+    // the same bills in a different input order cannot deadlock (Gate 5). Applications
+    // are deduped by bill id above, so the sort is a total order.
     const fullyPaid: string[] = [];
-    for (const app of input.applications) {
+    for (const app of [...input.applications].sort((a, b) => a.billId.localeCompare(b.billId))) {
       const rows = await tx
         .select()
         .from(schema.bills)

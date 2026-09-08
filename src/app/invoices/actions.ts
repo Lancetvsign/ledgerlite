@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import {
@@ -102,6 +103,7 @@ export async function createInvoiceAction(formData: FormData): Promise<void> {
 export async function updateInvoiceAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const invoiceId = idOf(formData, 'invoiceId');
+  if (!isUuid(invoiceId)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   const parsed = createInvoiceInput.safeParse(invoiceInputFrom(formData));
   if (!parsed.success) redirect(`/invoices/${invoiceId}/edit?error=invalid`);
 
@@ -116,6 +118,7 @@ export async function updateInvoiceAction(formData: FormData): Promise<void> {
 export async function finalizeInvoiceAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const invoiceId = idOf(formData, 'invoiceId');
+  if (!isUuid(invoiceId)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   try {
     await finalizeInvoice(userId, companyId, invoiceId);
   } catch (error) {
@@ -127,6 +130,7 @@ export async function finalizeInvoiceAction(formData: FormData): Promise<void> {
 export async function voidInvoiceAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const invoiceId = idOf(formData, 'invoiceId');
+  if (!isUuid(invoiceId)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidInvoiceInput.safeParse({ reason: opt(formData.get('reason')) });
   const reason = parsedReason.success ? parsedReason.data : voidInvoiceInput.parse({});
   try {

@@ -115,9 +115,12 @@ export async function receivePayment(
       throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment cannot deposit into Accounts Receivable.');
     }
 
-    // Lock and validate each applied invoice; collect those this payment fully pays.
+    // Lock and validate each applied invoice; collect those this payment fully pays. Lock
+    // the invoices in a deterministic (id-sorted) order so two concurrent payments
+    // touching the same invoices in a different input order cannot deadlock (Gate 5).
+    // Applications are deduped by invoice id above, so the sort is a total order.
     const fullyPaid: string[] = [];
-    for (const app of input.applications) {
+    for (const app of [...input.applications].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))) {
       const rows = await tx
         .select()
         .from(schema.invoices)

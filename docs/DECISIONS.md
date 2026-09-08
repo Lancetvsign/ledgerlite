@@ -1405,8 +1405,15 @@ Two **pure reporting services** (no schema, no stored balance — invariant 2), 
   balance is `Σ(credit − debit)` — the sign **mirror** of the customer statement's `debit − credit`.
   Statement columns are `charge` (a credit to A/P — a bill) and `payment` (a debit to A/P — a
   payment or vendor credit). A vendor's closing is that vendor's slice of the A/P control as of
-  `toDate`; summed over all vendors it equals the control (every A/P line is vendor-tagged and
-  manual A/P posting is forbidden, so the decomposition is complete).
+  `toDate`; summed over all vendors it equals the control (every A/P line is vendor-tagged, and a
+  manual `JOURNAL_ENTRY` line into A/P is refused by the 0023 trigger, so the decomposition holds for
+  every path a user can reach). **Scope caveat (Gate 5).** Like the A/R guard (ADR-018), the 0023
+  lock is a *denylist on the labelled manual path*: it stops `source_type = 'JOURNAL_ENTRY'`, not a
+  service caller who posts a document *source type* through `postJournalEntry`, nor a direct
+  `reverseJournalEntry` of a document's entry. Neither is reachable from the UI today (the journal UI
+  hardcodes `JOURNAL_ENTRY`; nothing calls `reverseJournalEntry` from `src/app`), but the "moves only
+  through documents" guarantee is not yet *structural against the service layer*. Closing that —
+  pinning the manual entry point and refusing document-entry reversal — is **[LL-066](tickets/LL-066.md)**.
 
 Both reconciliations — aging grand total == control, and Σ vendor-statement closings == control —
 are asserted together across a bill → payment → credit → void lifecycle as **GL-T026** (the ticket

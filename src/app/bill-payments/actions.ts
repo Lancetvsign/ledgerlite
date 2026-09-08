@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isUuid } from '@/lib/uuid';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { BillPaymentError, payBill, voidBillPayment } from '@/server/bill-payments';
@@ -80,6 +81,7 @@ export async function payBillAction(formData: FormData): Promise<void> {
 export async function voidBillPaymentAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const paymentId = idOf(formData, 'paymentId');
+  if (!isUuid(paymentId)) redirect('/bill-payments?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidBillPaymentInput.safeParse({ reason: opt(formData.get('reason')) });
   const reason = parsedReason.success ? parsedReason.data : voidBillPaymentInput.parse({});
   try {
