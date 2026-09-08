@@ -1586,3 +1586,47 @@ their account resolution. This mirrors how 0022 corrected A/P numbering via migr
 
 Another chart tier is introduced, or a company legitimately needs number `2000` free for a non-A/P
 account (today the skipped-company path handles that by leaving A/P uninstalled until re-install).
+
+## ADR-028 — The audit log records an explicit field allow-list, not the whole entity
+
+**Status** Accepted · **Added by** LL-069 · **Decided by** product owner
+
+### Context
+
+Gate 5 security finding LOW-3: `createVendor`/`updateVendor`/`deactivateVendor` and the identical
+customer service audited the WHOLE row (`after: vendor`, `before: existing`). `redact()` runs on every
+audit payload, but it catches secrets by KEY name (`account_number`, `routing_number`, …) or by VALUE
+SHAPE (connection strings, JWTs, provider tokens) — it cannot detect a bare account number sitting in a
+free-text `notes`/`address` field as ordinary prose. AGENTS §9 lists "bank credentials" among values
+that must never land in the audit log, so a user who typed vendor remit-to banking details into `notes`
+persisted them verbatim in `audit_events.after_json`.
+
+### Decision
+
+Both party services audit an explicit, **default-deny field allow-list** — `id`, `name`,
+`vendorNumber`/`customerNumber`, `status` — via a small `auditView()` projection, instead of the whole
+record. The audit event's purpose is "who changed this party's identity or status, and when"; the
+actor, action, entity id, timestamp and request id already come from the event row, and the free-text
+contact fields (`email`, `phone`, `address`/`billingAddress`, `notes`) are exactly the ones that can
+carry §9-forbidden data and are of no audit value. `redact()` still runs on top as defence in depth.
+
+Chosen over the alternative of **extending `redact()`'s patterns** to cover these fields: a value-shape
+pattern broad enough to catch a bare account number (a run of digits) would redact legitimate content
+elsewhere, and a key-name rule would not help when the number is inside `notes`. Allow-list is
+fail-safe (a field is logged only if deliberately added); pattern-matching is fail-open (a new
+free-text field leaks until someone remembers to add a pattern). Applied to BOTH services for parity
+(the A/R ⇔ A/P symmetry the gate called out). No schema change.
+
+### Consequences
+
+- Audit rows for vendors/customers no longer capture contact-field diffs — a change to `email` alone
+  produces a before/after that looks identical at the identity/status level. Accepted: field-level
+  history of contact info is not what the audit trail is for, and keeping it is the leak.
+- The projection is the one place to change if a non-sensitive field ever needs auditing — a
+  deliberate, reviewable edit.
+
+### Revisit if
+
+A new party field is genuinely audit-worthy (add it to `auditView`), or a general structured-redaction
+policy (per-entity allow-lists declared centrally) is introduced — at which point these two local
+projections fold into it.
