@@ -339,10 +339,11 @@ const REGISTRY: IsolationDescriptor[] = [
       const vendor = await createVendor(victim.ownerUserId, victim.companyId, createVendorInput.parse({ name: 'Victim Vend BP' }));
       const expense = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Expense BP', accountType: 'EXPENSE' }));
       const cash = await createAccount(victim.ownerUserId, victim.companyId, createAccountInput.parse({ name: 'Victim Cash BP', accountType: 'ASSET' }));
-      // The harness's company uses the 'system-only' chart (A/R only, no A/P) and every
-      // descriptor attacks the SAME victim, so another A/P descriptor may already have
-      // tagged an A/P control and (company_id, system_account_type) is UNIQUE. Resolve-or-
-      // create so this seed is order-independent, then finalizeBill / payBill can resolve it.
+      // The 'system-only' chart now seeds an A/P control at creation (LL-068), so the
+      // resolve below normally finds it; the create is a defensive fallback (kept so this
+      // seed survives a future chart change). (company_id, system_account_type) is UNIQUE
+      // and every descriptor attacks the SAME victim, so resolve-or-create also keeps the
+      // seed order-independent; then finalizeBill / payBill can resolve the A/P control.
       const db = await getTestDb();
       const { sql: rawSql } = await import('drizzle-orm');
       const existingAp = await db.execute<{ id: string }>(
@@ -522,11 +523,11 @@ const REGISTRY: IsolationDescriptor[] = [
         createVendorInput.parse({ name: 'Victim VC Vendor' }));
       const supplies = await createAccount(victim.ownerUserId, victim.companyId,
         createAccountInput.parse({ name: 'Victim Supplies VC', accountType: 'EXPENSE' }));
-      // The harness's company uses the 'system-only' chart (A/R only, no A/P) and every
-      // descriptor attacks the SAME victim — the bill_payments descriptor may already
-      // have tagged an A/P control, and (company_id, system_account_type) is UNIQUE. So
-      // resolve-or-create: reuse the existing A/P, else tag a liability as one, so
-      // finalizeBill / issueVendorCredit can resolve it.
+      // The 'system-only' chart now seeds an A/P control at creation (LL-068), so the
+      // resolve below normally finds it (the bill_payments descriptor may also have tagged
+      // one). (company_id, system_account_type) is UNIQUE and every descriptor attacks the
+      // SAME victim, so resolve-or-create keeps this order-independent: reuse the existing
+      // A/P, else tag a liability as a fallback, so finalizeBill / issueVendorCredit resolve it.
       const db = await getTestDb();
       const { sql: rawSql } = await import('drizzle-orm');
       const existingAp = await db.execute<{ id: string }>(
@@ -713,9 +714,10 @@ interface Fixture {
 async function buildFixture(): Promise<Fixture> {
   const userA = await makeUser('user-a@synthetic.test');
   const userB = await makeUser('user-b@synthetic.test');
-  // system-only chart so A has the required system accounts (A/R) the finalize +
-  // payment seeds need, without the numbered everyday accounts (e.g. 1000) that
-  // the accounts descriptor seeds itself — a 'standard' chart would collide on 1000.
+  // system-only chart so A has the required system accounts (A/R and, since LL-068,
+  // A/P) that the finalize + payment seeds need, without the numbered everyday accounts
+  // (e.g. 1000) the accounts descriptor seeds itself — a 'standard' chart would collide
+  // on 1000. (The chart does seed A/P at 2000, which no descriptor reuses.)
   const { company: companyA } = await createCompanyWithOwner(userA.id, COMPANY_A, 'system-only');
   await createCompanyWithOwner(userB.id, COMPANY_B); // B has a legitimate home
   return { victim: { companyId: companyA.id, ownerUserId: userA.id }, attackerUserId: userB.id };

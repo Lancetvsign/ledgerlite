@@ -1543,3 +1543,46 @@ dates, amounts, and its applications, pre-sorted), with object keys canonicalise
 `issueCreditMemo` / `writeOffInvoice` (the A/R reduction siblings) need the same guard — a small
 extension of the shared `findIdempotentDocument` + `fingerprintRequest` helpers; or a document-
 table `idempotency_key` column is preferred (heavier, considered and rejected here for equal safety).
+
+## ADR-027 — Accounts Payable is a required system account, mirroring Accounts Receivable
+
+**Status** Accepted · **Added by** LL-068 · **Decided by** product owner
+
+### Context
+
+Gate 5 finding 7: `REQUIRED_SYSTEM_ACCOUNTS` (`src/server/accounts/default-coa.ts`) listed Accounts
+Receivable but not Accounts Payable. A company created on the `'system-only'` chart therefore had an
+A/R control account but no A/P control account, and every A/P document (bill, bill-payment,
+vendor-credit) failed closed with `AP_ACCOUNT_NOT_CONFIGURED` at `resolveSystemAccount` until someone
+ran `installDefaultChartFor('standard')`. The `'standard'` chart was unaffected (it seeds `2000
+Accounts Payable`, tagged `ACCOUNTS_PAYABLE` by ADR/ migration 0022). This was a completeness gap that
+failed closed — not a live corruption — but it made the minimal chart unable to transact payables.
+
+### Decision
+
+**A/P joins the required system accounts.** `2000 Accounts Payable` (`ACCOUNTS_PAYABLE`) moves into
+`REQUIRED_SYSTEM_ACCOUNTS`, immediately after A/R — both are control accounts resolved at posting time
+and both are undeactivatable. It is removed from the explicit body of `STANDARD_CHART` (which spreads
+`...REQUIRED_SYSTEM_ACCOUNTS`), so it still appears exactly once and `STANDARD_CHART` is unchanged in
+content. No installer change: `installDefaultChart` already inserts `chartFor(choice)` under an
+untargeted `ON CONFLICT DO NOTHING` covering both the account-number and system-type unique indexes.
+
+**Existing `'system-only'` companies are backfilled by an idempotent DML migration**
+(`0026_backfill_ap_system_account.sql`), NOT by lazy create-on-first-use. The migration inserts the
+A/P control for every company lacking an `ACCOUNTS_PAYABLE` system account, skipping any company that
+already uses account number `2000` for something else (left to the authorized re-install rather than
+renumbered inside a migration). Lazy creation was rejected: it would add write logic to the financial
+posting paths, whereas a guarded backfill fixes the data once and keeps the posting paths read-only in
+their account resolution. This mirrors how 0022 corrected A/P numbering via migration.
+
+### Consequences
+
+- Every company — minimal or standard — can raise and pay a bill from creation, symmetric with
+  invoicing and collecting against A/R. `REQUIRED_SYSTEM_ACCOUNTS` grows from three to four.
+- The backfill is safe to replay (NOT EXISTS guards + `ON CONFLICT DO NOTHING`) and inserts nothing on
+  a clean-slate replay, so CI's ephemeral-branch migration replay is unaffected.
+
+### Revisit if
+
+Another chart tier is introduced, or a company legitimately needs number `2000` free for a non-A/P
+account (today the skipped-company path handles that by leaving A/P uninstalled until re-install).

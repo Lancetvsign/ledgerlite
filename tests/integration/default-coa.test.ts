@@ -47,9 +47,9 @@ describe('the default chart data', () => {
     }
   });
 
-  it('names the three required system accounts', () => {
+  it('names the four required system accounts, A/P alongside A/R (LL-068)', () => {
     const sys = REQUIRED_SYSTEM_ACCOUNTS.map((a) => a.systemAccountType);
-    expect(sys).toEqual(['ACCOUNTS_RECEIVABLE', 'RETAINED_EARNINGS', 'OPENING_BALANCE_EQUITY']);
+    expect(sys).toEqual(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'RETAINED_EARNINGS', 'OPENING_BALANCE_EQUITY']);
   });
 });
 

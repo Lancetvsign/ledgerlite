@@ -52,6 +52,16 @@ async function setup(): Promise<Ctx> {
   return { userId, companyId: company.id, vendorId: vendor.id, rentId: rent.id, cashId: cash.id };
 }
 
+/** Same fixtures as {@link setup} but on the MINIMAL 'system-only' chart (LL-068). */
+async function setupSystemOnly(): Promise<Ctx> {
+  const userId = await makeUser();
+  const { company } = await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'Minimal Co', timezone: 'America/Chicago' }), 'system-only');
+  const vendor = await createVendor(userId, company.id, createVendorInput.parse({ name: 'Globex' }));
+  const rent = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Rent Expense', accountType: 'EXPENSE' }));
+  const cash = await createAccount(userId, company.id, createAccountInput.parse({ name: 'Cash', accountType: 'ASSET' }));
+  return { userId, companyId: company.id, vendorId: vendor.id, rentId: rent.id, cashId: cash.id };
+}
+
 /** Create + finalize an OPEN bill for `price`. Returns its id. */
 async function openBill(c: Ctx, price: string, vendorId = c.vendorId): Promise<string> {
   const { bill } = await createBill(c.userId, c.companyId, createBillInput.parse({
@@ -227,5 +237,30 @@ describe('authorization — bill_payment.create pays; bill_payment.void voids', 
     await expect(voidBillPayment(bookkeeper, c.companyId, payment.id, voidBillPaymentInput.parse({}))).rejects.toThrow();
     const { payment: voided } = await voidBillPayment(accountant, c.companyId, payment.id, voidBillPaymentInput.parse({}));
     expect(voided.status).toBe('VOID');
+  });
+});
+
+describe('A/P works on the minimal system-only chart (LL-068)', () => {
+  // Before LL-068, ACCOUNTS_PAYABLE was in STANDARD_CHART but not REQUIRED_SYSTEM_ACCOUNTS,
+  // so a 'system-only' company had no A/P control account and finalizeBill (which posts
+  // Dr expense / Cr A/P) failed closed with AP_ACCOUNT_NOT_CONFIGURED. This exercises the
+  // full raise→pay flow on that chart with NO manually-created A/P account.
+  it('raises and pays a bill end to end without a manually-created A/P account', async () => {
+    const c = await setupSystemOnly();
+    // The A/P control exists from company creation — the fix.
+    const apId = await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE');
+    expect(apId).toBeTruthy();
+
+    const bill = await openBill(c, '750.00'); // finalize would have thrown AP_ACCOUNT_NOT_CONFIGURED pre-fix
+    expect(await apBalance(c)).toBe('750.0000');
+
+    const { payment } = await payBill(c.userId, c.companyId, payBillInput.parse({
+      vendorId: c.vendorId, paymentDate: '2026-01-20', cashAccountId: c.cashId,
+      applications: [{ billId: bill, amountApplied: '750.00' }],
+    }));
+    expect(payment.amount).toBe('750.0000');
+    expect(await billStatus(bill)).toBe('PAID');
+    expect(await apBalance(c)).toBe('0.0000');
+    await assertLedgerIntegrity(c.companyId);
   });
 });
