@@ -213,17 +213,21 @@ ticketed), 12 (test-contract thinness — **fixed**), 13 (A/R-only error wording
 
 The reviewer confirms, by reading the code and this evidence:
 
-- [ ] I have read the Sprint 6 schema, the bill/bill-payment/vendor-credit services, the 0023
+- [x] I have read the Sprint 6 schema, the bill/bill-payment/vendor-credit services, the 0023
       trigger, the shared `bill-open-balance.ts`, the A/P aging + vendor statement, and the A/P UI (§2).
-- [ ] The manual acceptance scenario derives correctly and the three-way tie (control ⇔ aging ⇔ Σ
+- [x] The manual acceptance scenario derives correctly and the three-way tie (control ⇔ aging ⇔ Σ
       vendor statements) holds at every stage (§3).
-- [ ] I accept the structural-vs-conventional split in §4 — including that the A/P control lock is
+- [x] I accept the structural-vs-conventional split in §4 — including that the A/P control lock is
       **structural on the labelled manual path** (0023), with the service-layer completeness gap
       scoped in ADR-024 and ticketed as **LL-066**.
-- [ ] I accept the §7 triage: items 3, 8, 9, 10, 12, 13 fixed in this gate; items 4, 6 accepted;
+- [x] I accept the §7 triage: items 3, 8, 9, 10, 12, 13 fixed in this gate; items 4, 6 accepted;
       items 1, 2, 7, 11 ticketed (LL-066–069); the CI cap raised (LL-070).
-- [ ] The independent correctness (§5a) and security (§5b) reviews raise nothing money-corrupting or
+- [x] The independent correctness (§5a) and security (§5b) reviews raise nothing money-corrupting or
       exploitable that remains open.
-- [ ] **Gate 5 is passed. Sprint 7 may begin.**
+- [x] **Gate 5 is passed. Sprint 7 may begin.**
 
-_Prepared by Claude Code. Sign-off is the human reviewer's._
+**Approved by Lance (Lancetvsign) — 2026-09-08.** All six items accepted with no exceptions;
+the §7 triage stands (items 3/8/9/10/12/13 fixed, 4/6 accepted, 1/2/7/11 ticketed as LL-066–069,
+CI cap raised per LL-070). Sprint 6 is closed; Sprint 7 may begin.
+
+_Prepared by Claude Code. Sign-off recorded on the human reviewer's explicit approval._
