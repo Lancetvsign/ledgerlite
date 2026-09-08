@@ -14,6 +14,8 @@ const REPORTS = [
   { href: '/reports/trial-balance', testid: 'trial-balance-link', title: 'Trial Balance', blurb: 'Every account’s derived debit/credit balance as of a date, with the balanced check.' },
   { href: '/reports/aging', testid: 'aging-link', title: 'A/R Aging', blurb: 'Open receivables per customer, bucketed by age, reconciling to the A/R control.' },
   { href: '/reports/statement', testid: 'statement-link', title: 'Customer Statement', blurb: 'One customer’s opening balance, activity, and closing balance over a period.' },
+  { href: '/reports/ap-aging', testid: 'ap-aging-link', title: 'A/P Aging', blurb: 'Open payables per vendor, bucketed by age, reconciling to the A/P control.' },
+  { href: '/reports/vendor-statement', testid: 'vendor-statement-link', title: 'Vendor Statement', blurb: 'One vendor’s opening balance, activity, and closing balance over a period.' },
 ] as const;
 
 export default async function ReportsPage() {

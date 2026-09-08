@@ -42,3 +42,11 @@ export const REPORTS_USER = {
   password: 'synthetic-password-1',
   name: 'Reports Tester',
 };
+
+/** LL-065 A/P-UI specs (bills, bill payments, A/P reports) — its own session, isolated from the others. */
+export const BILLS_STORAGE = 'tests/e2e/.auth/bills.json';
+export const BILLS_USER = {
+  email: 'e2e-bills@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Bills Tester',
+};
