@@ -27,10 +27,16 @@ export interface DefaultAccount {
 
 /**
  * The required system accounts — installed by every company regardless of which
- * chart it chose. The ledger cannot function without these three.
+ * chart it chose. The ledger cannot function without these.
+ *
+ * Accounts Payable is required (LL-068), not just part of the standard chart: a
+ * 'system-only' company must be able to raise and pay a bill from creation, exactly
+ * as it can invoice and collect against Accounts Receivable. Both control accounts
+ * are resolved at posting time by `resolveSystemAccount` and cannot be deactivated.
  */
 export const REQUIRED_SYSTEM_ACCOUNTS: readonly DefaultAccount[] = [
   { accountNumber: '1100', name: 'Accounts Receivable', accountType: 'ASSET', accountSubtype: 'accounts_receivable', systemAccountType: 'ACCOUNTS_RECEIVABLE' },
+  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable', systemAccountType: 'ACCOUNTS_PAYABLE' },
   { accountNumber: '3900', name: 'Retained Earnings', accountType: 'EQUITY', accountSubtype: 'retained_earnings', systemAccountType: 'RETAINED_EARNINGS' },
   { accountNumber: '3000', name: 'Opening Balance Equity', accountType: 'EQUITY', accountSubtype: 'opening_balance_equity', systemAccountType: 'OPENING_BALANCE_EQUITY' },
 ] as const;
@@ -46,8 +52,7 @@ export const STANDARD_CHART: readonly DefaultAccount[] = [
   { accountNumber: '1000', name: 'Checking', accountType: 'ASSET', accountSubtype: 'bank' },
   { accountNumber: '1010', name: 'Savings', accountType: 'ASSET', accountSubtype: 'bank' },
   { accountNumber: '1200', name: 'Undeposited Funds', accountType: 'ASSET', accountSubtype: 'current_asset' },
-  // Liabilities
-  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable', systemAccountType: 'ACCOUNTS_PAYABLE' },
+  // Liabilities (Accounts Payable 2000 is a required system account, above)
   { accountNumber: '2100', name: 'Credit Card', accountType: 'LIABILITY', accountSubtype: 'credit_card' },
   { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability', systemAccountType: 'SALES_TAX_PAYABLE' },
   // Equity
