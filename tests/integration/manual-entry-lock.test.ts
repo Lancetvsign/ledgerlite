@@ -184,9 +184,14 @@ describe('reverseJournalEntry reverses only a MANUAL entry (LL-066)', () => {
   it("a document VOID's reversal cannot be manually reversed either (the chain-root guard)", async () => {
     const c = await setup();
     const billId = await openBill(c, '100.00');
+    const expenseEntry = await billEntryId(c.companyId, billId, 'EXPENSE'); // POSTED, before the void
     await voidBill(c.userId, c.companyId, billId, voidBillInput.parse({ reversalDate: '2026-02-15' }));
-    // voidBill produced a REVERSAL entry whose chain roots at the bill's EXPENSE source.
-    const reversalEntry = await billEntryId(c.companyId, billId, 'REVERSAL');
+    // voidBill produced a REVERSAL whose reversal_of_id is the bill's EXPENSE entry (its
+    // source_id is that entry's id, not the bill's) — its chain roots at the EXPENSE source.
+    const db = await getTestDb();
+    const reversalEntry = (await db.execute<{ id: string }>(sql`
+      select id from journal_entries
+      where company_id = ${c.companyId} and reversal_of_id = ${expenseEntry} and status = 'POSTED' limit 1`)).rows[0]!.id;
     expect(await codeOf(reverseJournalEntry(reverseJournalEntryInput.parse({
       companyId: c.companyId, actorUserId: c.userId, entryId: reversalEntry, reversalDate: '2026-02-16',
     })))).toBe('DOCUMENT_REVERSAL_REQUIRES_VOID');
