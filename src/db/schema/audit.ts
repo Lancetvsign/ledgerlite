@@ -70,6 +70,8 @@ export const auditAction = pgEnum('audit_action', [
   'VENDOR_CREDIT_VOIDED',
   'OPENING_BALANCES_SET',
   'OPENING_BALANCES_VOIDED',
+  'YEAR_END_CLOSED',
+  'YEAR_END_REOPENED',
 ]);
 
 export const auditEvents = pgTable(

@@ -106,6 +106,16 @@ export async function getIncomeStatement(
     where a.company_id = ${companyId}
       and a.account_type in ('REVENUE', 'COGS', 'EXPENSE')
       and e.status in ('POSTED', 'REVERSED')
+      -- Exclude year-end closing entries AND their reversals (LL-073). A closing entry
+      -- ZEROes the P&L accounts into Retained Earnings; its reversal (from reopening a
+      -- year, source_type REVERSAL) un-zeroes them. Counting either would misstate a
+      -- closed/reopened year's real revenue/expense. The Balance Sheet deliberately
+      -- KEEPS counting both, so its as-of totals reflect the actual ledger state.
+      and e.source_type <> 'CLOSING'
+      and not exists (
+        select 1 from journal_entries oe
+        where oe.id = e.reversal_of_id and oe.source_type = 'CLOSING'
+      )
       and e.posting_date between ${fromDate} and ${toDate}
     group by a.id, a.account_number, a.name, a.account_type
     order by a.account_number nulls last, a.name`);

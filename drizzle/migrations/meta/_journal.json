@@ -204,6 +204,13 @@
       "when": 1788962547346,
       "tag": "0028_opening_balance_audit_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788983224050,
+      "tag": "0029_year_end_closing",
+      "breakpoints": true
     }
   ]
 }

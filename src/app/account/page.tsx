@@ -86,6 +86,11 @@ export default async function AccountPage() {
               Opening Balances →
             </Link>
           )}
+          {roleHasCapability(active.role, 'period.close') && (
+            <Link href="/year-end" data-testid="year-end-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+              Year-end Close →
+            </Link>
+          )}
         </nav>
       )}
       <SignOutButton />
