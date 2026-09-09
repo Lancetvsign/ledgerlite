@@ -9,3 +9,7 @@ export { getCustomerStatement } from './customer-statement';
 export type { CustomerStatement, CustomerStatementLine } from './customer-statement';
 export { getVendorStatement } from './vendor-statement';
 export type { VendorStatement, VendorStatementLine } from './vendor-statement';
+export { getBalanceSheet } from './balance-sheet';
+export type { BalanceSheet, BalanceSheetRow, BalanceSheetSection, BalanceSheetEquity } from './balance-sheet';
+export { getIncomeStatement } from './income-statement';
+export type { IncomeStatement, IncomeStatementRow, IncomeStatementSection } from './income-statement';
