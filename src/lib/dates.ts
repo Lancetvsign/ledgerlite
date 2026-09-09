@@ -75,3 +75,16 @@ export function fiscalYearStart(date: string, fiscalStartMonth: number): { year:
   const year = m >= fiscalStartMonth ? y : y - 1;
   return { year, month: fiscalStartMonth };
 }
+
+/**
+ * The LAST calendar day of the fiscal year containing `date` (LL-073). A fiscal year
+ * starting in month M ends on the last day of month M−1 of the following year — or
+ * Dec 31 of the same year when M is January. Assembled from calendar parts (no current
+ * time, ADR-005) so it is deterministic; leap years handled by `endOfMonth`.
+ */
+export function fiscalYearEnd(date: string, fiscalStartMonth: number): string {
+  const { year, month } = fiscalYearStart(date, fiscalStartMonth);
+  const endMonth = month === 1 ? 12 : month - 1;
+  const endYear = month === 1 ? year : year + 1;
+  return endOfMonth(`${String(endYear)}-${pad(endMonth)}-01`);
+}

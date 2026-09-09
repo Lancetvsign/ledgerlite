@@ -1722,3 +1722,49 @@ long-term liabilities) is deferred because `accountSubtype` is free text and not
 
 A closing-entry / year-end-roll workflow is added (net income would then post into Retained Earnings and the
 derivation would change), or subtype subgrouping, comparative columns, or a cash-flow statement are wanted.
+
+## ADR-031 — Year-end closing entries move P&L into Retained Earnings, kept out of the Income Statement
+
+**Status** Accepted · **Added by** LL-073 · **Decided by** product owner
+
+### Context
+
+Through LL-072 the books were never closed — revenue/COGS/expense accounts accumulated across all time and
+the Balance Sheet *derived* net income into equity (ADR-030). This adds the real year-end close: an entry
+that zeroes a fiscal year's P&L accounts into Retained Earnings (3900), which had zero automatic postings
+and is now its first consumer.
+
+### Decision
+
+A `year-end` service posts the closing entry through `postEntryCore` (not `postJournalEntry`, which pins
+JOURNAL_ENTRY) source-typed **`CLOSING`**, dated the fiscal-year end. It aggregates each REVENUE/COGS/
+EXPENSE account's net over `[fiscalYearStart, fiscalYearEnd]` and posts the opposite to zero it, with the
+balancing plug going to **Retained Earnings** (credit for a profit, debit for a loss) — the OBE-plug
+pattern from opening balances. The fiscal year is derived from the company's `fiscalYearStartMonth`.
+
+- **Set-once per fiscal year** reuses the existing `journal_entries_source_posted_once` index with
+  `sourceId = fiscalYearStart`; **reopening** reverses the closing entry (`reverseEntryCore`), freeing the
+  slot for a re-close. Closing does **not** lock the year's periods — that stays the separate `/periods`
+  action (product decision); the year-end period must be OPEN to post.
+- Reuses the `period.close` capability. Reads `RETAINED_EARNINGS` via `resolveSystemAccount`.
+
+**Report interaction (the subtle part):**
+- The **Income Statement excludes** `CLOSING` entries **and their reversals** (`reversal_of_id` pointing at
+  a CLOSING entry) — otherwise a closed year would report zero revenue/expense, and a year reopened with an
+  in-year reversal date would double-count. It reports the real operating activity regardless of close state.
+- The **Balance Sheet keeps counting** closing entries and reversals — so a closed year's P&L accounts net
+  to zero and RE carries the earnings, and equity TOTAL is identical before and after a close (the amount
+  moves from the derived current-year net-income line into the RE account row). The Trial Balance likewise
+  shows actual balances.
+
+### Consequences
+
+- Retained Earnings becomes a real, posted balance after a close; the Balance Sheet's derivation and the
+  closing entry stay consistent (the derivation is the "as if closed" view; closing makes it real).
+- Two enum values added by migration (`journal_source_type.CLOSING`, `audit_action.YEAR_END_CLOSED/_REOPENED`);
+  no new table or index (set-once rides the existing source-once index).
+
+### Revisit if
+
+Closing should also lock periods (currently separate), a multi-year bulk close is wanted, or a formal
+income-summary/temporary-account model is preferred over posting directly to Retained Earnings.
