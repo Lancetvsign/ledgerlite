@@ -100,18 +100,24 @@ success, and "the correctness gate never ran" must not look like a pass.
 
 The **production deploy is the one deliberate exception** (LL-056). A deploy is an *action*,
 not a correctness gate — before go-live, "did not deploy" is the correct state, not a hidden
-failure. So `production-deploy.yml` runs a small `preflight` job that classifies the production
-secrets three ways:
+failure. So `production-deploy.yml` runs a small `preflight` job that decides whether production
+is provisioned, keyed on the **production database URL** (`PRODUCTION_DATABASE_URL_UNPOOLED`):
 
-- **All absent** → intentional deferral: the deploy job **skips** (neutral, with an explanatory
+- **Absent** → production is not stood up: the deploy job **skips** (neutral, with an explanatory
   `::notice`) instead of reddening every push to `main`.
-- **All present** → the full gated migrate-then-promote runs.
-- **Partially set** → **hard failure**: a half-set of secrets during go-live is a typo, not a
-  deferral, and must not quietly read as a skip.
+- **Present** → the full gated migrate-then-promote runs.
 
-Adding all the secrets **self-enables** the deploy on the next push — no workflow edit needed.
-(The skip is safe precisely because a non-deploy cannot be mistaken for a successful deploy:
-nothing is promoted, so production keeps running exactly what it already ran.)
+The production DB URL is the signal *precisely because* it is absent exactly when production has
+not been provisioned. The Vercel credentials (`VERCEL_TOKEN` / `VERCEL_ORG_ID` /
+`VERCEL_PROJECT_ID`) are **not** used as the signal — they already exist for Preview deploys and
+Vercel linkage (LL-006), so keying the skip on them would misread this repo's normal pre-go-live
+state as a misconfiguration. The deploy job's own `Require credentials` step still fail-closes on
+the **full** set (Vercel creds + DB URL) immediately before touching production, so a prod DB set
+without the Vercel creds fails loudly rather than half-deploying.
+
+Adding the production secrets **self-enables** the deploy on the next push — no workflow edit
+needed. (The skip is safe precisely because a non-deploy cannot be mistaken for a successful
+deploy: nothing is promoted, so production keeps running exactly what it already ran.)
 
 Scope the Neon API key to this project if the option is offered: it can create and delete
 branches, and a key that cannot reach your other Neon projects is a smaller blast radius.
