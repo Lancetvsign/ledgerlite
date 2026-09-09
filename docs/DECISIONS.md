@@ -1630,3 +1630,51 @@ free-text field leaks until someone remembers to add a pattern). Applied to BOTH
 A new party field is genuinely audit-worthy (add it to `auditView`), or a general structured-redaction
 policy (per-entity allow-lists declared centrally) is introduced — at which point these two local
 projections fold into it.
+
+## ADR-029 — Opening balances post through a dedicated OPENING_BALANCE path, with an OBE plug, excluding A/R/A/P
+
+**Status** Accepted · **Added by** LL-071 · **Decided by** product owner
+
+### Context
+
+A company adopting LedgerLite mid-life must seed its starting account balances as of a conversion date.
+The scaffolding was reserved but unused: the `journal_source_type` enum already carries `OPENING_BALANCE`
+and the standard chart ships an `Opening Balance Equity` account (3000, `OPENING_BALANCE_EQUITY`), and
+ADR-018/ADR-025 explicitly deferred opening balances to "their own posting path (not `postJournalEntry`)".
+Two hazards had to be designed around: the public manual API pins `sourceType = 'JOURNAL_ENTRY'` (LL-066),
+and the control-account trigger blocks only `JOURNAL_ENTRY` — so an `OPENING_BALANCE` line to A/R/A/P is
+NOT stopped by the database and would silently break the aging⇔control reconciliation (ADR-016/024).
+
+### Decision
+
+A dedicated **`opening-balances` service** posts one balanced entry through **`postEntryCore`** (never
+`postJournalEntry`) with `sourceType: 'OPENING_BALANCE'`, exactly as the document services do.
+
+- **Opening Balance Equity is the auto-plug.** The caller supplies only real account balances; the
+  service appends an OBE line equal to `sum(debits) − sum(credits)` so the entry always balances. OBE is
+  the first consumer of `OPENING_BALANCE_EQUITY`. The OBE residual represents net prior equity and is
+  later reclassed to Retained Earnings via a normal journal entry (not automated here).
+- **A/R and A/P are excluded** (enforced in the service — the DB trigger won't). A lump opening balance
+  on a control account has no matching open invoices/bills, so the subsidiary would not reconcile.
+  Outstanding receivables/payables are entered as open invoices and bills through their own flows. A
+  subsidiary-aware opening-A/R/A/P path is a follow-up ticket.
+- **Set-once**, enforced by a partial unique index `journal_entries_one_opening_balance` on
+  `(company_id) WHERE source_type = 'OPENING_BALANCE' AND status = 'POSTED'` (race-safe backstop) plus a
+  clean in-service `OPENING_BALANCE_ALREADY_SET`. Correct a mistake by **void + re-enter**: void reverses
+  the entry (`reverseEntryCore`, which the manual `reverseJournalEntry` would refuse for a non-JOURNAL_ENTRY
+  root), flipping POSTED→REVERSED so the entry leaves the partial index and a fresh one may be set.
+- **Conversion date** may be any historical date whose period is OPEN (periods auto-create lazily). Reuses
+  `journal.post` (LEDGER_WRITERS) rather than a new capability. Idempotent on a client key (LL-067 pattern).
+
+### Consequences
+
+- The minimal, correct opening-balance sheet (cash, fixed assets, loans, credit cards, inventory, equity,
+  YTD P&L) can be seeded from setup; receivables/payables come from documents. No schema change beyond the
+  one partial unique index and two audit-action enum values (`OPENING_BALANCES_SET/VOIDED`).
+- Balances stay derived from journal lines (invariant 2) — the opening balance is just posted lines, not a
+  stored figure.
+
+### Revisit if
+
+A subsidiary-aware opening A/R/A/P flow is scheduled (opening invoices/bills whose offset is OBE, not
+revenue/expense), or opening balances must be built up across several entries rather than set once.

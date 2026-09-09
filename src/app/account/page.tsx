@@ -81,6 +81,11 @@ export default async function AccountPage() {
               New Journal Entry →
             </Link>
           )}
+          {roleHasCapability(active.role, 'journal.post') && (
+            <Link href="/opening-balances" data-testid="opening-balances-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+              Opening Balances →
+            </Link>
+          )}
         </nav>
       )}
       <SignOutButton />
