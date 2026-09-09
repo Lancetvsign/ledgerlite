@@ -94,11 +94,57 @@ If teardown fails, the warning in that job is the signal to clean up by hand.
 | `PRODUCTION_DATABASE_URL` | production | Neon production branch, pooled |
 | `PRODUCTION_DATABASE_URL_UNPOOLED` | production | Neon production branch, direct |
 
-Jobs **fail rather than skip** when a secret is missing. A skipped job renders as a grey
-tick that reads like success, and "the deployment gate never ran" must not look like a pass.
+The **CI** jobs (lint, types, unit, build, Integration, GL regression, E2E) **fail rather
+than skip** when a secret is missing: a skipped job renders as a grey tick that reads like
+success, and "the correctness gate never ran" must not look like a pass.
+
+The **production deploy is the one deliberate exception** (LL-056). A deploy is an *action*,
+not a correctness gate — before go-live, "did not deploy" is the correct state, not a hidden
+failure. So `production-deploy.yml` runs a small `preflight` job that classifies the production
+secrets three ways:
+
+- **All absent** → intentional deferral: the deploy job **skips** (neutral, with an explanatory
+  `::notice`) instead of reddening every push to `main`.
+- **All present** → the full gated migrate-then-promote runs.
+- **Partially set** → **hard failure**: a half-set of secrets during go-live is a typo, not a
+  deferral, and must not quietly read as a skip.
+
+Adding all the secrets **self-enables** the deploy on the next push — no workflow edit needed.
+(The skip is safe precisely because a non-deploy cannot be mistaken for a successful deploy:
+nothing is promoted, so production keeps running exactly what it already ran.)
 
 Scope the Neon API key to this project if the option is offered: it can create and delete
 branches, and a key that cannot reach your other Neon projects is a smaller blast radius.
+
+## Production deploy status — deferred (LL-056)
+
+**As of LL-056, production is intentionally not stood up.** No hosted production environment is
+provisioned, the production deploy secrets are not set, and so the deploy job **skips** on every
+push to `main` (it no longer hard-fails). This is a deliberate, documented deferral, not an
+outage: the app is developed and fully tested (CI is green on `main`) but not yet publicly
+deployed.
+
+**To go live, provision the infra and add the secrets — in this order:**
+
+1. **Neon** — create (or confirm) the **production branch**; copy its **pooled** and **direct
+   (unpooled)** connection strings.
+2. **Vercel** — confirm the project is linked; read `orgId` / `projectId` from
+   `.vercel/project.json`; create a **Vercel token** (Account → Settings → Tokens). Keep
+   `git.deploymentEnabled.main = false` in `vercel.json` so this workflow stays the only gate.
+3. **Auth (Vercel Production scope)** — set `BETTER_AUTH_SECRET` (`openssl rand -base64 32`,
+   distinct from Preview) and `BETTER_AUTH_URL` (the production domain).
+4. **GitHub Actions secrets** (Settings → Secrets and variables → Actions) — add
+   `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `PRODUCTION_DATABASE_URL` (pooled),
+   `PRODUCTION_DATABASE_URL_UNPOOLED` (direct). `NEON_API_KEY` / `NEON_PROJECT_ID` already exist.
+5. **Manual gate (optional)** — the deploy job targets the `production` GitHub *environment*; add
+   required reviewers there to approve each promotion.
+6. **Trigger** — push to `main` or run the workflow via `workflow_dispatch`. Migrations apply to
+   the production branch under the advisory lock on the **direct** endpoint, and Vercel promotes
+   **only if migrations succeed** (expand → migrate → contract).
+
+These are operational steps performed by a human in the Neon / Vercel / GitHub UIs; secrets are
+never committed to source (§9), and migrations are never run against production by hand — the
+workflow does it.
 
 ## Environment variables by environment
 
