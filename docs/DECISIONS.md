@@ -1678,3 +1678,47 @@ A dedicated **`opening-balances` service** posts one balanced entry through **`p
 
 A subsidiary-aware opening A/R/A/P flow is scheduled (opening invoices/bills whose offset is OBE, not
 revenue/expense), or opening balances must be built up across several entries rather than set once.
+
+## ADR-030 — Financial statements are derived; the Balance Sheet derives net income into equity
+
+**Status** Accepted · **Added by** LL-072 · **Decided by** product owner
+
+### Context
+
+LedgerLite needed primary financial statements — a Balance Sheet and an Income Statement — on top of the
+trial balance. Two facts shape the design: (1) balances are always derived from `journal_lines`, never
+stored (invariant 2); and (2) period-close posts **no closing entry** — `closePeriod` only flips a status
+flag — so revenue/COGS/expense accounts accumulate across all time and the Retained Earnings account
+(3900) is never written. The only identity the ledger guarantees is total debits = total credits.
+
+### Decision
+
+Two read-only, derived report services under `src/server/reports/`, each opening with
+`requirePermission(report.view)` and returning money as `string` with all arithmetic in PostgreSQL:
+
+- **Income Statement** (`getIncomeStatement(company, from, to)`) — a date-range P&L over REVENUE/COGS/EXPENSE
+  accounts by posting date: Revenue − COGS = Gross profit; − Operating expenses = Net income. REVENUE is
+  credit-natural, COGS/EXPENSE debit-natural.
+- **Balance Sheet** (`getBalanceSheet(company, asOf)`) — ASSET/LIABILITY/EQUITY account balances as of a
+  date, **with net income derived into equity** so that Assets = Liabilities + Equity holds (it must be
+  derived precisely because close writes nothing to Retained Earnings). Net income for income-statement
+  accounts is `Σ(credit − debit)`, **split at the company's fiscal-year start** (`fiscalYearStartMonth`,
+  via `fiscalYearStart()`) into "Retained earnings (prior years)" (postings before the fiscal-year start)
+  and "Net income (current year)" (fiscal-year start through as-of). The Retained Earnings account itself
+  still appears as its own equity row (usually zero, since nothing auto-closes to it).
+
+Grouping is by `account_type` only. Subtype-level subgrouping (Current vs Fixed assets, current vs
+long-term liabilities) is deferred because `accountSubtype` is free text and not reliably categorised.
+
+### Consequences
+
+- The statements always reconcile to the trial balance: the Balance Sheet's current-year net income equals
+  the Income Statement's net income for `[fiscalYearStart, asOf]`, and `balanced` cannot be true unless the
+  underlying ledger balances. No stored figure can drift.
+- Because there is no closing workflow, "retained earnings" on the Balance Sheet is entirely derived; the
+  RE account is presentational until a closing-entry feature (if ever) writes to it.
+
+### Revisit if
+
+A closing-entry / year-end-roll workflow is added (net income would then post into Retained Earnings and the
+derivation would change), or subtype subgrouping, comparative columns, or a cash-flow statement are wanted.
