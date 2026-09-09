@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "journal_entries_one_opening_balance" ON "journal_entries" USING btree ("company_id") WHERE source_type = 'OPENING_BALANCE' and status = 'POSTED';

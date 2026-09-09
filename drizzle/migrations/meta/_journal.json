@@ -190,6 +190,20 @@
       "when": 1788897240185,
       "tag": "0026_backfill_ap_system_account",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788962394057,
+      "tag": "0027_opening_balance_once",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788962547346,
+      "tag": "0028_opening_balance_audit_actions",
+      "breakpoints": true
     }
   ]
 }

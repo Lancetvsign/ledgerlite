@@ -122,6 +122,14 @@ export const journalEntries = pgTable(
     uniqueIndex('journal_entries_source_posted_once')
       .on(table.companyId, table.sourceType, table.sourceId)
       .where(sql`status = 'POSTED' and source_id is not null`),
+    // At most ONE posted opening-balance entry per company (LL-071). Opening
+    // balances are a once-only conversion entry (Opening Balance Equity is the
+    // plug); a second would double-count. Race-safe backstop for the service's
+    // set-once check. A void flips the entry POSTED -> REVERSED, so it leaves this
+    // partial index and a fresh opening balance may then be set.
+    uniqueIndex('journal_entries_one_opening_balance')
+      .on(table.companyId)
+      .where(sql`source_type = 'OPENING_BALANCE' and status = 'POSTED'`),
     // Reporting indexes (trial balance, GL).
     index('journal_entries_company_txn_date_idx').on(table.companyId, table.transactionDate),
     index('journal_entries_company_status_idx').on(table.companyId, table.status),
