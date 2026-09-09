@@ -24,6 +24,21 @@ import type { CreateCustomerInput, UpdateCustomerInput } from '@/validation/cust
  * line can never point at another tenant's customer (migration 0012).
  */
 
+/**
+ * The allow-list of customer fields the audit log records (LL-069, AGENTS §9).
+ *
+ * The audit answers "who changed this customer's identity or status, and when" — it is
+ * NOT a copy of every contact field. The free-text fields (`email`, `phone`,
+ * `billingAddress`, `notes`) can hold data §9 forbids in the log: a user may type bank
+ * details into `notes`, and `redact()` cannot reliably spot a bare account number in
+ * prose (only credential-SHAPED values, or sensitive KEYS). So this is default-deny —
+ * only these fields are ever audited; adding a field here is a deliberate decision to
+ * log it. Mirrors the vendor service (parity, A/R ⇔ A/P).
+ */
+function auditView(c: Customer): Pick<Customer, 'id' | 'name' | 'customerNumber' | 'status'> {
+  return { id: c.id, name: c.name, customerNumber: c.customerNumber, status: c.status };
+}
+
 async function loadInCompany(companyId: string, customerId: string): Promise<Customer | undefined> {
   const rows = await getDbTx()
     .select()
@@ -63,7 +78,7 @@ export async function createCustomer(
         action: 'CUSTOMER_CREATED',
         entityType: 'customer',
         entityId: customer.id,
-        after: customer,
+        after: auditView(customer),
       });
       return customer;
     });
@@ -101,8 +116,8 @@ export async function updateCustomer(
         action: 'CUSTOMER_UPDATED',
         entityType: 'customer',
         entityId: customer.id,
-        before: existing,
-        after: customer,
+        before: auditView(existing),
+        after: auditView(customer),
       });
       return customer;
     });
@@ -143,8 +158,8 @@ export async function deactivateCustomer(
       action: 'CUSTOMER_DEACTIVATED',
       entityType: 'customer',
       entityId: customer.id,
-      before: existing,
-      after: customer,
+      before: auditView(existing),
+      after: auditView(customer),
     });
     return customer;
   });

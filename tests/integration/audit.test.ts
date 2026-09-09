@@ -8,9 +8,13 @@ import { getAuth } from '@/lib/auth';
 import { createAccount, deactivateAccount, updateAccount } from '@/server/accounts';
 import { recordAuditEvent } from '@/server/audit';
 import { createCompanyWithOwner } from '@/server/companies';
+import { createCustomer, deactivateCustomer, updateCustomer } from '@/server/customers';
 import { ensureAppUser } from '@/server/users';
+import { createVendor, deactivateVendor, updateVendor } from '@/server/vendors';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
+import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
+import { createVendorInput, updateVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 
@@ -150,6 +154,76 @@ describe('transactional atomicity — the core requirement', () => {
     ).rejects.toThrow('simulated failure');
 
     expect(await auditCount(company.id)).toBe(0); // the audit row rolled back with the action
+  });
+});
+
+describe('audit field allow-list — vendor & customer free-text never persists (LL-069)', () => {
+  // AGENTS §9: "bank credentials" must never land in the audit log. A user can type a
+  // remit-to bank account / routing number into a vendor's or customer's `notes`, and
+  // redact() cannot detect a bare account number in prose. So these services audit an
+  // explicit allow-list (id, name, number, status) — not the whole row. A digit run
+  // like this is what a reader would paste into notes; it must never reach after_json.
+  const BANK = 'acct 000123456789 routing 021000021';
+
+  async function auditBlob(companyId: string, action: string): Promise<string> {
+    const db = await getTestDb();
+    const r = await db.execute<{ before_json: unknown; after_json: unknown }>(
+      sql`select before_json, after_json from audit_events
+          where company_id = ${companyId} and action = ${action}`,
+    );
+    return JSON.stringify(r.rows);
+  }
+
+  it('a vendor created with bank details in notes: notes never reach after_json', async () => {
+    const { user, company } = await makeOwner('v@synthetic.test');
+    const vendor = await createVendor(user.id, company.id, createVendorInput.parse({
+      name: 'Globex', vendorNumber: 'V-1', email: 'ap@globex.test', phone: '555-0100',
+      address: '1 Way', notes: BANK,
+    }));
+    const blob = await auditBlob(company.id, 'VENDOR_CREATED');
+    expect(blob).not.toContain(BANK);
+    expect(blob).not.toContain('ap@globex.test'); // free-text contact fields excluded too
+    expect(blob).not.toContain('1 Way');
+    // The allow-listed identity/status IS recorded — the row is still useful.
+    expect(blob).toContain('Globex');
+    expect(blob).toContain('V-1');
+    expect(blob).toContain('ACTIVE');
+
+    // …and on update, where BOTH before and after are audited.
+    await updateVendor(user.id, company.id, vendor.id, updateVendorInput.parse({ notes: BANK, name: 'Globex Renamed' }));
+    const upd = await auditBlob(company.id, 'VENDOR_UPDATED');
+    expect(upd).not.toContain(BANK);
+    expect(upd).toContain('Globex Renamed');
+
+    await deactivateVendor(user.id, company.id, vendor.id);
+    const deact = await auditBlob(company.id, 'VENDOR_DEACTIVATED');
+    expect(deact).not.toContain(BANK);
+    expect(deact).toContain('INACTIVE');
+  });
+
+  it('a customer created with bank details in notes: notes never reach after_json', async () => {
+    const { user, company } = await makeOwner('c@synthetic.test');
+    const customer = await createCustomer(user.id, company.id, createCustomerInput.parse({
+      name: 'Initech', customerNumber: 'C-1', email: 'ar@initech.test', phone: '555-0200',
+      billingAddress: '2 Way', notes: BANK,
+    }));
+    const blob = await auditBlob(company.id, 'CUSTOMER_CREATED');
+    expect(blob).not.toContain(BANK);
+    expect(blob).not.toContain('ar@initech.test');
+    expect(blob).not.toContain('2 Way');
+    expect(blob).toContain('Initech');
+    expect(blob).toContain('C-1');
+    expect(blob).toContain('ACTIVE');
+
+    await updateCustomer(user.id, company.id, customer.id, updateCustomerInput.parse({ notes: BANK, name: 'Initech Renamed' }));
+    const upd = await auditBlob(company.id, 'CUSTOMER_UPDATED');
+    expect(upd).not.toContain(BANK);
+    expect(upd).toContain('Initech Renamed');
+
+    await deactivateCustomer(user.id, company.id, customer.id);
+    const deact = await auditBlob(company.id, 'CUSTOMER_DEACTIVATED');
+    expect(deact).not.toContain(BANK);
+    expect(deact).toContain('INACTIVE');
   });
 });
 

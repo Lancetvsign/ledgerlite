@@ -25,6 +25,21 @@ import type { CreateVendorInput, UpdateVendorInput } from '@/validation/vendor';
  * can never point at another tenant's vendor (LL-060 migration).
  */
 
+/**
+ * The allow-list of vendor fields the audit log records (LL-069, AGENTS §9).
+ *
+ * The audit answers "who changed this vendor's identity or status, and when" — it is
+ * NOT a copy of every contact field. The free-text fields (`email`, `phone`,
+ * `address`, `notes`) can hold data §9 forbids in the log: a user may type a remit-to
+ * bank account / routing number into `notes`, and `redact()` cannot reliably spot a
+ * bare account number in prose (only credential-SHAPED values, or sensitive KEYS).
+ * So this is default-deny — only these fields are ever audited; adding a field here is
+ * a deliberate decision to log it. Mirrors the customer service (parity, A/R ⇔ A/P).
+ */
+function auditView(v: Vendor): Pick<Vendor, 'id' | 'name' | 'vendorNumber' | 'status'> {
+  return { id: v.id, name: v.name, vendorNumber: v.vendorNumber, status: v.status };
+}
+
 async function loadInCompany(companyId: string, vendorId: string): Promise<Vendor | undefined> {
   const rows = await getDbTx()
     .select()
@@ -64,7 +79,7 @@ export async function createVendor(
         action: 'VENDOR_CREATED',
         entityType: 'vendor',
         entityId: vendor.id,
-        after: vendor,
+        after: auditView(vendor),
       });
       return vendor;
     });
@@ -102,8 +117,8 @@ export async function updateVendor(
         action: 'VENDOR_UPDATED',
         entityType: 'vendor',
         entityId: vendor.id,
-        before: existing,
-        after: vendor,
+        before: auditView(existing),
+        after: auditView(vendor),
       });
       return vendor;
     });
@@ -144,8 +159,8 @@ export async function deactivateVendor(
       action: 'VENDOR_DEACTIVATED',
       entityType: 'vendor',
       entityId: vendor.id,
-      before: existing,
-      after: vendor,
+      before: auditView(existing),
+      after: auditView(vendor),
     });
     return vendor;
   });
