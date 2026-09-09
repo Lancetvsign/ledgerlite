@@ -35,6 +35,7 @@ export async function installDefaultChart(
         accountType: a.accountType,
         accountSubtype: a.accountSubtype,
         systemAccountType: a.systemAccountType ?? null,
+        cashFlowCategory: a.cashFlowCategory ?? null,
       })),
     )
     // The idempotency mechanism: a re-run (or a concurrent install) collides and

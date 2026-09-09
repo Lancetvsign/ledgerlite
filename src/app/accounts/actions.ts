@@ -35,6 +35,7 @@ export async function createAccountAction(formData: FormData): Promise<void> {
     accountNumber: emptyToUndefined(formData.get('accountNumber')),
     accountSubtype: emptyToUndefined(formData.get('accountSubtype')),
     description: emptyToUndefined(formData.get('description')),
+    cashFlowCategory: emptyToUndefined(formData.get('cashFlowCategory')),
   });
   if (!parsed.success) backTo('?error=invalid');
 
@@ -56,6 +57,7 @@ export async function updateAccountAction(formData: FormData): Promise<void> {
     name: emptyToUndefined(formData.get('name')),
     accountSubtype: emptyToUndefined(formData.get('accountSubtype')),
     description: emptyToUndefined(formData.get('description')),
+    cashFlowCategory: emptyToUndefined(formData.get('cashFlowCategory')),
   });
   if (!parsed.success) backTo('?error=invalid');
 

@@ -211,6 +211,13 @@
       "when": 1788983224050,
       "tag": "0029_year_end_closing",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788988311851,
+      "tag": "0030_cash_flow_category",
+      "breakpoints": true
     }
   ]
 }

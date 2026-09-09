@@ -94,6 +94,7 @@ export async function createAccount(
           accountSubtype: input.accountSubtype,
           parentAccountId: input.parentAccountId,
           description: input.description,
+          cashFlowCategory: input.cashFlowCategory,
         })
         .returning();
       const account = rows[0];

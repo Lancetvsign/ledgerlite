@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { createAccountAction } from './actions';
 
 const TYPES = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'COGS', 'EXPENSE'] as const;
+const CASH_FLOW = ['OPERATING', 'INVESTING', 'FINANCING', 'CASH'] as const;
 
 export function CreateAccountForm() {
   const [open, setOpen] = useState(false);
@@ -35,6 +36,16 @@ export function CreateAccountForm() {
           ))}
         </select>
         <input name="accountSubtype" placeholder="Subtype (optional)" className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
+      </div>
+      <div className="flex gap-2">
+        {/* Cash-flow section (LL-074) — set on balance-sheet accounts so they appear in the
+            Cash-Flow Statement; leave blank for revenue/expense accounts. */}
+        <select name="cashFlowCategory" defaultValue="" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+          <option value="">Cash-flow section (optional)…</option>
+          {CASH_FLOW.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
       </div>
       <div className="flex gap-2">
         <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">Create</button>
