@@ -28,7 +28,7 @@ export function AccountRow({ account, canManage }: { account: Account; canManage
             <input type="hidden" name="accountId" value={account.id} />
             <input name="name" defaultValue={account.name} required className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
             <input name="accountSubtype" defaultValue={account.accountSubtype ?? ''} placeholder="subtype" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
-            <select name="cashFlowCategory" defaultValue={account.cashFlowCategory ?? ''} className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+            <select name="cashFlowCategory" aria-label="Cash-flow section" defaultValue={account.cashFlowCategory ?? ''} className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
               <option value="">Cash-flow…</option>
               {CASH_FLOW.map((c) => (
                 <option key={c} value={c}>{c}</option>

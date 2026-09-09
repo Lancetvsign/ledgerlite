@@ -47,7 +47,9 @@ test.describe('authenticated', () => {
 
     await page.getByRole('button', { name: 'New account' }).click();
     await page.getByPlaceholder('Account name').fill('Petty Cash');
-    await page.getByRole('combobox').selectOption('ASSET');
+    // The create form now has two selects (type + cash-flow section, LL-074); target
+    // the type one by its accessible name.
+    await page.getByRole('combobox', { name: 'Account type' }).selectOption('ASSET');
     await page.getByRole('button', { name: 'Create' }).click();
     await expect(page.getByTestId('accounts-table')).toContainText('Petty Cash');
 

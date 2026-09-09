@@ -29,7 +29,7 @@ export function CreateAccountForm() {
         <input name="name" placeholder="Account name" required className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
       </div>
       <div className="flex gap-2">
-        <select name="accountType" required defaultValue="" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+        <select name="accountType" aria-label="Account type" required defaultValue="" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
           <option value="" disabled>Type…</option>
           {TYPES.map((t) => (
             <option key={t} value={t}>{t}</option>
@@ -40,7 +40,7 @@ export function CreateAccountForm() {
       <div className="flex gap-2">
         {/* Cash-flow section (LL-074) — set on balance-sheet accounts so they appear in the
             Cash-Flow Statement; leave blank for revenue/expense accounts. */}
-        <select name="cashFlowCategory" defaultValue="" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+        <select name="cashFlowCategory" aria-label="Cash-flow section" defaultValue="" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
           <option value="">Cash-flow section (optional)…</option>
           {CASH_FLOW.map((c) => (
             <option key={c} value={c}>{c}</option>

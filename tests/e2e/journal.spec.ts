@@ -121,7 +121,7 @@ test('the account picker cannot surface another company’s account', async ({ p
   await page.goto('/accounts');
   await page.getByRole('button', { name: 'New account' }).click();
   await page.getByPlaceholder('Account name').fill('Zzz Secret Bravo Account');
-  await page.getByRole('combobox').selectOption('ASSET');
+  await page.getByRole('combobox', { name: 'Account type' }).selectOption('ASSET');
   await page.getByRole('button', { name: 'Create' }).click();
   await expect(page.getByTestId('accounts-table')).toContainText('Zzz Secret Bravo Account');
 
