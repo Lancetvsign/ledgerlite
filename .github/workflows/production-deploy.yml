@@ -43,39 +43,23 @@ jobs:
       configured: ${{ steps.check.outputs.configured }}
     env:
       # Read as env (secrets are not allowed in `if:` expressions). Empty when unset.
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      # The go-live signal is the PRODUCTION DATABASE URL, and only that: it is absent
+      # exactly when production has not been provisioned. The Vercel creds
+      # (VERCEL_TOKEN / ORG_ID / PROJECT_ID) are NOT a signal here — they already exist
+      # for Preview deploys and Vercel linkage (LL-006), so keying the skip on them
+      # would treat this repo's normal pre-go-live state as a misconfiguration. The
+      # deploy job's own `Require credentials` step fail-closes on the FULL set before
+      # touching production, so a prod DB set without Vercel creds still fails loudly.
       PRODUCTION_DATABASE_URL_UNPOOLED: ${{ secrets.PRODUCTION_DATABASE_URL_UNPOOLED }}
     steps:
-      # Three-way, on purpose:
-      #   ALL absent   → intentional deferral (skip the deploy, neutral)
-      #   ALL present  → configured (run the gated deploy)
-      #   SOME present → misconfiguration (FAIL loudly) — a half-set of secrets during
-      #                  go-live is a typo, not a deferral, and must not read as a skip.
-      - name: Detect whether production deploy secrets are present
+      - name: Detect whether production is configured to deploy
         id: check
         run: |
-          present=0
-          total=0
-          missing=()
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID PRODUCTION_DATABASE_URL_UNPOOLED; do
-            total=$((total + 1))
-            if [ -n "${!v}" ]; then
-              present=$((present + 1))
-            else
-              missing+=("$v")
-            fi
-          done
-
-          if [ "$present" -eq 0 ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Production deploy skipped (not configured)::No production secrets set. This is the expected, intentional state before go-live — see docs/DEPLOYMENT.md. Add all of them and the deploy runs on the next push to main."
-          elif [ "$present" -eq "$total" ]; then
+          if [ -n "$PRODUCTION_DATABASE_URL_UNPOOLED" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::error title=Production deploy is partially configured::${present}/${total} secrets set; missing: ${missing[*]}. Set ALL of them or NONE — a partial set is a misconfiguration, not a deferral. See docs/DEPLOYMENT.md."
-            exit 1
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Production deploy skipped (not configured)::PRODUCTION_DATABASE_URL_UNPOOLED is not set, so production is not provisioned yet. This is the expected, intentional state before go-live — see docs/DEPLOYMENT.md. Add the production secrets and the deploy runs on the next push to main."
           fi
 
   migrate-then-deploy:
