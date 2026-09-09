@@ -1768,3 +1768,48 @@ pattern from opening balances. The fiscal year is derived from the company's `fi
 
 Closing should also lock periods (currently separate), a multi-year bulk close is wanted, or a formal
 income-summary/temporary-account model is preferred over posting directly to Retained Earnings.
+
+## ADR-032 — Cash-Flow Statement (indirect) needs a per-account cash-flow classification
+
+**Status** Accepted · **Added by** LL-074 · **Decided by** product owner
+
+### Context
+
+The Balance Sheet and Income Statement (LL-072) are fully derivable from journal lines, but a Cash-Flow
+Statement is not: the chart had no way to tell which accounts are cash, nor how to group flows into
+Operating / Investing / Financing (only a free-text `bank`/`current_asset` subtype heuristic; no CASH
+system type). A correct statement needs that classification.
+
+### Decision
+
+Add a nullable per-account **`cashFlowCategory`** enum (`OPERATING | INVESTING | FINANCING | CASH`),
+seeded on the default chart (Checking/Savings/Undeposited = CASH; A/R, A/P, Sales Tax, Credit Card =
+OPERATING; owner equity, OBE, Retained Earnings = FINANCING; income-statement accounts left null), and
+editable per account. Produce an **indirect** statement resting on the identity, from differencing the
+balance-sheet identity over a period:
+
+    ΔCash = NetIncome + Σ adjustments,  where each non-cash balance-sheet account's adjustment = −Σ(debit − credit).
+
+- Adjustments are grouped by `cashFlowCategory` into Operating (net income + working-capital), Investing,
+  Financing; income-statement accounts are NOT adjusted (their effect is net income); a null-category
+  balance-sheet account falls into a visible **Uncategorized** bucket, so the total always reconciles.
+- **Cash** accounts (`CASH` category) are the reconciliation target: `reconciled` iff `netChangeInCash`
+  equals `endingCash − beginningCash`. This is the built-in correctness check.
+- Closing entries and their reversals are **excluded** from every delta (as the Income Statement is,
+  LL-073), so a year-end close — which never touches cash — does not double-count net income via RE and
+  leaves the statement unchanged.
+- Depreciation and other non-cash add-backs are handled implicitly: whatever section a contra-asset (e.g.
+  accumulated depreciation) is categorised into is where its change appears; categorisation affects only
+  presentation, never whether the statement reconciles.
+
+### Consequences
+
+- One nullable enum column (expand-only migration); account create/update and the installer carry it. The
+  three statements now form the complete set, all derived from journal lines (invariant 2).
+- Statement quality depends on accounts being classified; the seeded chart covers the common case, and
+  uncategorised custom accounts are surfaced rather than silently misfiled.
+
+### Revisit if
+
+The direct method, comparative columns, or a distinct depreciation/non-cash-addback model is wanted, or a
+`CASH` system-account type is preferred over the per-account category for identifying cash.

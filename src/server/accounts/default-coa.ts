@@ -23,6 +23,11 @@ export interface DefaultAccount {
    * and cannot be deactivated (LL-020's service protection).
    */
   readonly systemAccountType?: string;
+  /**
+   * Cash-flow section (LL-074) — seeded for balance-sheet accounts. Income-statement
+   * accounts are omitted (null): their effect is captured in net income.
+   */
+  readonly cashFlowCategory?: 'OPERATING' | 'INVESTING' | 'FINANCING' | 'CASH';
 }
 
 /**
@@ -35,10 +40,10 @@ export interface DefaultAccount {
  * are resolved at posting time by `resolveSystemAccount` and cannot be deactivated.
  */
 export const REQUIRED_SYSTEM_ACCOUNTS: readonly DefaultAccount[] = [
-  { accountNumber: '1100', name: 'Accounts Receivable', accountType: 'ASSET', accountSubtype: 'accounts_receivable', systemAccountType: 'ACCOUNTS_RECEIVABLE' },
-  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable', systemAccountType: 'ACCOUNTS_PAYABLE' },
-  { accountNumber: '3900', name: 'Retained Earnings', accountType: 'EQUITY', accountSubtype: 'retained_earnings', systemAccountType: 'RETAINED_EARNINGS' },
-  { accountNumber: '3000', name: 'Opening Balance Equity', accountType: 'EQUITY', accountSubtype: 'opening_balance_equity', systemAccountType: 'OPENING_BALANCE_EQUITY' },
+  { accountNumber: '1100', name: 'Accounts Receivable', accountType: 'ASSET', accountSubtype: 'accounts_receivable', systemAccountType: 'ACCOUNTS_RECEIVABLE', cashFlowCategory: 'OPERATING' },
+  { accountNumber: '2000', name: 'Accounts Payable', accountType: 'LIABILITY', accountSubtype: 'accounts_payable', systemAccountType: 'ACCOUNTS_PAYABLE', cashFlowCategory: 'OPERATING' },
+  { accountNumber: '3900', name: 'Retained Earnings', accountType: 'EQUITY', accountSubtype: 'retained_earnings', systemAccountType: 'RETAINED_EARNINGS', cashFlowCategory: 'FINANCING' },
+  { accountNumber: '3000', name: 'Opening Balance Equity', accountType: 'EQUITY', accountSubtype: 'opening_balance_equity', systemAccountType: 'OPENING_BALANCE_EQUITY', cashFlowCategory: 'FINANCING' },
 ] as const;
 
 /**
@@ -48,16 +53,16 @@ export const REQUIRED_SYSTEM_ACCOUNTS: readonly DefaultAccount[] = [
  */
 export const STANDARD_CHART: readonly DefaultAccount[] = [
   ...REQUIRED_SYSTEM_ACCOUNTS,
-  // Assets
-  { accountNumber: '1000', name: 'Checking', accountType: 'ASSET', accountSubtype: 'bank' },
-  { accountNumber: '1010', name: 'Savings', accountType: 'ASSET', accountSubtype: 'bank' },
-  { accountNumber: '1200', name: 'Undeposited Funds', accountType: 'ASSET', accountSubtype: 'current_asset' },
+  // Assets (Checking/Savings/Undeposited Funds are the cash & cash-equivalents)
+  { accountNumber: '1000', name: 'Checking', accountType: 'ASSET', accountSubtype: 'bank', cashFlowCategory: 'CASH' },
+  { accountNumber: '1010', name: 'Savings', accountType: 'ASSET', accountSubtype: 'bank', cashFlowCategory: 'CASH' },
+  { accountNumber: '1200', name: 'Undeposited Funds', accountType: 'ASSET', accountSubtype: 'current_asset', cashFlowCategory: 'CASH' },
   // Liabilities (Accounts Payable 2000 is a required system account, above)
-  { accountNumber: '2100', name: 'Credit Card', accountType: 'LIABILITY', accountSubtype: 'credit_card' },
-  { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability', systemAccountType: 'SALES_TAX_PAYABLE' },
+  { accountNumber: '2100', name: 'Credit Card', accountType: 'LIABILITY', accountSubtype: 'credit_card', cashFlowCategory: 'OPERATING' },
+  { accountNumber: '2200', name: 'Sales Tax Payable', accountType: 'LIABILITY', accountSubtype: 'current_liability', systemAccountType: 'SALES_TAX_PAYABLE', cashFlowCategory: 'OPERATING' },
   // Equity
-  { accountNumber: '3100', name: 'Owner Contributions', accountType: 'EQUITY', accountSubtype: 'owner_equity' },
-  { accountNumber: '3200', name: 'Owner Distributions', accountType: 'EQUITY', accountSubtype: 'owner_equity' },
+  { accountNumber: '3100', name: 'Owner Contributions', accountType: 'EQUITY', accountSubtype: 'owner_equity', cashFlowCategory: 'FINANCING' },
+  { accountNumber: '3200', name: 'Owner Distributions', accountType: 'EQUITY', accountSubtype: 'owner_equity', cashFlowCategory: 'FINANCING' },
   // Revenue
   { accountNumber: '4000', name: 'Sales Revenue', accountType: 'REVENUE', accountSubtype: 'operating_revenue' },
   { accountNumber: '4100', name: 'Service Revenue', accountType: 'REVENUE', accountSubtype: 'operating_revenue' },

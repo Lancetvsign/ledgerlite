@@ -40,6 +40,16 @@ export const accountType = pgEnum('account_type', [
 export const accountStatus = pgEnum('account_status', ['ACTIVE', 'INACTIVE']);
 
 /**
+ * Cash-flow classification (LL-074). Groups a BALANCE-SHEET account's period change into
+ * a Cash-Flow Statement section; `CASH` marks the cash / cash-equivalent accounts the
+ * statement reconciles to. Nullable and meaningful only on ASSET/LIABILITY/EQUITY
+ * accounts — income-statement accounts (REVENUE/COGS/EXPENSE) stay null because their
+ * effect is captured in net income. An uncategorised balance-sheet account is reported in
+ * a visible "Uncategorized" bucket so the statement still reconciles.
+ */
+export const cashFlowCategory = pgEnum('cash_flow_category', ['OPERATING', 'INVESTING', 'FINANCING', 'CASH']);
+
+/**
  * Protected system accounts the product depends on structurally (Accounts
  * Receivable, Retained Earnings, Opening Balance Equity, …). The set grows in
  * LL-041's installer; the column is nullable text, and its value cannot be
@@ -66,6 +76,9 @@ export const accounts = pgTable(
     // documents intent — the real guarantee is the raw FK in the migration.
     parentAccountId: uuid('parent_account_id'),
     systemAccountType: text('system_account_type'),
+    // Cash-flow section (LL-074). Nullable; set on balance-sheet accounts, null on
+    // income-statement accounts (their effect is net income).
+    cashFlowCategory: cashFlowCategory('cash_flow_category'),
     description: text('description'),
     status: accountStatus('status').notNull().default('ACTIVE'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
