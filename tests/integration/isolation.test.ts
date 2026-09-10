@@ -671,7 +671,7 @@ const REGISTRY: IsolationDescriptor[] = [
           const { sql: rawSql } = await import('drizzle-orm');
           const bank = await db.execute<{ id: string }>(
             rawSql`select bank_account_id as id from bank_import_batches where company_id = ${victim.companyId} limit 1`);
-          return stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileText: '' },
+          return await stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileText: '' },
             () => Promise.resolve([{ date: '2026-06-01', description: 'X', amount: '1.00' }]));
         },
       },
@@ -697,7 +697,7 @@ const REGISTRY: IsolationDescriptor[] = [
           const { sql: rawSql } = await import('drizzle-orm');
           const acct = await db.execute<{ id: string }>(
             rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type is null limit 1`);
-          return postImportLines(attacker, victim.companyId, batchId ?? '', {
+          return await postImportLines(attacker, victim.companyId, batchId ?? '', {
             decisions: [{ lineId: lineId ?? '', action: 'post', accountId: acct.rows[0]?.id ?? victim.companyId }],
           });
         },
