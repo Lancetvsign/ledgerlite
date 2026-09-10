@@ -52,6 +52,9 @@ export default async function AccountPage() {
       <CompanyPanel companies={companies} active={active} />
       {active !== null && (
         <nav className="flex flex-col gap-1">
+          <Link href="/dashboard" data-testid="dashboard-link" className="text-sm font-medium text-neutral-800 underline dark:text-neutral-100">
+            Dashboard →
+          </Link>
           <a href="/accounts" className="text-sm text-neutral-600 underline dark:text-neutral-300">
             Chart of Accounts →
           </a>

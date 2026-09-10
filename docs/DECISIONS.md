@@ -1813,3 +1813,36 @@ balance-sheet identity over a period:
 
 The direct method, comparative columns, or a distinct depreciation/non-cash-addback model is wanted, or a
 `CASH` system-account type is preferred over the per-account category for identifying cash.
+
+## ADR-033 — The dashboard is a read-only composition at /dashboard
+
+**Status** Accepted · **Added by** LL-075 · **Decided by** product owner
+
+### Context
+
+After sign-in users landed on `/account` (company switcher + nav) with no at-a-glance financial view. A
+home dashboard was wanted, without introducing stored/denormalised summaries (invariant 2).
+
+### Decision
+
+A new **`/dashboard`** server route composes existing report services — `getBalanceSheet`,
+`getCashFlowStatement` (its `endingCash` is total cash; `netChangeInCash` the period cash move),
+`getIncomeStatement`, `getArAging`/`getApAging` totals — into an as-of-today snapshot plus fiscal-year-to-
+date performance (the fiscal-year start comes from the balance sheet). It is NOT placed at `/` (the
+unauthenticated marketing shell, which `smoke.spec.ts` guards) and does NOT replace `/account` (the hub);
+it is linked from `/account` and redirects there when no company is active (via `requireReportContext`).
+
+The one net-new query, `listRecentEntries` (last N posted/reversed entries for the activity feed), is gated
+on **`report.view`** rather than `journal.view` so the entire dashboard is consistently viewable by any
+member. Money is rendered straight from service `string`s — never reformatted or summed on the client
+(ADR-004). No schema change.
+
+### Consequences
+
+- The dashboard stays a pure view over the ledger; every figure remains derived and reconciles with the
+  full reports it links to. Adding widgets means composing more services, not storing anything.
+
+### Revisit if
+
+Charts/sparklines, configurable widgets, per-user preferences, or a cheaper aggregate query (a single
+summary endpoint instead of several service calls) are wanted.

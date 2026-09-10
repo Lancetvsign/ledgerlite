@@ -50,3 +50,11 @@ export const BILLS_USER = {
   password: 'synthetic-password-1',
   name: 'Bills Tester',
 };
+
+/** LL-075 dashboard specs — its own session, isolated from the others. */
+export const DASHBOARD_STORAGE = 'tests/e2e/.auth/dashboard.json';
+export const DASHBOARD_USER = {
+  email: 'e2e-dashboard@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Dashboard Tester',
+};
