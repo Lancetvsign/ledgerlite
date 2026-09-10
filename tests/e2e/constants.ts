@@ -58,3 +58,11 @@ export const DASHBOARD_USER = {
   password: 'synthetic-password-1',
   name: 'Dashboard Tester',
 };
+
+/** LL-076 bank-import specs — its own session, isolated from the others. */
+export const BANK_IMPORT_STORAGE = 'tests/e2e/.auth/bank-import.json';
+export const BANK_IMPORT_USER = {
+  email: 'e2e-bank-import@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Bank Import Tester',
+};

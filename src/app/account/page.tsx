@@ -94,6 +94,11 @@ export default async function AccountPage() {
               Year-end Close →
             </Link>
           )}
+          {roleHasCapability(active.role, 'journal.post') && (
+            <Link href="/bank-import" data-testid="bank-import-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+              Bank Import →
+            </Link>
+          )}
         </nav>
       )}
       <SignOutButton />

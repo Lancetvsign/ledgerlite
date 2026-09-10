@@ -53,6 +53,7 @@ export const journalSourceType = pgEnum('journal_source_type', [
   'BILL_PAYMENT',
   'VENDOR_CREDIT',
   'CLOSING',
+  'BANK_IMPORT',
 ]);
 
 /**

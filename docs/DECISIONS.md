@@ -1846,3 +1846,55 @@ member. Money is rendered straight from service `string`s — never reformatted 
 
 Charts/sparklines, configurable widgets, per-user preferences, or a cheaper aggregate query (a single
 summary endpoint instead of several service calls) are wanted.
+
+## ADR-034 — Bank-statement import stages extracted lines for mandatory human review before posting
+
+**Status** Accepted (LL-076a: pipeline + stubbed extractor; LL-076b: AI extraction) · **Added by** LL-076 ·
+**Decided by** product owner
+
+### Context
+
+Users receive bank statements almost always as **PDFs** and want every credit/debit categorised into the
+ledger — but only after reviewing each line. A PDF carries no structured data, so extraction is the hard
+and error-prone step; in a correctness-first ledger a misread amount must never reach the books unseen.
+
+### Decision
+
+**Extraction and posting are separated by a staging area and a human gate.**
+
+- An upload is extracted by a **`TransactionExtractor`** (a seam: `(fileText) => ExtractedTransaction[]`).
+  The rows are validated as untrusted input — every amount a **signed money string** (never a JS number,
+  ADR-004), every date a calendar date, non-zero, and a single malformed row **rejects the whole batch**
+  rather than silently dropping a transaction — then staged as `bank_import_lines` (status `STAGED`) under a
+  `bank_import_batches` header tied to the chosen cash/bank account (`cashFlowCategory = CASH`). **The raw
+  PDF is never persisted**; only the extracted lines are.
+- Each line carries a **suggested account**: the extractor's proposed category mapped to the chart by name/
+  number, else the account this company most often confirmed for the same description before (**history**,
+  over its own POSTED import lines). A hash of (bank account, date, amount, description) flags **possible
+  duplicates** across batches.
+- **Nothing posts without an explicit per-line decision.** A confirmed line posts ONE categorised journal
+  entry through `LedgerService` (`postEntryCore`) source-typed **`BANK_IMPORT`** with `sourceId = line id`,
+  so the existing source-once index makes a line post **at most once**: money in → Dr bank / Cr category;
+  money out → Cr bank / Dr category. **A/R, A/P, Opening Balance Equity and the bank account itself are
+  never valid categories** — the control lock only guards `JOURNAL_ENTRY`, so this is enforced in the
+  service (as opening balances does); reconciling a line to an open invoice/bill (which must route through
+  the payment services) is a separate follow-up. All decisions in a submit are validated before any line
+  posts. `journal.post` (LEDGER_WRITERS) gates every operation.
+- **LL-076a** ships this pipeline with the production extractor **not configured** (the upload surface says
+  so honestly) plus an env-gated canned extractor (`BANK_IMPORT_TEST_EXTRACTOR=1`, e2e/dev only) so the loop
+  is tested deterministically. **LL-076b** wires the real extractor — the PDF text layer read locally
+  (scans rejected in v1) and sent to a model via **Vercel AI Gateway + the AI SDK** (`generateObject`) —
+  and records the accompanying §9 data-handling exception (statement text processed by an external model;
+  not logged; raw PDF not stored). A real model is never exercised in CI.
+
+### Consequences
+
+- The ledger's invariants are untouched: imports are ordinary posted entries created only by
+  `LedgerService`, balances stay derived, and the human review is the correctness backstop for extraction.
+- Two new tables and two enum values; no new dependencies in 076a (the AI SDK and a PDF-text library
+  arrive with 076b).
+
+### Revisit if
+
+Reconciliation to open invoices/bills, scanned-PDF (vision/OCR) support, a persisted rules table, CSV/OFX
+intake, or auto-posting of high-confidence lines is wanted.
