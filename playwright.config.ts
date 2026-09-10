@@ -68,6 +68,9 @@ export default defineConfig({
       // production rate limit would throttle the last one. Trusted test env only —
       // never set in production/preview, so prod keeps rate limiting. See src/lib/auth.
       E2E_RATE_LIMIT_DISABLED: 'true',
+      // LL-076: bank-statement extraction is stubbed to a canned statement so the
+      // upload → review → post loop is deterministic. Never set in production/preview.
+      BANK_IMPORT_TEST_EXTRACTOR: '1',
     },
   },
 });
