@@ -358,8 +358,8 @@ export async function findIdempotentDocument<T>(
 
 export { reverseJournalEntry, reverseEntryCore } from './reversal';
 export { fingerprintRequest } from './fingerprint';
-export { getJournalEntry } from './queries';
-export type { JournalEntryView, JournalEntryLineView } from './queries';
+export { getJournalEntry, listRecentEntries } from './queries';
+export type { JournalEntryView, JournalEntryLineView, RecentEntry } from './queries';
 export type { PostedEntry } from './internal';
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';
