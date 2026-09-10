@@ -18,9 +18,7 @@ export type BankImportErrorCode =
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */
   | 'CONTROL_ACCOUNT_NOT_ALLOWED'
   /** The chosen account does not exist in this company or is inactive. */
-  | 'ACCOUNT_INVALID'
-  /** No decisions applied to a still-staged line. */
-  | 'NOTHING_TO_POST';
+  | 'ACCOUNT_INVALID';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';

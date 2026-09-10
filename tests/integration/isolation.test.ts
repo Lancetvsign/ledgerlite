@@ -23,6 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
+import { getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
@@ -637,6 +638,82 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'close a period (state transition)',
         expect: 'denied',
         run: (attacker, victim, recordId) => closePeriod(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    // LL-076: a staged statement batch. The extractor is injected (no model, no PDF).
+    table: 'bank_import_batches',
+    seed: async (victim) => {
+      const bank = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Import Bank (isolation)', accountType: 'ASSET', cashFlowCategory: 'CASH' }));
+      const batch = await stageImport(victim.ownerUserId, victim.companyId,
+        { bankAccountId: bank.id, fileText: '' },
+        () => Promise.resolve([{ date: '2026-06-01', description: 'ISOLATION DEPOSIT', amount: '10.00' }]));
+      return { recordId: batch.id };
+    },
+    attempts: [
+      {
+        operation: 'read the batch for review (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getImportBatch(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'list batches (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim) => listImportBatches(attacker, victim.companyId),
+      },
+      {
+        operation: 'stage a statement into the victim company',
+        expect: 'denied',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const bank = await db.execute<{ id: string }>(
+            rawSql`select bank_account_id as id from bank_import_batches where company_id = ${victim.companyId} limit 1`);
+          return stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileText: '' },
+            () => Promise.resolve([{ date: '2026-06-01', description: 'X', amount: '1.00' }]));
+        },
+      },
+    ],
+  },
+  {
+    table: 'bank_import_lines',
+    seed: async (victim) => {
+      const db = await getTestDb();
+      const line = await db.execute<{ id: string; batch_id: string }>(
+        sql`select id, batch_id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
+      const row = line.rows[0];
+      if (row === undefined) throw new Error('bank_import_lines seed expects the batches descriptor to have run first');
+      return { recordId: `${row.batch_id}:${row.id}` };
+    },
+    attempts: [
+      {
+        operation: 'post a staged line into the victim ledger (state transition)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acct = await db.execute<{ id: string }>(
+            rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type is null limit 1`);
+          return postImportLines(attacker, victim.companyId, batchId ?? '', {
+            decisions: [{ lineId: lineId ?? '', action: 'post', accountId: acct.rows[0]?.id ?? victim.companyId }],
+          });
+        },
+      },
+      {
+        operation: 'import lines are company-partitioned; cross-company reference is structurally impossible',
+        expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from bank_import_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        },
       },
     ],
   },

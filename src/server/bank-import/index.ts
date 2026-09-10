@@ -339,9 +339,8 @@ export async function postImportLines(
     }
     toPost.push({ line, accountId: d.accountId });
   }
-  if (toPost.length === 0 && toIgnore.length === 0) {
-    throw new BankImportError('NOTHING_TO_POST', 'No staged lines were selected.');
-  }
+  // If every decision targets a line that is already POSTED/IGNORED (a double-submit or a
+  // retry), this is a successful no-op — invariant 6: retries are idempotent, not errors.
 
   for (const line of toIgnore) {
     await getDbTx()

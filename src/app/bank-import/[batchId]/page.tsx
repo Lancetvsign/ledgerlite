@@ -161,7 +161,6 @@ function noticeFrom(error: string | undefined, ok: string | undefined, posted: s
   if (error === 'invalid') return 'Please check the lines and try again.';
   if (error === 'ACCOUNT_REQUIRED') return 'Choose an account for every line you are posting.';
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Accounts Receivable, Accounts Payable, Opening Balance Equity, and the bank account itself cannot be used — pick another account.';
-  if (error === 'NOTHING_TO_POST') return 'No staged lines were selected.';
   if (error === 'PERIOD_CLOSED') return 'A line falls in a closed accounting period.';
   if (error === 'LINE_NOT_FOUND' || error === 'BATCH_NOT_FOUND') return 'That import could not be found.';
   if (error === 'denied') return 'You do not have permission to post.';
