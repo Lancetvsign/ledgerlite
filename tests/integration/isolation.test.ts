@@ -648,7 +648,7 @@ const REGISTRY: IsolationDescriptor[] = [
       const bank = await createAccount(victim.ownerUserId, victim.companyId,
         createAccountInput.parse({ name: 'Import Bank (isolation)', accountType: 'ASSET', cashFlowCategory: 'CASH' }));
       const batch = await stageImport(victim.ownerUserId, victim.companyId,
-        { bankAccountId: bank.id, fileText: '' },
+        { bankAccountId: bank.id, fileBytes: new Uint8Array() },
         () => Promise.resolve([{ date: '2026-06-01', description: 'ISOLATION DEPOSIT', amount: '10.00' }]));
       return { recordId: batch.id };
     },
@@ -671,7 +671,7 @@ const REGISTRY: IsolationDescriptor[] = [
           const { sql: rawSql } = await import('drizzle-orm');
           const bank = await db.execute<{ id: string }>(
             rawSql`select bank_account_id as id from bank_import_batches where company_id = ${victim.companyId} limit 1`);
-          return await stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileText: '' },
+          return await stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileBytes: new Uint8Array() },
             () => Promise.resolve([{ date: '2026-06-01', description: 'X', amount: '1.00' }]));
         },
       },

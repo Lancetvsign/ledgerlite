@@ -1849,7 +1849,7 @@ summary endpoint instead of several service calls) are wanted.
 
 ## ADR-034 — Bank-statement import stages extracted lines for mandatory human review before posting
 
-**Status** Accepted (LL-076a: pipeline + stubbed extractor; LL-076b: AI extraction) · **Added by** LL-076 ·
+**Status** Accepted — implemented (LL-076a: pipeline; LL-076b: AI extraction) · **Added by** LL-076 ·
 **Decided by** product owner
 
 ### Context
@@ -1886,6 +1886,24 @@ and error-prone step; in a correctness-first ledger a misread amount must never 
   (scans rejected in v1) and sent to a model via **Vercel AI Gateway + the AI SDK** (`generateObject`) —
   and records the accompanying §9 data-handling exception (statement text processed by an external model;
   not logged; raw PDF not stored). A real model is never exercised in CI.
+
+**LL-076b — as implemented.** The extractor seam takes the file's **bytes**; the AI extractor
+(`createAiExtractor`) reads the PDF text layer in memory with `unpdf` (pdf.js), rejects a file with no
+usable text as `SCANNED_PDF` **before any model call**, and sends the text — never the binary — to the
+model via `generateText` + `Output.object` (AI SDK, gateway `provider/model` string, default
+`anthropic/claude-sonnet-5`, overridable by `BANK_IMPORT_MODEL`, temperature 0, a "extract only what is
+printed; amounts as signed strings" prompt). The model's output is shaped by a loose request schema and
+then **re-validated strictly** by `stageImport` (signed money string, calendar date, non-zero); any
+failure — provider error, malformed output — surfaces as `EXTRACTION_FAILED` with a fixed message that
+carries no model output or file text. The gateway authenticates with `AI_GATEWAY_API_KEY` locally or the
+deployment's Vercel OIDC token; with neither, the default stays `notConfiguredExtractor`.
+**§9 exception (AGENTS.md):** the statement's extracted text — payees, amounts, dates — is transmitted to
+the model provider selected through the gateway. It is not logged, not persisted, and not included in
+errors; only the reviewed, staged lines are stored. The text is also untrusted *input to the model* (a
+memo can read like an instruction); strict re-validation bounds the output and the mandatory per-line
+review is the backstop against a fabricated row. Preview deployments carry the OIDC token too, so they
+perform real, billed extraction. A statement over ~200k characters of text is refused, not truncated.
+Two dependencies added: `ai`, `unpdf`.
 
 ### Consequences
 

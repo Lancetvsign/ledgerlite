@@ -51,6 +51,9 @@ async function setup(): Promise<Ctx> {
 const fixed = (rows: { date: string; description: string; amount: string; category?: string }[]): TransactionExtractor =>
   () => Promise.resolve(rows);
 
+/** The injected extractors ignore the bytes; the pipeline never needs a real PDF here. */
+const EMPTY = new Uint8Array();
+
 /** A typical little statement: one deposit (in), two payments (out). */
 const STATEMENT = fixed([
   { date: '2026-06-01', description: 'DEPOSIT ACME', amount: '1500.00', category: 'Consulting Sales' },
@@ -90,7 +93,7 @@ beforeEach(async () => {
 describe('stageImport — validates and stages with suggestions', () => {
   it('stages every extracted row, mapping the extractor category to a chart account', async () => {
     const c = await setup();
-    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'june.pdf', fileText: '' }, STATEMENT);
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'june.pdf', fileBytes: EMPTY }, STATEMENT);
     const view = await getImportBatch(c.userId, c.companyId, batch.id);
     expect(view).not.toBeNull();
     expect(view!.lines).toHaveLength(3);
@@ -104,13 +107,13 @@ describe('stageImport — validates and stages with suggestions', () => {
 
   it('falls back to history: the account confirmed before for the same description', async () => {
     const c = await setup();
-    const first = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const first = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const v1 = await getImportBatch(c.userId, c.companyId, first.id);
     const rentLine = v1!.lines[2]!;
     await postImportLines(c.userId, c.companyId, first.id, { decisions: [{ lineId: rentLine.id, action: 'post', accountId: c.rentId }] });
 
     // A later statement with the same description (still no category) is suggested Rent.
-    const second = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, fixed([
+    const second = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
       { date: '2026-07-05', description: 'MONTHLY RENT', amount: '-2000.00' },
     ]));
     const v2 = await getImportBatch(c.userId, c.companyId, second.id);
@@ -120,21 +123,21 @@ describe('stageImport — validates and stages with suggestions', () => {
   it('rejects a malformed extracted row rather than staging a partial batch', async () => {
     const c = await setup();
     const bad = fixed([{ date: '2026-06-01', description: 'X', amount: '12.34567' }]); // 5 decimals
-    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, bad));
+    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, bad));
     expect(err.code).toBe('EXTRACTION_FAILED');
     const zero = fixed([{ date: '2026-06-01', description: 'X', amount: '0.00' }]);
-    expect((await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, zero))).code).toBe('EXTRACTION_FAILED');
+    expect((await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, zero))).code).toBe('EXTRACTION_FAILED');
   });
 
   it('rejects a bank account that is not an active cash asset', async () => {
     const c = await setup();
-    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.salesId, fileText: '' }, STATEMENT));
+    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.salesId, fileBytes: EMPTY }, STATEMENT));
     expect(err.code).toBe('INVALID_BANK_ACCOUNT');
   });
 
   it('reports not-configured when no extractor is wired (the production default until LL-076b)', async () => {
     const c = await setup();
-    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, notConfiguredExtractor));
+    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, notConfiguredExtractor));
     expect(err.code).toBe('EXTRACTION_NOT_CONFIGURED');
   });
 });
@@ -142,7 +145,7 @@ describe('stageImport — validates and stages with suggestions', () => {
 describe('postImportLines — categorised entries through the ledger, once each', () => {
   it('posts money-in as Dr bank / Cr category and money-out as Cr bank / Dr category', async () => {
     const c = await setup();
-    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const view = await getImportBatch(c.userId, c.companyId, batch.id);
     const [dep, supplies, rent] = view!.lines;
 
@@ -169,7 +172,7 @@ describe('postImportLines — categorised entries through the ledger, once each'
 
   it('is post-once: re-submitting a posted line is a no-op', async () => {
     const c = await setup();
-    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const line = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
     await postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: line.id, action: 'post', accountId: c.salesId }] });
     const again = await postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: line.id, action: 'post', accountId: c.suppliesId }] });
@@ -180,7 +183,7 @@ describe('postImportLines — categorised entries through the ledger, once each'
 
   it('rejects a control account, the OBE account, and the bank account itself', async () => {
     const c = await setup();
-    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const line = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
     for (const bad of [await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'), await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE'), await sysAccount(c.companyId, 'OPENING_BALANCE_EQUITY'), c.bankId]) {
       const err = await errOf(postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: line.id, action: 'post', accountId: bad }] }));
@@ -191,7 +194,7 @@ describe('postImportLines — categorised entries through the ledger, once each'
 
   it('requires an account to post, and rejects a closed period before posting anything', async () => {
     const c = await setup();
-    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const [dep, supplies] = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines;
     expect((await errOf(postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: dep!.id, action: 'post' }] }))).code).toBe('ACCOUNT_REQUIRED');
 
@@ -210,11 +213,11 @@ describe('postImportLines — categorised entries through the ledger, once each'
 
   it('flags a re-imported transaction as a possible duplicate', async () => {
     const c = await setup();
-    const one = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const one = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const line = (await getImportBatch(c.userId, c.companyId, one.id))!.lines[0]!;
     await postImportLines(c.userId, c.companyId, one.id, { decisions: [{ lineId: line.id, action: 'post', accountId: c.salesId }] });
 
-    const two = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT);
+    const two = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const v2 = await getImportBatch(c.userId, c.companyId, two.id);
     expect(v2!.lines[0]?.isDuplicate).toBe(true); // same deposit already posted
     expect(v2!.lines[1]?.isDuplicate).toBe(false); // supplies was never posted
@@ -223,6 +226,6 @@ describe('postImportLines — categorised entries through the ledger, once each'
   it('denies a non-member', async () => {
     const c = await setup();
     const outsider = await makeUser();
-    await expect(stageImport(outsider, c.companyId, { bankAccountId: c.bankId, fileText: '' }, STATEMENT)).rejects.toThrow();
+    await expect(stageImport(outsider, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT)).rejects.toThrow();
   });
 });

@@ -148,7 +148,7 @@ export async function stageImport(
 
   // Extract, then validate EVERY row — a single malformed row rejects the batch rather than
   // silently dropping a transaction.
-  const raw = await extractor(input.fileText);
+  const raw = await extractor({ bytes: input.fileBytes });
   const parsed = extractedTransactionsSchema.safeParse(raw);
   if (!parsed.success) {
     throw new BankImportError('EXTRACTION_FAILED', `The extracted statement had a malformed row: ${parsed.error.issues[0]?.message ?? 'invalid'}.`);
