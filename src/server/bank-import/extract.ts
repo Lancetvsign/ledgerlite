@@ -1,6 +1,10 @@
 import 'server-only';
 
+import { generateText, Output, type LanguageModel } from 'ai';
+import { z } from 'zod';
+
 import { BankImportError } from './errors';
+import { extractPdfText } from './pdf-text';
 
 import type { ExtractedTransaction } from '@/validation/bank-import';
 
@@ -8,28 +12,46 @@ import type { ExtractedTransaction } from '@/validation/bank-import';
  * The transaction-extraction seam — LL-076.
  *
  * `stageImport` takes an extractor so the pipeline (staging, review, posting) is exercised
- * deterministically in tests without any external model. LL-076a ships this seam with:
- *   - `notConfiguredExtractor` — the production default until the AI integration lands
- *     (LL-076b), so the upload surface honestly reports "not configured" rather than guess;
- *   - `cannedExtractor` — a fixed synthetic statement, selected ONLY when the
- *     `BANK_IMPORT_TEST_EXTRACTOR=1` env flag is set (e2e / dev). Never enabled in
- *     production; it exists so the upload → review → post loop can be driven end to end.
- * LL-076b replaces the production default with the AI SDK extractor behind the same
- * signature; the canned one stays as the e2e stub (a real model is non-deterministic and
- * needs a key, so it is never exercised in CI).
+ * deterministically in tests without any external model. An extractor receives the
+ * uploaded file's BYTES and owns everything up to a list of candidate transactions:
+ *
+ *   - `aiExtractor` (LL-076b, the production default when the AI Gateway is reachable):
+ *     read the PDF's text layer locally (reject scans), send the TEXT — never the binary —
+ *     to a model through Vercel AI Gateway with a strict structured-output schema. The
+ *     result is untrusted: `stageImport` re-validates every row, and nothing posts without
+ *     human review (ADR-034).
+ *   - `notConfiguredExtractor`: when no gateway credential is present, the upload surface
+ *     honestly reports "not configured" rather than guess.
+ *   - `cannedExtractor`: a fixed synthetic statement, selected ONLY when
+ *     `BANK_IMPORT_TEST_EXTRACTOR=1` (e2e / dev). Never enabled in production. A real
+ *     model is non-deterministic and needs a credential, so it is never exercised in CI.
+ *
+ * §9 data handling: the statement text is processed by an external model (the documented
+ * ADR-034 exception). The prompt and the model's response are never logged, and no error
+ * surfaced to the user or a log carries model output or file contents.
+ *
+ * The statement text is UNTRUSTED input to the model — a payee memo can carry text that
+ * reads like instructions. Strict re-validation limits the shape of what comes back, and the
+ * mandatory per-line human review is the backstop against a fabricated or altered row; that
+ * is why nothing posts un-reviewed.
  */
-export type TransactionExtractor = (fileText: string) => Promise<ExtractedTransaction[]>;
+export interface ExtractorInput {
+  /** The uploaded file, in memory. Never persisted. */
+  readonly bytes: Uint8Array;
+}
+
+export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractedTransaction[]>;
 
 export const notConfiguredExtractor: TransactionExtractor = () => {
   throw new BankImportError(
     'EXTRACTION_NOT_CONFIGURED',
-    'Statement extraction is not configured yet. The AI extraction integration is a follow-up.',
+    'Statement extraction is not configured: no AI Gateway credential is available in this environment.',
   );
 };
 
 /**
  * Synthetic, deterministic statement lines (money in is positive, out is negative). The
- * categories name standard-chart accounts so the AI→account mapping is exercised.
+ * categories name standard-chart accounts so the category→account mapping is exercised.
  */
 export const cannedExtractor: TransactionExtractor = () =>
   Promise.resolve([
@@ -38,12 +60,106 @@ export const cannedExtractor: TransactionExtractor = () =>
     { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
   ]);
 
-/** Whether an extractor is available (drives the upload page's "not configured" state). */
-export function isExtractionConfigured(): boolean {
+// ---------------------------------------------------------------------------------------
+// AI extractor
+// ---------------------------------------------------------------------------------------
+
+/** Default model, overridable per environment (a `provider/model` id routed by the gateway). */
+export const DEFAULT_BANK_IMPORT_MODEL = 'anthropic/claude-sonnet-5';
+
+/**
+ * What the model is asked to produce. Amounts are STRINGS (a JSON number would lose
+ * precision and is forbidden for money — ADR-004); everything is re-validated strictly by
+ * `extractedTransactionsSchema` in `stageImport`, so this schema only shapes the request.
+ */
+const modelOutputSchema = z.object({
+  transactions: z.array(
+    z.object({
+      date: z.string().describe('Transaction date as YYYY-MM-DD. Use the statement year if a line shows only month/day.'),
+      description: z.string().describe('The payee / memo text exactly as printed on the statement line.'),
+      amount: z
+        .string()
+        .describe('Signed decimal as a string, e.g. "1500.00" for money INTO the account (deposit/credit) and "-120.50" for money OUT (withdrawal/debit/payment). Never zero.'),
+      category: z
+        .string()
+        .optional()
+        .describe('A short bookkeeping category for this line, e.g. "Sales Revenue", "Office Supplies", "Rent", "Utilities", "Bank Fees", "Owner Contribution". Omit if unsure.'),
+    }),
+  ),
+});
+
+const SYSTEM_PROMPT = `You extract the transaction list from the text of a bank statement for double-entry bookkeeping.
+Rules:
+- Output ONLY transactions that appear on the statement. Never invent, merge, split or round a line.
+- Exclude opening/closing balance lines, subtotals, running-balance columns, interest-rate notices and page headers/footers.
+- amount is a signed decimal STRING with up to 4 decimal places: positive for money coming INTO the account (deposits, credits, refunds), negative for money going OUT (withdrawals, debits, checks, fees, payments).
+- date is YYYY-MM-DD. Infer the year from the statement period when a line shows only the month and day.
+- description is the statement's own text for the line, trimmed.
+- category is a short suggested bookkeeping category; omit it rather than guess wildly.
+If the text contains no transactions, return an empty list.`;
+
+export interface AiExtractorOptions {
+  /** The model to call; defaults to `BANK_IMPORT_MODEL` or `DEFAULT_BANK_IMPORT_MODEL` through the gateway. */
+  readonly model?: LanguageModel;
+  /** PDF → text; injectable so unit tests need neither a PDF nor pdf.js. */
+  readonly readText?: (bytes: Uint8Array) => Promise<string>;
+}
+
+export function createAiExtractor(options: AiExtractorOptions = {}): TransactionExtractor {
+  const readText = options.readText ?? extractPdfText;
+  const configured = process.env.BANK_IMPORT_MODEL?.trim();
+  const model: LanguageModel = options.model ?? (configured !== undefined && configured !== '' ? configured : DEFAULT_BANK_IMPORT_MODEL);
+
+  return async ({ bytes }) => {
+    const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
+
+    let output: z.infer<typeof modelOutputSchema>;
+    try {
+      const result = await generateText({
+        model,
+        system: SYSTEM_PROMPT,
+        prompt: `Statement text:\n\n${text}`,
+        output: Output.object({ schema: modelOutputSchema }),
+        temperature: 0,
+      });
+      output = result.output;
+    } catch {
+      // No model output, provider message or file text in the error (§9) — the reviewer
+      // only needs to know the extraction did not succeed.
+      throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
+    }
+    return output.transactions;
+  };
+}
+
+// ---------------------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------------------
+
+function testExtractorEnabled(): boolean {
   return process.env.BANK_IMPORT_TEST_EXTRACTOR === '1';
 }
 
-/** The production extractor for this build. */
+/**
+ * The gateway authenticates with `AI_GATEWAY_API_KEY` (local / non-Vercel) or a Vercel
+ * OIDC token (present automatically on Vercel deployments).
+ */
+function gatewayCredentialPresent(): boolean {
+  const key = process.env.AI_GATEWAY_API_KEY;
+  if (key !== undefined && key !== '') return true;
+  const oidc = process.env.VERCEL_OIDC_TOKEN;
+  if (oidc !== undefined && oidc !== '') return true;
+  return process.env.VERCEL === '1';
+}
+
+/** Whether an extractor is available (drives the upload page's "not configured" state). */
+export function isExtractionConfigured(): boolean {
+  return testExtractorEnabled() || gatewayCredentialPresent();
+}
+
+/** The extractor for this environment. */
 export function resolveExtractor(): TransactionExtractor {
-  return isExtractionConfigured() ? cannedExtractor : notConfiguredExtractor;
+  if (testExtractorEnabled()) return cannedExtractor;
+  if (gatewayCredentialPresent()) return createAiExtractor();
+  return notConfiguredExtractor;
 }

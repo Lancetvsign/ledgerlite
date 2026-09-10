@@ -45,16 +45,14 @@ export async function uploadStatementAction(formData: FormData): Promise<void> {
     (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
   if (!isPdf) redirect('/bank-import?error=invalid_file');
 
-  // Read in memory; the binary is never persisted. LL-076a's extractors ignore `fileText`
-  // (not-configured / canned), so the UTF-8 decode of the PDF bytes is a placeholder.
-  // LL-076b MUST replace this with the PDF text-layer extraction (and SCANNED_PDF
-  // rejection) before wiring a real extractor — raw bytes must never reach the model.
-  const fileText = await file.text();
+  // Read in memory and hand the bytes to the extractor, which reads the PDF's text layer
+  // locally and sends only text to the model. The file is never persisted or logged.
+  const fileBytes = new Uint8Array(await file.arrayBuffer());
 
   const parsed = stageImportInput.safeParse({
     bankAccountId: formData.get('bankAccountId'),
     filename: file.name,
-    fileText,
+    fileBytes,
   });
   if (!parsed.success) redirect('/bank-import?error=invalid');
 

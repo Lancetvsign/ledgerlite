@@ -30,8 +30,8 @@ export const stageImportInput = z.object({
   /** The cash/bank account the statement is for (must be ACTIVE, ASSET, cashFlowCategory CASH). */
   bankAccountId: z.uuid(),
   filename: z.string().trim().max(255).optional(),
-  /** The statement's extracted text — what the extractor reads. May be empty for a stubbed extractor. */
-  fileText: z.string(),
+  /** The uploaded statement's bytes, in memory — what the extractor reads. Never persisted. */
+  fileBytes: z.instanceof(Uint8Array),
 });
 export type StageImportInput = z.infer<typeof stageImportInput>;
 
