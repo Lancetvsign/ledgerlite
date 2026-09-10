@@ -86,12 +86,15 @@ jobs:
       # or malformed secret set can never reach `db:migrate` against production.
       - name: Require credentials
         run: |
+          # Checks the JOB env names (the secrets are mapped above: PRODUCTION_DATABASE_URL →
+          # DATABASE_URL, PRODUCTION_DATABASE_URL_UNPOOLED → DATABASE_URL_UNPOOLED). Checking
+          # the secret names here instead would always fail — they do not exist in this shell.
           missing=()
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID PRODUCTION_DATABASE_URL_UNPOOLED; do
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID DATABASE_URL DATABASE_URL_UNPOOLED; do
             [ -z "${!v}" ] && missing+=("$v")
           done
           if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error title=Missing GitHub secrets::${missing[*]}"
+            echo "::error title=Missing production credentials::${missing[*]} (GitHub secrets VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID / PRODUCTION_DATABASE_URL / PRODUCTION_DATABASE_URL_UNPOOLED)"
             echo "Production cannot be deployed without these. See docs/DEPLOYMENT.md."
             exit 1
           fi
