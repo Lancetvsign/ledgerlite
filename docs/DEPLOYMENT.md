@@ -55,7 +55,7 @@ promote, leaving the database ahead of the deployed code. That is exactly the st
 | Local | manually, `npm run db:migrate`, against your own branch |
 | CI | in the Actions job, against the ephemeral branch, before tests |
 | Preview | in `preview-database.yml`, before the deployment is pointed at the branch |
-| Production | in `production-deploy.yml`, as a gated step **before** promotion |
+| Production | in `production-deploy.yml`, as a gated step **before** promotion (promotion = a Vercel REST git-source deployment of the same commit; the CLI is not used — see the workflow header) |
 
 **Vercel's automatic deployment from `main` is disabled** in `vercel.json`
 (`git.deploymentEnabled.main = false`). That is what makes the gate real: production is
