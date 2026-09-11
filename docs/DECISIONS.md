@@ -1896,7 +1896,10 @@ printed; amounts as signed strings" prompt). The model's output is shaped by a l
 then **re-validated strictly** by `stageImport` (signed money string, calendar date, non-zero); any
 failure — provider error, malformed output — surfaces as `EXTRACTION_FAILED` with a fixed message that
 carries no model output or file text. The gateway authenticates with `AI_GATEWAY_API_KEY` locally or the
-deployment's Vercel OIDC token; with neither, the default stays `notConfiguredExtractor`.
+deployment's Vercel OIDC token; with neither, the default stays `notConfiguredExtractor`. **Direct route
+(go-live amendment):** when `ANTHROPIC_API_KEY` is set the extractor calls Anthropic directly via
+`@ai-sdk/anthropic` and skips the gateway — added when the gateway's free tier refused the model for the
+production team; same prompt, schema, validation and §9 handling; the route is logged as a breadcrumb.
 **§9 exception (AGENTS.md):** the statement's extracted text — payees, amounts, dates — is transmitted to
 the model provider selected through the gateway. It is not logged, not persisted, and not included in
 errors; only the reviewed, staged lines are stored. The text is also untrusted *input to the model* (a

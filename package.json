@@ -31,6 +31,7 @@
     "db:reset-preview": "tsx scripts/reset-preview-schema.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.53",
     "@ai-sdk/gateway": "4.0.78",
     "@neondatabase/serverless": "^1.1.0",
     "ai": "^7.0.97",
