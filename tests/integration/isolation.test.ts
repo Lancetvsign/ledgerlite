@@ -25,6 +25,7 @@ import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/ser
 import { recordAuditEvent } from '@/server/audit';
 import { getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
+import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createVendorInput, updateVendorInput } from '@/validation/vendor';
@@ -715,6 +716,68 @@ const REGISTRY: IsolationDescriptor[] = [
           return rows.rows;
         },
       },
+    ],
+  },
+  {
+    // LL-078: a reconciliation header on a cash account.
+    table: 'bank_reconciliations',
+    seed: async (victim) => {
+      const bank = await createAccount(victim.ownerUserId, victim.companyId,
+        createAccountInput.parse({ name: 'Recon Bank (isolation)', accountType: 'ASSET', cashFlowCategory: 'CASH' }));
+      const rec = await startReconciliation(victim.ownerUserId, victim.companyId,
+        { bankAccountId: bank.id, statementDate: '2026-06-30', statementEndingAmount: '10.0000' });
+      return { recordId: rec.id };
+    },
+    attempts: [
+      { operation: 'read a reconciliation (authorized front door)', expect: 'denied',
+        run: (attacker, victim, recordId) => getReconciliation(attacker, victim.companyId, recordId) },
+      { operation: 'list reconciliations (authorized front door)', expect: 'denied',
+        run: (attacker, victim) => listReconciliations(attacker, victim.companyId) },
+      { operation: 'complete a reconciliation (state transition)', expect: 'denied',
+        run: (attacker, victim, recordId) => completeReconciliation(attacker, victim.companyId, recordId) },
+      { operation: 'start a reconciliation in the victim company', expect: 'denied',
+        run: (attacker, victim) => startReconciliation(attacker, victim.companyId,
+          { bankAccountId: victim.companyId, statementDate: '2026-07-31', statementEndingAmount: '0.00' }) },
+    ],
+  },
+  {
+    table: 'bank_reconciliation_lines',
+    seed: async (victim) => {
+      const db = await getTestDb();
+      const rec = await db.execute<{ id: string; bank_account_id: string }>(
+        sql`select id, bank_account_id from bank_reconciliations where company_id = ${victim.companyId} limit 1`);
+      const header = rec.rows[0];
+      if (header === undefined) throw new Error('bank_reconciliation_lines seed expects the reconciliations descriptor to have run first');
+      // A real posted movement on the bank account, cleared by the owner.
+      const acct = await db.execute<{ id: string }>(
+        sql`select id from accounts where company_id = ${victim.companyId} and system_account_type is null and id <> ${header.bank_account_id} limit 1`);
+      const { postJournalEntry } = await import('@/server/ledger');
+      const { postJournalEntryInput } = await import('@/validation/journal');
+      const entry = await postJournalEntry(postJournalEntryInput.parse({
+        companyId: victim.companyId, actorUserId: victim.ownerUserId, transactionDate: '2026-06-10', sourceType: 'JOURNAL_ENTRY',
+        lines: [{ accountId: header.bank_account_id, debit: '10.00' }, { accountId: acct.rows[0]!.id, credit: '10.00' }],
+      }));
+      const line = await db.execute<{ id: string }>(
+        sql`select id from journal_lines where company_id = ${victim.companyId} and journal_entry_id = ${entry.entry.id} and account_id = ${header.bank_account_id}`);
+      await setCleared(victim.ownerUserId, victim.companyId, header.id, { journalLineIds: [line.rows[0]!.id] });
+      return { recordId: `${header.id}:${line.rows[0]!.id}` };
+    },
+    attempts: [
+      { operation: 'replace the cleared set (state transition)', expect: 'denied',
+        run: (attacker, victim, recordId) => {
+          const [recId, lineId] = recordId.split(':');
+          return setCleared(attacker, victim.companyId, recId ?? '', { journalLineIds: [lineId ?? ''] });
+        } },
+      { operation: 'cleared lines are company-partitioned; cross-company reference is structurally impossible', expect: 'empty',
+        run: async (attacker, victim) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const acid = await db.execute<{ company_id: string }>(
+            rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const rows = await db.execute(
+            rawSql`select id from bank_reconciliation_lines where company_id = ${acid.rows[0]?.company_id} and company_id = ${victim.companyId}`);
+          return rows.rows;
+        } },
     ],
   },
   {

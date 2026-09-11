@@ -1972,3 +1972,57 @@ gates (GL-T018/T025) depend on it.
 
 Splitting one line across several documents, unapplied customer credit for an overpayment, or matching
 by reference/description rather than amount is wanted.
+
+## ADR-036 — Bank reconciliation keeps "cleared" beside the ledger, derives every figure, and completes only at zero
+
+**Status** Accepted · **Added by** LL-078 · **Decided by** product owner
+
+### Context
+
+Statements now flow into the ledger (ADR-034/035), but nothing ties a cash account's ledger to what
+the bank says. Bank reconciliation is the month-end control: the bank's ending figure on a statement
+date, the ledger lines the bank has cleared, and an exact agreement before the statement is declared
+reconciled. Two constraints shape it: **posted journal lines are immutable** (the trigger rejects any
+update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2 scan fails on any
+`%balance%`/`total` column).
+
+### Decision
+
+- **Cleared state lives in its own tables.** `bank_reconciliations` (account, statement date, the
+  bank's `statement_ending_amount` — a document figure the user types, never a ledger balance —,
+  status IN_PROGRESS/COMPLETED, who/when) and `bank_reconciliation_lines` (one row per cleared ledger
+  line; no amounts copied). Structurally: a ledger line clears **at most once, ever**
+  (`unique(company_id, journal_line_id)`); a cleared line **belongs to the reconciliation's account**
+  (both composite FKs carry `bank_account_id`, backed by a new `unique(company_id, id, account_id)` on
+  `journal_lines`); **one IN_PROGRESS per account** (partial unique); a COMPLETED header carries
+  `completed_by/at` (CHECK).
+- **Every figure is derived on read** from `journal_lines` (`Σ debit − credit`, POSTED and REVERSED,
+  `posting_date ≤ statement_date` — the trial-balance/cash-flow shape): opening cleared (other
+  reconciliations), cleared here, difference, ledger as-of. Nothing derived is persisted.
+- **Completion requires exact equality** at NUMERIC(19,4): `statement_ending_amount = Σ of all cleared
+  lines of the account`, checked in the transaction under a header lock; otherwise
+  `DIFFERENCE_NOT_ZERO`. **Completed is final** in v1 (no reopen/undo); a mistyped statement figure or
+  date is corrected while IN_PROGRESS (`updateReconciliation`).
+- **Statement dates move forward per account**; saving the cleared set **replaces** it after validating
+  every line (this account, posted, on or before the statement date, not cleared elsewhere), re-checking
+  IN_PROGRESS after the lock so a save racing a completion loses cleanly.
+- **Imported lines are pre-ticked in the UI only** on the first visit (the bank has, by definition, seen
+  them); a save is always explicit.
+- **Reversals:** a cleared line stays cleared when its entry is reversed; the reversal's lines are new
+  candidates. A backdated reversal into a reconciled period shows up as a non-zero difference on the
+  next statement — the correct signal, not a bug.
+- **No closed-period guard**: nothing posts, and reconciling a closed month is routine.
+- **Authorization:** the pre-existing `reconciliation.view` (everyone) and `reconciliation.complete`
+  (ALL_WRITERS — a bookkeeper reconciles) capabilities; no new capability. **ASSET + CASH accounts only.**
+
+### Consequences
+
+- The ledger is untouched: no posting, no trigger changes, no stored balance; the migration is expand-only
+  (two tables, one enum, two audit values, one unique on `journal_lines`).
+- Once-only clearing and account membership cannot be violated by a bug in the service.
+
+### Revisit if
+
+Credit-card (liability) reconciliation, reopening a completed reconciliation, auto-matching candidates
+to imported statement lines, a printable reconciliation report, or coupling to period close is wanted.
+
