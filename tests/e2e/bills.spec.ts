@@ -114,10 +114,9 @@ test('a vendor statement shows opening, activity and closing', async ({ page }) 
 
   await page.goto('/reports/vendor-statement');
   await page.getByTestId('vendor-statement-vendor').selectOption({ label: 'Beta Supply' });
-  // An explicit wide window: the bill is dated by the form's UTC "today" while the
-  // report's default `to` is the COMPANY's today, and near midnight UTC those differ —
-  // the bill would post "tomorrow" and drop out of the window. Fixed dates keep this
-  // assertion time-of-day independent.
+  // An explicit wide window keeps this assertion independent of the clock. (Form defaults
+  // now use the COMPANY's today like the reports do — `companyToday` — so the old
+  // near-midnight-UTC mismatch is gone; the fixed window is belt-and-braces.)
   await page.getByTestId('vendor-statement-from').fill('2000-01-01');
   await page.getByTestId('vendor-statement-to').fill('2099-12-31');
   await page.getByTestId('vendor-statement-submit').click();
