@@ -129,12 +129,16 @@ jobs:
             exit 1
           fi
 
+      # `--scope` gives the CLI its team context. Without it a token run non-interactively
+      # looks the team up with no teamId and gets 403 team_unauthorized — the generic
+      # "Could not retrieve Project Settings" that failed the first deploys — even though
+      # the same token serves every REST call with ?teamId= (see set-preview-env.ts).
       - name: Pull Vercel project settings
-        run: npx vercel@54.21.1 pull --yes --environment=production --token "$VERCEL_TOKEN"
+        run: npx vercel@54.21.1 pull --yes --environment=production --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
 
       - name: Build
-        run: npx vercel@54.21.1 build --prod --token "$VERCEL_TOKEN"
+        run: npx vercel@54.21.1 build --prod --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
 
       # Only reached if migrations succeeded.
       - name: Promote to production
-        run: npx vercel@54.21.1 deploy --prebuilt --prod --token "$VERCEL_TOKEN"
+        run: npx vercel@54.21.1 deploy --prebuilt --prod --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
