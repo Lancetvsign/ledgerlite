@@ -12,7 +12,10 @@ name: Production deploy
 #   - build environments are cached and may not carry the DATABASE_URL expected
 #
 # So migrations run here, as a discrete gated step, and the deployment is only
-# promoted if they succeed.
+# promoted if they succeed. Promotion asks Vercel (REST) to build and deploy THIS
+# commit as production — the Vercel CLI is deliberately not used: a team-scoped
+# token cannot call the team endpoint the CLI insists on (403 team_unauthorized),
+# while the project endpoints the REST path needs work with any token type.
 
 on:
   push:
@@ -112,33 +115,47 @@ jobs:
       - name: Apply migrations to production
         run: npm run db:migrate
 
-      # `vercel build` needs the project's settings and Production env locally; CI has no
-      # `.vercel/` link file, so pull them (the org/project come from VERCEL_ORG_ID /
-      # VERCEL_PROJECT_ID). Written under .vercel/, which is gitignored and never committed.
-      # Prove the token can act for the team and project BEFORE the CLI does, and say
-      # exactly which of the three fails. Prints HTTP status codes and the account/team
-      # slugs only — never the token, never env var values.
+      # Prove the token can reach the project BEFORE touching anything, and say exactly
+      # what it can do. Prints HTTP status codes and slugs only — never the token. The
+      # user/team endpoints are informational: a TEAM-scoped token answers 404/403 there
+      # by design and is still fully able to deploy the project.
       - name: Verify Vercel access
         run: |
           api() { curl -s -o "$2" -w "%{http_code}" -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com$1"; }
-          u=$(api "/v2/user" /tmp/user.json);            echo "token → /v2/user: $u (account: $(jq -r '.user.username // "?"' /tmp/user.json))"
+          u=$(api "/v2/user" /tmp/user.json);                echo "token → /v2/user: $u (account: $(jq -r '.user.username // "n/a (team-scoped token)"' /tmp/user.json))"
           t=$(api "/v2/teams/$VERCEL_ORG_ID" /tmp/team.json); echo "token → /v2/teams/<VERCEL_ORG_ID>: $t (team: $(jq -r '.slug // .error.code // "?"' /tmp/team.json))"
           p=$(api "/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" /tmp/project.json); echo "token → /v9/projects/<VERCEL_PROJECT_ID>?teamId=<VERCEL_ORG_ID>: $p (project: $(jq -r '.name // .error.code // "?"' /tmp/project.json))"
-          if [ "$u" != "200" ] || [ "$t" != "200" ] || [ "$p" != "200" ]; then
-            echo "::error title=Vercel access check failed::user=$u team=$t project=$p — VERCEL_TOKEN must be an access token whose scope is the team that owns the project (VERCEL_ORG_ID), and VERCEL_PROJECT_ID must be that project's id."
+          if [ "$p" != "200" ]; then
+            echo "::error title=Vercel access check failed::project=$p — VERCEL_TOKEN must be able to read the project VERCEL_PROJECT_ID under team VERCEL_ORG_ID."
             exit 1
           fi
+          jq -r '.link.type // "none"' /tmp/project.json > /tmp/link_type
+          jq -r '.link.repoId // empty' /tmp/project.json > /tmp/repo_id
+          echo "git link: $(cat /tmp/link_type) repoId=$(cat /tmp/repo_id) (the deploy builds from this repo at $GITHUB_SHA)"
+          [ "$(cat /tmp/link_type)" = "github" ] && [ -n "$(cat /tmp/repo_id)" ] || { echo "::error title=Project is not linked to GitHub::Vercel must have the GitHub integration linked to this project for git-source deployments."; exit 1; }
 
-      # `--scope` gives the CLI its team context. Without it a token run non-interactively
-      # looks the team up with no teamId and gets 403 team_unauthorized — the generic
-      # "Could not retrieve Project Settings" that failed the first deploys — even though
-      # the same token serves every REST call with ?teamId= (see set-preview-env.ts).
-      - name: Pull Vercel project settings
-        run: npx vercel@54.21.1 pull --yes --environment=production --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
-
-      - name: Build
-        run: npx vercel@54.21.1 build --prod --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
-
-      # Only reached if migrations succeeded.
-      - name: Promote to production
-        run: npx vercel@54.21.1 deploy --prebuilt --prod --scope "$VERCEL_ORG_ID" --token "$VERCEL_TOKEN"
+      # Only reached if migrations succeeded. Vercel clones THIS commit, builds it with the
+      # Production environment, and — because target=production — aliases the production
+      # domain to it when the build is READY. A failed build leaves production on the
+      # previous deployment (the schema is expand-only, so old code + new schema is fine).
+      - name: Promote to production (Vercel REST deployment of this commit)
+        run: |
+          repo_id=$(cat /tmp/repo_id)
+          body=$(jq -n --arg name ledgerlite --arg project "$VERCEL_PROJECT_ID" --arg sha "$GITHUB_SHA" --argjson repoId "$repo_id" \
+            '{name: $name, project: $project, target: "production", gitSource: {type: "github", repoId: $repoId, ref: "main", sha: $sha}}')
+          resp=$(curl -s -X POST -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" \
+            "https://api.vercel.com/v13/deployments?teamId=$VERCEL_ORG_ID&forceNew=1" -d "$body")
+          id=$(echo "$resp" | jq -r '.id // empty')
+          if [ -z "$id" ]; then echo "::error title=Deployment not created::$(echo "$resp" | jq -c '.error // .')"; exit 1; fi
+          echo "deployment $id → https://$(echo "$resp" | jq -r '.url') (inspect: $(echo "$resp" | jq -r '.inspectorUrl // "n/a"'))"
+          for i in $(seq 1 80); do
+            d=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v13/deployments/$id?teamId=$VERCEL_ORG_ID")
+            state=$(echo "$d" | jq -r '.readyState // .status // "?"')
+            echo "$(date -u +%H:%M:%S) $state"
+            case "$state" in
+              READY) echo "Production is now https://$(echo "$d" | jq -r '.url') — aliases: $(echo "$d" | jq -r '[.alias[]?] | join(", ")')"; exit 0 ;;
+              ERROR|CANCELED) echo "::error title=Deployment $state::$(echo "$d" | jq -r '.errorMessage // "see the inspector URL above"')"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "::error title=Deployment timed out::still $state after 20 minutes"; exit 1
