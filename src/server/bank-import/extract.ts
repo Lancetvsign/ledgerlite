@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { log } from '@/lib/logging';
 
 import { BankImportError } from './errors';
+import { normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
 
 import type { ExtractedTransaction } from '@/validation/bank-import';
@@ -142,7 +143,9 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
     }
     log.info('bank-import: model extraction succeeded', { stage: 'model', rows: output.transactions.length });
-    return output.transactions;
+    // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
+    // validator sees them; anything else passes through untouched and is rejected there.
+    return output.transactions.map(normalizeExtractedRow);
   };
 }
 
