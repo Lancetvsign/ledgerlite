@@ -18,7 +18,15 @@ export type BankImportErrorCode =
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */
   | 'CONTROL_ACCOUNT_NOT_ALLOWED'
   /** The chosen account does not exist in this company or is inactive. */
-  | 'ACCOUNT_INVALID';
+  | 'ACCOUNT_INVALID'
+  /** An apply_* decision names no invoice / bill (LL-077). */
+  | 'DOCUMENT_REQUIRED'
+  /** apply_invoice on money OUT, or apply_bill on money IN. */
+  | 'WRONG_DIRECTION'
+  /** The document is not an OPEN invoice / bill of this company (missing, closed, or foreign — one message). */
+  | 'DOCUMENT_NOT_OPEN'
+  /** The line's amount (cumulatively, within one submit) exceeds the document's open balance. */
+  | 'OVERAPPLIED';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';

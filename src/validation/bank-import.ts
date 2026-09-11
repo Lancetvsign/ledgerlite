@@ -37,9 +37,17 @@ export type StageImportInput = z.infer<typeof stageImportInput>;
 
 const decisionSchema = z.object({
   lineId: z.uuid(),
-  action: z.enum(['post', 'ignore']),
+  /**
+   * post = categorise to `accountId`; ignore = drop; apply_invoice / apply_bill (LL-077) =
+   * settle the open document `documentId` with the line's full amount through a real
+   * customer payment / bill payment. Direction is enforced by the service: money in may
+   * only apply to an invoice, money out only to a bill.
+   */
+  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill']),
   /** Required when action is 'post' (enforced by the service). */
   accountId: z.uuid().optional(),
+  /** The open invoice / bill id; required for apply_* (enforced by the service). */
+  documentId: z.uuid().optional(),
 });
 
 export const postImportLinesInput = z.object({

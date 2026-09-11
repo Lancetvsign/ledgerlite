@@ -7,7 +7,9 @@ import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { BankImportError, postImportLines, stageImport } from '@/server/bank-import';
+import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
+import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
 import { postImportLinesInput, stageImportInput } from '@/validation/bank-import';
 
@@ -73,27 +75,39 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const batchId = opt(formData.get('batchId')) ?? '';
 
-  // Parallel per-line arrays (the journal-form pattern), zipped by index.
+  // Parallel per-line arrays (the journal-form pattern), zipped by index. The review page
+  // emits every one of these for EVERY staged row (blank option when unused), so the
+  // arrays stay aligned.
   const lineIds = formData.getAll('lineId');
   const actions = formData.getAll('action');
   const accountIds = formData.getAll('accountId');
+  const documentIds = formData.getAll('documentId');
   const decisions = lineIds.map((lineId, i) => ({
     lineId: typeof lineId === 'string' ? lineId : '',
     action: typeof actions[i] === 'string' ? actions[i] : 'post',
     accountId: opt(accountIds[i] ?? null),
+    documentId: opt(documentIds[i] ?? null),
   }));
 
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
 
-  let result: { posted: number; ignored: number };
+  let result: { posted: number; ignored: number; applied: number };
   try {
     result = await postImportLines(userId, companyId, batchId, parsed.data);
   } catch (error) {
     if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
-    if (error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (
+      error instanceof BankImportError ||
+      error instanceof LedgerError ||
+      error instanceof PaymentError ||
+      error instanceof BillPaymentError
+    ) {
+      redirect(`/bank-import/${batchId}?error=${error.code}`);
+    }
     throw error;
   }
-  redirect(`/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}`);
+  redirect(
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}`,
+  );
 }

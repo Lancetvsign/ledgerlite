@@ -1,0 +1,5 @@
+ALTER TABLE "bank_import_lines" ADD COLUMN "payment_id" uuid;--> statement-breakpoint
+ALTER TABLE "bank_import_lines" ADD COLUMN "bill_payment_id" uuid;--> statement-breakpoint
+ALTER TABLE "bank_import_lines" ADD CONSTRAINT "bank_import_lines_payment_same_company_fk" FOREIGN KEY ("company_id","payment_id") REFERENCES "public"."payments"("company_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "bank_import_lines" ADD CONSTRAINT "bank_import_lines_bill_payment_same_company_fk" FOREIGN KEY ("company_id","bill_payment_id") REFERENCES "public"."bill_payments"("company_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "bank_import_lines" ADD CONSTRAINT "bank_import_lines_one_target" CHECK (num_nonnulls("bank_import_lines"."chosen_account_id", "bank_import_lines"."payment_id", "bank_import_lines"."bill_payment_id") <= 1);

@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   date,
   foreignKey,
   index,
@@ -13,8 +15,10 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { accounts } from './accounts';
+import { billPayments } from './bill-payments';
 import { companies, users } from './identity';
 import { journalEntries } from './ledger';
+import { payments } from './payments';
 
 /**
  * Bank-statement import — LL-076. A staging area between an uploaded statement and the
@@ -79,6 +83,13 @@ export const bankImportLines = pgTable(
     dedupHash: text('dedup_hash').notNull(),
     /** The posted entry, once this line is confirmed. Composite-FK'd, nullable. */
     journalEntryId: uuid('journal_entry_id'),
+    /**
+     * LL-077 (ADR-035): a line applied to an open invoice creates a real customer payment
+     * (this is it) instead of a categorised entry; `journalEntryId` is that payment's entry.
+     */
+    paymentId: uuid('payment_id'),
+    /** The A/P mirror: a line applied to an open bill creates a real bill payment. */
+    billPaymentId: uuid('bill_payment_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -104,6 +115,22 @@ export const bankImportLines = pgTable(
       foreignColumns: [journalEntries.companyId, journalEntries.id],
       name: 'bank_import_lines_entry_same_company_fk',
     }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.companyId, table.paymentId],
+      foreignColumns: [payments.companyId, payments.id],
+      name: 'bank_import_lines_payment_same_company_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.companyId, table.billPaymentId],
+      foreignColumns: [billPayments.companyId, billPayments.id],
+      name: 'bank_import_lines_bill_payment_same_company_fk',
+    }).onDelete('restrict'),
+    // A line settles in exactly one way: a category account, a customer payment, or a bill
+    // payment — never two of them (structural, not just service logic).
+    check(
+      'bank_import_lines_one_target',
+      sql`num_nonnulls(${table.chosenAccountId}, ${table.paymentId}, ${table.billPaymentId}) <= 1`,
+    ),
     unique('bank_import_lines_batch_line_number_unique').on(table.batchId, table.lineNumber),
     unique('bank_import_lines_company_id_id_unique').on(table.companyId, table.id),
     index('bank_import_lines_company_batch_idx').on(table.companyId, table.batchId),

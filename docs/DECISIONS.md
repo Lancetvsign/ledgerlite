@@ -1877,8 +1877,8 @@ and error-prone step; in a correctness-first ledger a misread amount must never 
   so the existing source-once index makes a line post **at most once**: money in → Dr bank / Cr category;
   money out → Cr bank / Dr category. **A/R, A/P, Opening Balance Equity and the bank account itself are
   never valid categories** — the control lock only guards `JOURNAL_ENTRY`, so this is enforced in the
-  service (as opening balances does); reconciling a line to an open invoice/bill (which must route through
-  the payment services) is a separate follow-up. All decisions in a submit are validated before any line
+  service (as opening balances does); reconciling a line to an open invoice/bill routes through the
+  payment services — **ADR-035** (LL-077). All decisions in a submit are validated before any line
   posts. `journal.post` (LEDGER_WRITERS) gates every operation.
 - **LL-076a** ships this pipeline with the production extractor **not configured** (the upload surface says
   so honestly) plus an env-gated canned extractor (`BANK_IMPORT_TEST_EXTRACTOR=1`, e2e/dev only) so the loop
@@ -1916,3 +1916,56 @@ Two dependencies added: `ai`, `unpdf`.
 
 Reconciliation to open invoices/bills, scanned-PDF (vision/OCR) support, a persisted rules table, CSV/OFX
 intake, or auto-posting of high-confidence lines is wanted.
+
+## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
+
+**Status** Accepted · **Added by** LL-077 · **Decided by** product owner
+
+### Context
+
+ADR-034 lets a reviewer categorise each imported bank line to an account. For a customer's deposit or a
+vendor's payment that is the wrong answer: categorising the deposit to *Sales Revenue* double-counts
+revenue already recognised when the invoice was finalised, and leaves the invoice OPEN and A/R
+overstated (the A/P mirror for bills). The line has to **settle the document**, and A/R / A/P may only
+move through their documents (ADR-016/018/023) — the control-account lock and the aging⇔control release
+gates (GL-T018/T025) depend on it.
+
+### Decision
+
+- A staged line gains two more decisions: **`apply_invoice`** (money in only) and **`apply_bill`** (money
+  out only), each naming exactly **one** open document. The **whole line amount** is applied; a partial
+  payment of the document is fine (it stays OPEN), over-application is rejected **up front, cumulatively
+  across the submit** (two lines aimed at one document fail before anything posts) and again under lock.
+- An applied line creates a **real `CUSTOMER_PAYMENT` / `BILL_PAYMENT` document** — never a `BANK_IMPORT`
+  entry touching A/R or A/P. To make that **atomic with the line**, the payment services expose
+  transaction-aware cores, `receivePaymentCore(tx, …)` / `payBillCore(tx, …)` (the `postEntryCore` pattern:
+  the public functions keep authorization, dedup, period resolution and idempotency-key handling and wrap
+  the core in their own transaction; behaviour unchanged). Bank-import locks the line `FOR UPDATE`, bails
+  if it is no longer STAGED, calls the core, and flips the line to POSTED with `payment_id` /
+  `bill_payment_id` and the payment's `journal_entry_id` in the same transaction — a line can never be
+  applied twice or left half-done. Lock order is always line → document; nothing else locks bank lines.
+- Payment fields are derived from the line (date = txn date, deposit/cash account = the batch's bank
+  account, reference = the statement description, memo = the line number, method "Bank import"); the
+  customer / vendor is the document's. No idempotency key: the line lock is the post-once mechanism.
+- **Schema (0032, expand-only):** `bank_import_lines.payment_id` and `bill_payment_id`, composite
+  same-company FKs, and `CHECK num_nonnulls(chosen_account_id, payment_id, bill_payment_id) <= 1` — a line
+  settles in exactly one way, structurally.
+- **Suggestion:** when exactly one open document of the right kind has an open balance equal to the line
+  amount, the review screen preselects it and the apply action. The reviewer still confirms every line.
+- **Authorization:** `journal.post` remains the gate for the whole import flow; an apply decision also
+  requires `payment.create` / `bill_payment.create` (today implied by `journal.post`'s roles; checked
+  explicitly). No new capabilities.
+- **Undo:** void the payment / bill payment (existing flows). The line stays POSTED and keeps its link (FK
+  restrict); the document reopens through the normal void path.
+
+### Consequences
+
+- No new A/R or A/P reduction source: the open-balance derivations, the aging⇔control reconciliation and
+  the void guards cover applied lines with no change. `BANK_IMPORT` entries still never touch A/R / A/P.
+- The payment services' public API is unchanged; their integration suites are untouched and still gate.
+- History-based category suggestions ignore applied lines (`chosen_account_id` is null for them).
+
+### Revisit if
+
+Splitting one line across several documents, unapplied customer credit for an overpayment, or matching
+by reference/description rather than amount is wanted.
