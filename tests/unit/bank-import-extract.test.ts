@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BankImportError } from '@/server/bank-import/errors';
-import { cannedExtractor, createAiExtractor, isExtractionConfigured, notConfiguredExtractor, resolveExtractor } from '@/server/bank-import/extract';
+import { cannedExtractor, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor } from '@/server/bank-import/extract';
 import { extractPdfText } from '@/server/bank-import/pdf-text';
 
 const usage = {
@@ -113,23 +113,40 @@ describe('resolveExtractor / isExtractionConfigured', () => {
 
   it('is not configured with no credential and no test flag', () => {
     vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
     vi.stubEnv('AI_GATEWAY_API_KEY', '');
     vi.stubEnv('VERCEL_OIDC_TOKEN', '');
     vi.stubEnv('VERCEL', '');
+    expect(describeExtractionRoute()).toBe('none');
     expect(isExtractionConfigured()).toBe(false);
     expect(resolveExtractor()).toBe(notConfiguredExtractor);
   });
 
-  it('uses the canned extractor when the test flag is set, even with a credential', () => {
-    vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '1');
+  it('a direct Anthropic key wins over the gateway (bypasses gateway tier rules)', () => {
+    vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-synthetic-not-a-real-key');
     vi.stubEnv('AI_GATEWAY_API_KEY', 'synthetic-not-a-real-key');
+    vi.stubEnv('VERCEL', '1');
+    expect(describeExtractionRoute()).toBe('anthropic');
+    expect(isExtractionConfigured()).toBe(true);
+    expect(resolveExtractor()).not.toBe(cannedExtractor);
+    expect(resolveExtractor()).not.toBe(notConfiguredExtractor);
+  });
+
+  it('uses the canned extractor when the test flag is set, even with credentials', () => {
+    vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '1');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-synthetic-not-a-real-key');
+    vi.stubEnv('AI_GATEWAY_API_KEY', 'synthetic-not-a-real-key');
+    expect(describeExtractionRoute()).toBe('test');
     expect(isExtractionConfigured()).toBe(true);
     expect(resolveExtractor()).toBe(cannedExtractor);
   });
 
   it('uses the AI extractor with a gateway key or on Vercel (OIDC)', () => {
     vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
     vi.stubEnv('AI_GATEWAY_API_KEY', 'synthetic-not-a-real-key');
+    expect(describeExtractionRoute()).toBe('gateway');
     expect(isExtractionConfigured()).toBe(true);
     expect(resolveExtractor()).not.toBe(cannedExtractor);
     expect(resolveExtractor()).not.toBe(notConfiguredExtractor);

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { APICallError, generateText, Output, type LanguageModel } from 'ai';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { GatewayError } from '@ai-sdk/gateway';
 import { z } from 'zod';
 
@@ -111,8 +112,7 @@ export interface AiExtractorOptions {
 
 export function createAiExtractor(options: AiExtractorOptions = {}): TransactionExtractor {
   const readText = options.readText ?? extractPdfText;
-  const configured = process.env.BANK_IMPORT_MODEL?.trim();
-  const model: LanguageModel = options.model ?? (configured !== undefined && configured !== '' ? configured : DEFAULT_BANK_IMPORT_MODEL);
+  const model: LanguageModel = options.model ?? resolveModel();
 
   return async ({ bytes }) => {
     const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
@@ -143,6 +143,7 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       const configProblem = status !== undefined && [401, 402, 403, 404, 429].includes(status);
       log.warn('bank-import: model extraction failed', {
         stage: 'model',
+        route: describeExtractionRoute(),
         error: error instanceof Error ? error.name : typeof error,
         statusCode: status,
         ...(gateway ? { gatewayType: error.type } : {}),
@@ -151,7 +152,7 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       });
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
     }
-    log.info('bank-import: model extraction succeeded', { stage: 'model', rows: output.transactions.length });
+    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length });
     // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
     // validator sees them; anything else passes through untouched and is rejected there.
     return output.transactions.map(normalizeExtractedRow);
@@ -166,26 +167,73 @@ function testExtractorEnabled(): boolean {
   return process.env.BANK_IMPORT_TEST_EXTRACTOR === '1';
 }
 
+function nonEmpty(v: string | undefined): string | undefined {
+  const t = v?.trim();
+  return t === undefined || t === '' ? undefined : t;
+}
+
+/** A direct Anthropic API key bypasses the gateway entirely (billed on the Anthropic account). */
+function anthropicKey(): string | undefined {
+  return nonEmpty(process.env.ANTHROPIC_API_KEY);
+}
+
 /**
  * The gateway authenticates with `AI_GATEWAY_API_KEY` (local / non-Vercel) or a Vercel
  * OIDC token (present automatically on Vercel deployments).
  */
 function gatewayCredentialPresent(): boolean {
-  const key = process.env.AI_GATEWAY_API_KEY;
-  if (key !== undefined && key !== '') return true;
-  const oidc = process.env.VERCEL_OIDC_TOKEN;
-  if (oidc !== undefined && oidc !== '') return true;
+  if (nonEmpty(process.env.AI_GATEWAY_API_KEY) !== undefined) return true;
+  if (nonEmpty(process.env.VERCEL_OIDC_TOKEN) !== undefined) return true;
   return process.env.VERCEL === '1';
+}
+
+export type ExtractionRoute = 'test' | 'anthropic' | 'gateway' | 'none';
+
+/**
+ * Which way statement extraction will go in this environment, in priority order:
+ *   test    — BANK_IMPORT_TEST_EXTRACTOR=1 (canned statement; e2e/dev only)
+ *   anthropic — ANTHROPIC_API_KEY set: the model is called directly (no gateway, no
+ *               gateway tier rules; usage billed on that Anthropic account)
+ *   gateway — a Vercel AI Gateway credential (API key or the deployment's OIDC token)
+ *   none    — nothing configured; the upload page says so
+ */
+export function describeExtractionRoute(): ExtractionRoute {
+  if (testExtractorEnabled()) return 'test';
+  if (anthropicKey() !== undefined) return 'anthropic';
+  if (gatewayCredentialPresent()) return 'gateway';
+  return 'none';
+}
+
+/**
+ * The model for this environment. `BANK_IMPORT_MODEL` is a gateway-style `provider/model`
+ * id; on the direct-Anthropic route only Anthropic models make sense, so a non-Anthropic
+ * override falls back to the default and says so.
+ */
+function resolveModel(): LanguageModel {
+  const configured = nonEmpty(process.env.BANK_IMPORT_MODEL) ?? DEFAULT_BANK_IMPORT_MODEL;
+  const key = anthropicKey();
+  if (key === undefined) return configured; // a plain string routes through the gateway
+  const [provider, ...rest] = configured.split('/');
+  const modelId = rest.length === 0 ? configured : rest.join('/');
+  if (rest.length > 0 && provider !== 'anthropic') {
+    log.warn('bank-import: BANK_IMPORT_MODEL is not an Anthropic model; using the default on the direct route', {
+      configured,
+      using: DEFAULT_BANK_IMPORT_MODEL,
+    });
+    return createAnthropic({ apiKey: key })(DEFAULT_BANK_IMPORT_MODEL.replace(/^anthropic\//, ''));
+  }
+  return createAnthropic({ apiKey: key })(modelId);
 }
 
 /** Whether an extractor is available (drives the upload page's "not configured" state). */
 export function isExtractionConfigured(): boolean {
-  return testExtractorEnabled() || gatewayCredentialPresent();
+  return describeExtractionRoute() !== 'none';
 }
 
 /** The extractor for this environment. */
 export function resolveExtractor(): TransactionExtractor {
-  if (testExtractorEnabled()) return cannedExtractor;
-  if (gatewayCredentialPresent()) return createAiExtractor();
-  return notConfiguredExtractor;
+  const route = describeExtractionRoute();
+  if (route === 'test') return cannedExtractor;
+  if (route === 'none') return notConfiguredExtractor;
+  return createAiExtractor();
 }
