@@ -207,6 +207,8 @@ export const journalLines = pgTable(
     unique('journal_lines_entry_line_number_unique').on(table.journalEntryId, table.lineNumber),
     // Standing tenancy constraint (future composite FKs into lines).
     unique('journal_lines_company_id_id_unique').on(table.companyId, table.id),
+    // LL-078: lets bank_reconciliation_lines pin a cleared line to its account structurally.
+    unique('journal_lines_company_id_id_account_unique').on(table.companyId, table.id, table.accountId),
     // Reporting index for trial balance / GL by account.
     index('journal_lines_company_account_idx').on(table.companyId, table.accountId),
   ],

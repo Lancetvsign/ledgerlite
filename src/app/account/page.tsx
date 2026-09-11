@@ -99,6 +99,11 @@ export default async function AccountPage() {
               Bank Import →
             </Link>
           )}
+          {roleHasCapability(active.role, 'reconciliation.view') && (
+            <Link href="/reconciliation" data-testid="reconciliation-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
+              Bank Reconciliation →
+            </Link>
+          )}
         </nav>
       )}
       <SignOutButton />

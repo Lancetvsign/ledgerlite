@@ -232,6 +232,13 @@
       "when": 1789088032169,
       "tag": "0032_bank_import_apply",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789160768951,
+      "tag": "0033_bank_reconciliation",
+      "breakpoints": true
     }
   ]
 }

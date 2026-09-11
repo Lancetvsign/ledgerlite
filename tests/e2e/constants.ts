@@ -66,3 +66,11 @@ export const BANK_IMPORT_USER = {
   password: 'synthetic-password-1',
   name: 'Bank Import Tester',
 };
+
+/** LL-078 bank-reconciliation specs — its own session, isolated from the others. */
+export const RECONCILIATION_STORAGE = 'tests/e2e/.auth/reconciliation.json';
+export const RECONCILIATION_USER = {
+  email: 'e2e-reconciliation@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Reconciliation Tester',
+};
