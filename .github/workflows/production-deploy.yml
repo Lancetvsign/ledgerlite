@@ -115,6 +115,20 @@ jobs:
       # `vercel build` needs the project's settings and Production env locally; CI has no
       # `.vercel/` link file, so pull them (the org/project come from VERCEL_ORG_ID /
       # VERCEL_PROJECT_ID). Written under .vercel/, which is gitignored and never committed.
+      # Prove the token can act for the team and project BEFORE the CLI does, and say
+      # exactly which of the three fails. Prints HTTP status codes and the account/team
+      # slugs only — never the token, never env var values.
+      - name: Verify Vercel access
+        run: |
+          api() { curl -s -o "$2" -w "%{http_code}" -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com$1"; }
+          u=$(api "/v2/user" /tmp/user.json);            echo "token → /v2/user: $u (account: $(jq -r '.user.username // "?"' /tmp/user.json))"
+          t=$(api "/v2/teams/$VERCEL_ORG_ID" /tmp/team.json); echo "token → /v2/teams/<VERCEL_ORG_ID>: $t (team: $(jq -r '.slug // .error.code // "?"' /tmp/team.json))"
+          p=$(api "/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" /tmp/project.json); echo "token → /v9/projects/<VERCEL_PROJECT_ID>?teamId=<VERCEL_ORG_ID>: $p (project: $(jq -r '.name // .error.code // "?"' /tmp/project.json))"
+          if [ "$u" != "200" ] || [ "$t" != "200" ] || [ "$p" != "200" ]; then
+            echo "::error title=Vercel access check failed::user=$u team=$t project=$p — VERCEL_TOKEN must be an access token whose scope is the team that owns the project (VERCEL_ORG_ID), and VERCEL_PROJECT_ID must be that project's id."
+            exit 1
+          fi
+
       - name: Pull Vercel project settings
         run: npx vercel@54.21.1 pull --yes --environment=production --token "$VERCEL_TOKEN"
 
