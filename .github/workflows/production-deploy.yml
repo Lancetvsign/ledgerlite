@@ -112,6 +112,12 @@ jobs:
       - name: Apply migrations to production
         run: npm run db:migrate
 
+      # `vercel build` needs the project's settings and Production env locally; CI has no
+      # `.vercel/` link file, so pull them (the org/project come from VERCEL_ORG_ID /
+      # VERCEL_PROJECT_ID). Written under .vercel/, which is gitignored and never committed.
+      - name: Pull Vercel project settings
+        run: npx vercel@54.21.1 pull --yes --environment=production --token "$VERCEL_TOKEN"
+
       - name: Build
         run: npx vercel@54.21.1 build --prod --token "$VERCEL_TOKEN"
 
