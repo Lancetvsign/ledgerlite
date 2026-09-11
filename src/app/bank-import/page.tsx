@@ -10,6 +10,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
 import { uploadStatementAction } from './actions';
+import { UploadSubmitButton } from './upload-submit-button';
 
 /**
  * Bank-statement import — upload (LL-076). LEDGER_WRITERS (journal.post). Pick the bank
@@ -81,9 +82,7 @@ export default async function BankImportPage({
             <span>Statement PDF</span>
             <input type="file" name="file" accept="application/pdf,.pdf" required data-testid="upload-file" className="text-sm" />
           </label>
-          <button type="submit" data-testid="upload-submit" className="self-start rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
-            Upload &amp; extract
-          </button>
+          <UploadSubmitButton />
         </form>
       )}
 

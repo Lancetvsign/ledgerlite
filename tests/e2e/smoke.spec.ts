@@ -5,7 +5,7 @@ test.describe('application shell', () => {
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: 'LedgerLite' })).toBeVisible();
-    await expect(page.getByText('Development Environment')).toBeVisible();
+    await expect(page.getByTestId('landing-sign-in')).toHaveAttribute('href', '/sign-in');
   });
 
   test('reports no console errors on load', async ({ page }) => {
@@ -21,9 +21,8 @@ test.describe('application shell', () => {
     expect(errors).toEqual([]);
   });
 
-  test('exposes no accounting functionality yet', async ({ page }) => {
-    // Sprint 0 guardrail: the shell must stay a shell. If this starts failing,
-    // a feature has been built ahead of the ledger it depends on.
+  test('the public landing exposes no accounting data', async ({ page }) => {
+    // Signed out, the root page is a door, not a dashboard: nothing about the books leaks.
     await page.goto('/');
     const body = (await page.textContent('body')) ?? '';
     for (const term of ['Invoice', 'Journal', 'Chart of Accounts', 'Balance']) {
