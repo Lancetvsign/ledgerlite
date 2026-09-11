@@ -108,13 +108,16 @@ describe('startReconciliation', () => {
     expect((await listReconciliations(c.userId, c.companyId)).map((r) => r.id)).toEqual([rec.id]);
   });
 
-  it('rejects a non-cash account, a second in-progress, a duplicate date, and a date not after the last completed', async () => {
+  it('rejects a non-cash account, a second in-progress, and a date not after the last completed', async () => {
     const c = await setup();
     expect((await errOf(start(c, '0.00', '2026-06-30', c.salesId))).code).toBe('NOT_A_BANK_ACCOUNT');
     const first = await start(c, '0.00', '2026-06-30');
     expect((await errOf(start(c, '0.00', '2026-07-31'))).code).toBe('ALREADY_IN_PROGRESS');
     await completeReconciliation(c.userId, c.companyId, first.id); // nothing cleared, statement 0 → balanced
-    expect((await errOf(start(c, '0.00', '2026-06-30'))).code).toBe('DUPLICATE_STATEMENT_DATE');
+    // The same date as the last completed statement, or an earlier one, is refused by the
+    // monotonic rule before the (account, statement_date) unique ever gets a say — that
+    // unique is the structural backstop, not a reachable path from here.
+    expect((await errOf(start(c, '0.00', '2026-06-30'))).code).toBe('STATEMENT_DATE_NOT_AFTER_LAST');
     expect((await errOf(start(c, '0.00', '2026-05-31'))).code).toBe('STATEMENT_DATE_NOT_AFTER_LAST');
     await expect(start(c, '0.00', '2026-07-31')).resolves.toMatchObject({ status: 'IN_PROGRESS' });
   });
