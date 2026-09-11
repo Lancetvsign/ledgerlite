@@ -122,35 +122,38 @@ deploy: nothing is promoted, so production keeps running exactly what it already
 Scope the Neon API key to this project if the option is offered: it can create and delete
 branches, and a key that cannot reach your other Neon projects is a smaller blast radius.
 
-## Production deploy status — deferred (LL-056)
+## Production deploy status — LIVE (2026-09-11)
 
-**As of LL-056, production is intentionally not stood up.** No hosted production environment is
-provisioned, the production deploy secrets are not set, and so the deploy job **skips** on every
-push to `main` (it no longer hard-fails). This is a deliberate, documented deferral, not an
-outage: the app is developed and fully tested (CI is green on `main`) but not yet publicly
-deployed.
+Production is **https://ledgerlite-omega.vercel.app**, first promoted on 2026-09-11 from commit
+`0a2d2bb`. Every push to `main` now runs `production-deploy.yml`: migrate (advisory lock, direct
+endpoint) → verify Vercel access → REST git-source deployment of that commit → promote on READY.
+Nothing promotes if a migration fails.
 
-**To go live, provision the infra and add the secrets — in this order:**
+**What go-live taught us (each is now handled in the workflow or docs):**
 
-1. **Neon** — create (or confirm) the **production branch**; copy its **pooled** and **direct
-   (unpooled)** connection strings.
-2. **Vercel** — confirm the project is linked; read `orgId` / `projectId` from
-   `.vercel/project.json`; create a **Vercel token** (Account → Settings → Tokens). Keep
-   `git.deploymentEnabled.main = false` in `vercel.json` so this workflow stays the only gate.
-3. **Auth (Vercel Production scope)** — set `BETTER_AUTH_SECRET` (`openssl rand -base64 32`,
-   distinct from Preview) and `BETTER_AUTH_URL` (the production domain).
-4. **GitHub Actions secrets** (Settings → Secrets and variables → Actions) — add
-   `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `PRODUCTION_DATABASE_URL` (pooled),
-   `PRODUCTION_DATABASE_URL_UNPOOLED` (direct). `NEON_API_KEY` / `NEON_PROJECT_ID` already exist.
-5. **Manual gate (optional)** — the deploy job targets the `production` GitHub *environment*; add
-   required reviewers there to approve each promotion.
-6. **Trigger** — push to `main` or run the workflow via `workflow_dispatch`. Migrations apply to
-   the production branch under the advisory lock on the **direct** endpoint, and Vercel promotes
-   **only if migrations succeed** (expand → migrate → contract).
+1. **The credential guard checked the wrong names** — it looked for `PRODUCTION_DATABASE_URL_UNPOOLED`
+   in the job shell, where the secret is mapped to `DATABASE_URL_UNPOOLED` (#70).
+2. **The Vercel CLI cannot deploy with a team-scoped token.** `vercel pull/build/deploy` insist on
+   `GET /v2/teams/<id>`, which a team-scoped access token answers with 403 `team_unauthorized`
+   (and `/v2/user` with 404), while every project endpoint works with `?teamId=`. Promotion is
+   therefore a **REST git-source deployment** (`POST /v13/deployments`, #75); the `Verify Vercel
+   access` step prints the three status codes so this is never guessed again (#74).
+3. **Form dates were UTC's day, not the company's** — a bill entered at 8pm Chicago posted tomorrow
+   and dropped out of "as of today" reports; e2e went red 00:00–05:00 UTC. Fixed with
+   `companyToday()` (#73).
+4. **AI Gateway's free tier refuses the extraction model** (`403 — Free tier users do not have access
+   to this model`; the $5/month free credits are not "purchased credits"). The extractor logs the
+   gateway's own reason (#76/#77) and can bypass the gateway entirely with `ANTHROPIC_API_KEY`
+   (#78) — the route in use in production.
+5. `BETTER_AUTH_SECRET` must be ≥ 32 characters (Better Auth warns on every request otherwise).
 
-These are operational steps performed by a human in the Neon / Vercel / GitHub UIs; secrets are
-never committed to source (§9), and migrations are never run against production by hand — the
-workflow does it.
+**To stand production up again from scratch** (or for a second environment): Neon production branch
+(pooled + direct URLs) → GitHub secrets `PRODUCTION_DATABASE_URL`, `PRODUCTION_DATABASE_URL_UNPOOLED`,
+`VERCEL_TOKEN` (team-scoped is fine), `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` → Vercel Production env
+`BETTER_AUTH_SECRET` (`openssl rand -base64 32`), `BETTER_AUTH_URL`, `APP_ENV=production`,
+`ANTHROPIC_API_KEY` (or AI Gateway purchased credits) → push to `main` or `workflow_dispatch`. The
+`production` GitHub environment can carry required reviewers for a manual gate. Secrets are never
+committed (§9); migrations are never run against production by hand — the workflow does it.
 
 ## Environment variables by environment
 
@@ -198,16 +201,16 @@ Node is pinned to **24** in `.nvmrc`, `engines`, and the Vercel project settings
 
 ## Verified vs unverified
 
-Verified in LL-006:
+Verified in production (2026-09-11):
 
-- Vercel project is connected to `Lancetvsign/ledgerlite`; pushes create Preview deployments.
-- Production database credentials were **removed from Vercel's Preview scope** — confirmed
-  `production` retains `DATABASE_URL`, `preview` has zero database variables.
-- Vercel Node version is 24.x, matching `.nvmrc`.
-- All four workflow files parse as valid YAML.
+- Migrations 0000–0032 applied to the production branch by the workflow under the advisory lock.
+- REST git-source deployment builds the exact `main` commit with the Production environment and
+  aliases `ledgerlite-omega.vercel.app`; sign-up, company creation and the dashboard work.
+- Preview database provisioning end to end and the branch-scoped Preview variables (every PR).
+- Vercel Node version is 24.x, matching `.nvmrc`; all workflow files parse as valid YAML.
 
-**Not yet verified** — these need `VERCEL_TOKEN` and a real run:
+**Not yet exercised:**
 
-- Preview database provisioning end to end.
-- The `--schema-only` emptiness assertion firing against a real branch.
-- Production gated deploy, including that a failed migration blocks promotion.
+- A failed production migration blocking promotion (only the success path has run).
+- A real statement extraction end to end — the pipeline reaches the model; first successful run
+  pending the direct-Anthropic route (#78).

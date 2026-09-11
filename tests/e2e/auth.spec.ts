@@ -22,6 +22,11 @@ test.describe('authenticated', () => {
     await expect(page.getByTestId('account-email')).toHaveText(EMAIL);
   });
 
+  test('the root sends a signed-in user to their account', async ({ page }) => {
+    await page.goto('/');
+    await expect(page).toHaveURL(/\/account/);
+  });
+
 });
 
 test.describe('sign-in form', () => {
