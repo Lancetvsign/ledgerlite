@@ -2,6 +2,8 @@ import 'server-only';
 
 import { extractText } from 'unpdf';
 
+import { log } from '@/lib/logging';
+
 import { BankImportError } from './errors';
 
 /**
@@ -29,18 +31,22 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
     // A fresh copy: pdf.js transfers/neuters the buffer it is handed.
     const result = await extractText(new Uint8Array(bytes), { mergePages: true });
     text = result.text;
-  } catch {
-    // Deliberately no detail from the parser — it can echo file contents (§9).
+  } catch (error) {
+    // Deliberately no detail from the parser — it can echo file contents (§9). The error
+    // class alone tells an operator "the PDF did not parse" apart from a model failure.
+    log.warn('bank-import: pdf text extraction failed', { stage: 'pdf', error: error instanceof Error ? error.name : typeof error, bytes: bytes.byteLength });
     throw new BankImportError('EXTRACTION_FAILED', 'The file could not be read as a PDF.');
   }
 
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.replace(/\s/g, '').length < MIN_TEXT_CHARS) {
+    log.warn('bank-import: pdf has no usable text layer', { stage: 'pdf', chars: compact.length, bytes: bytes.byteLength });
     throw new BankImportError(
       'SCANNED_PDF',
       'This PDF has no text layer (it looks like a scan or an image). A text-based statement export from your bank is needed.',
     );
   }
+  log.info('bank-import: pdf text extracted', { stage: 'pdf', chars: compact.length, bytes: bytes.byteLength });
   if (compact.length > MAX_TEXT_CHARS) {
     throw new BankImportError('EXTRACTION_FAILED', 'This statement is too long to import in one file. Export a shorter period and try again.');
   }
