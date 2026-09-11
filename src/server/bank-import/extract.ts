@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { APICallError, generateText, Output, type LanguageModel } from 'ai';
+import { GatewayError } from '@ai-sdk/gateway';
 import { z } from 'zod';
 
 import { log } from '@/lib/logging';
@@ -123,7 +124,8 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
         system: SYSTEM_PROMPT,
         prompt: `Statement text:\n\n${text}`,
         output: Output.object({ schema: modelOutputSchema }),
-        temperature: 0,
+        // No explicit temperature: some models reject one in structured-output mode, and
+        // the gateway surfaces that as an opaque internal error.
       });
       output = result.output;
     } catch (error) {
@@ -132,13 +134,20 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       // stage failed: log the error class and HTTP status only. A provider message is
       // included solely for auth/billing/config statuses, where it names the gateway
       // problem (e.g. "AI Gateway not enabled") and cannot contain statement text.
-      const status = APICallError.isInstance(error) ? error.statusCode : undefined;
+      // Gateway errors (auth, model-not-found, provider rejections, gateway 5xx) carry the
+      // gateway's status and its own message, which names the parameter/model/credential
+      // problem and never contains statement text — always log those. For other API
+      // errors log the message only on auth/billing/config statuses.
+      const gateway = GatewayError.isInstance(error);
+      const status = gateway ? error.statusCode : APICallError.isInstance(error) ? error.statusCode : undefined;
       const configProblem = status !== undefined && [401, 402, 403, 404, 429].includes(status);
       log.warn('bank-import: model extraction failed', {
         stage: 'model',
         error: error instanceof Error ? error.name : typeof error,
         statusCode: status,
-        ...(configProblem && error instanceof Error ? { providerMessage: error.message.slice(0, 300) } : {}),
+        ...(gateway ? { gatewayType: error.type } : {}),
+        ...((gateway || configProblem) && error instanceof Error ? { providerMessage: error.message.slice(0, 400) } : {}),
+        ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.name } : {}),
       });
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
     }
