@@ -9,6 +9,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
 import { toMoney } from '@/lib/decimal';
+import { log } from '@/lib/logging';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
@@ -162,10 +163,14 @@ export async function stageImport(
   const raw = await extractor({ bytes: input.fileBytes });
   const parsed = extractedTransactionsSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new BankImportError('EXTRACTION_FAILED', `The extracted statement had a malformed row: ${parsed.error.issues[0]?.message ?? 'invalid'}.`);
+    // Field path + rule only — never the offending value (it is statement content, §9).
+    const first = parsed.error.issues[0];
+    log.warn('bank-import: extracted rows failed validation', { stage: 'validate', rows: Array.isArray(raw) ? raw.length : -1, path: first?.path.join('.'), code: first?.code });
+    throw new BankImportError('EXTRACTION_FAILED', `The extracted statement had a malformed row: ${first?.message ?? 'invalid'}.`);
   }
   const txns = parsed.data;
   if (txns.length === 0) {
+    log.warn('bank-import: extractor returned no transactions', { stage: 'validate', rows: 0 });
     throw new BankImportError('EXTRACTION_FAILED', 'No transactions were found in the statement.');
   }
 

@@ -1,7 +1,9 @@
 import 'server-only';
 
-import { generateText, Output, type LanguageModel } from 'ai';
+import { APICallError, generateText, Output, type LanguageModel } from 'ai';
 import { z } from 'zod';
+
+import { log } from '@/lib/logging';
 
 import { BankImportError } from './errors';
 import { extractPdfText } from './pdf-text';
@@ -123,11 +125,23 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
         temperature: 0,
       });
       output = result.output;
-    } catch {
+    } catch (error) {
       // No model output, provider message or file text in the error (§9) — the reviewer
-      // only needs to know the extraction did not succeed.
+      // only needs to know the extraction did not succeed. Operators need to know WHICH
+      // stage failed: log the error class and HTTP status only. A provider message is
+      // included solely for auth/billing/config statuses, where it names the gateway
+      // problem (e.g. "AI Gateway not enabled") and cannot contain statement text.
+      const status = APICallError.isInstance(error) ? error.statusCode : undefined;
+      const configProblem = status !== undefined && [401, 402, 403, 404, 429].includes(status);
+      log.warn('bank-import: model extraction failed', {
+        stage: 'model',
+        error: error instanceof Error ? error.name : typeof error,
+        statusCode: status,
+        ...(configProblem && error instanceof Error ? { providerMessage: error.message.slice(0, 300) } : {}),
+      });
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
     }
+    log.info('bank-import: model extraction succeeded', { stage: 'model', rows: output.transactions.length });
     return output.transactions;
   };
 }
