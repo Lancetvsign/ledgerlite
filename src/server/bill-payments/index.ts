@@ -65,7 +65,6 @@ export async function payBill(
   if (new Set(billIds).size !== billIds.length) {
     throw new BillPaymentError('DUPLICATE_BILL_APPLICATION', 'A bill appears more than once in the applications.');
   }
-  const amount = computeBillPaymentAmount(input.applications);
 
   const period = await getAccountingPeriod(companyId, input.paymentDate);
   if (period.status !== 'OPEN') {
@@ -104,155 +103,7 @@ export async function payBill(
   }
 
   const runPayment = (): Promise<BillPaymentWithApplications> =>
-    getDbTx().transaction(async (tx) => {
-    const apAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_PAYABLE');
-    if (apAccountId === null) {
-      throw new BillPaymentError('AP_ACCOUNT_NOT_CONFIGURED', 'No Accounts Payable account is configured.');
-    }
-
-    // The paid vendor must exist in this company.
-    const ven = await tx
-      .select({ id: schema.vendors.id })
-      .from(schema.vendors)
-      .where(and(eq(schema.vendors.companyId, companyId), eq(schema.vendors.id, input.vendorId)))
-      .limit(1);
-    if (ven[0] === undefined) {
-      throw new BillPaymentError('VENDOR_NOT_FOUND', 'That vendor does not exist in this company.');
-    }
-
-    // The cash account must be in-company, ACTIVE, and an asset (money leaves there).
-    const cashRows = await tx
-      .select({
-        status: schema.accounts.status,
-        accountType: schema.accounts.accountType,
-        systemAccountType: schema.accounts.systemAccountType,
-      })
-      .from(schema.accounts)
-      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.cashAccountId)))
-      .limit(1);
-    const cash = cashRows[0];
-    if (cash === undefined) {
-      throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'The cash account does not exist in this company.');
-    }
-    if (cash.status !== 'ACTIVE') {
-      throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'The cash account is inactive.');
-    }
-    if (cash.accountType !== 'ASSET') {
-      throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment must pay from an asset account.');
-    }
-    // The cash account may not be a control account with a subsidiary ledger. Paying
-    // "from" A/P (a LIABILITY, already excluded by the ASSET check) would be
-    // self-canceling; crediting A/R (an ASSET, so it WOULD pass the ASSET check) would
-    // reduce the A/R control through an A/P document, breaking the A/R aging⇔control
-    // tie. Both are refused. The cash line (Cr) is client-supplied (AGENTS §6).
-    if (cash.systemAccountType === 'ACCOUNTS_RECEIVABLE' || cash.systemAccountType === 'ACCOUNTS_PAYABLE') {
-      throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment cannot pay from a control account (Accounts Receivable / Payable).');
-    }
-
-    // Lock and validate each applied bill; collect those this payment fully pays. Lock
-    // the bills in a deterministic (id-sorted) order so two concurrent payments touching
-    // the same bills in a different input order cannot deadlock (Gate 5). Applications
-    // are deduped by bill id above, so the sort is a total order.
-    const fullyPaid: string[] = [];
-    for (const app of [...input.applications].sort((a, b) => a.billId.localeCompare(b.billId))) {
-      const rows = await tx
-        .select()
-        .from(schema.bills)
-        .where(and(eq(schema.bills.companyId, companyId), eq(schema.bills.id, app.billId)))
-        .for('update')
-        .limit(1);
-      const bill = rows[0];
-      if (bill === undefined) {
-        throw new BillPaymentError('BILL_NOT_FOUND', 'An applied bill does not exist in this company.');
-      }
-      if (bill.vendorId !== input.vendorId) {
-        throw new BillPaymentError('BILL_WRONG_VENDOR', 'An applied bill belongs to a different vendor.');
-      }
-      if (bill.status !== 'OPEN') {
-        throw new BillPaymentError('BILL_NOT_OPEN', 'Only an open bill can receive a payment.');
-      }
-      const open = toMoney(bill.total).minus(await billReductionsTotal(tx, companyId, app.billId));
-      const applying = toMoney(app.amountApplied);
-      if (applying.greaterThan(open)) {
-        throw new BillPaymentError(
-          'OVERAPPLIED',
-          `Applying ${app.amountApplied} exceeds bill ${bill.id}'s open balance ${open.toFixed(4)}.`,
-        );
-      }
-      if (applying.equals(open)) {
-        fullyPaid.push(bill.id);
-      }
-    }
-
-    const paymentRows = await tx
-      .insert(schema.billPayments)
-      .values({
-        companyId,
-        vendorId: input.vendorId,
-        paymentDate: input.paymentDate,
-        amount,
-        cashAccountId: input.cashAccountId,
-        method: input.method,
-        reference: input.reference,
-        memo: input.memo,
-        status: 'POSTED',
-        createdBy: actorUserId,
-      })
-      .returning();
-    const payment = paymentRows[0];
-    if (payment === undefined) throw new Error('bill payment insert returned no row');
-
-    await tx.insert(schema.billPaymentApplications).values(
-      input.applications.map((a) => ({
-        billPaymentId: payment.id,
-        companyId,
-        billId: a.billId,
-        amountApplied: a.amountApplied,
-      })),
-    );
-
-    // Post: Dr A/P = amount (vendor-tagged) / Cr cash = amount.
-    const ledgerLines: PostJournalEntryInput['lines'] = [
-      { accountId: apAccountId, debit: amount, credit: '0', vendorId: input.vendorId },
-      { accountId: input.cashAccountId, debit: '0', credit: amount },
-    ];
-    const debits = sumMoney(ledgerLines.map((l) => l.debit));
-    const credits = sumMoney(ledgerLines.map((l) => l.credit));
-    if (!moneyEquals(debits, credits)) {
-      throw new Error(`bill payment ${payment.id} posting is unbalanced`);
-    }
-    const ledgerInput: PostJournalEntryInput = {
-      companyId,
-      actorUserId,
-      transactionDate: input.paymentDate,
-      postingDate: input.paymentDate,
-      description: input.reference !== undefined ? `Bill payment ${input.reference}` : 'Bill payment',
-      sourceType: 'BILL_PAYMENT',
-      sourceId: payment.id,
-      idempotencyKey,
-      lines: ledgerLines,
-    };
-    await postEntryCore(tx, ledgerInput, input.paymentDate, fingerprint);
-
-    if (fullyPaid.length > 0) {
-      await tx
-        .update(schema.bills)
-        .set({ status: 'PAID', updatedAt: sql`now()` })
-        .where(and(eq(schema.bills.companyId, companyId), inArray(schema.bills.id, fullyPaid), eq(schema.bills.status, 'OPEN')));
-    }
-
-    await recordAuditEvent({
-      tx,
-      companyId,
-      actorUserId,
-      action: 'BILL_PAYMENT_MADE',
-      entityType: 'bill_payment',
-      entityId: payment.id,
-      after: { amount, applications: input.applications.length, paidBills: fullyPaid.length },
-    });
-
-    return await loadBillPayment(tx, companyId, payment.id);
-  });
+    getDbTx().transaction(async (tx) => (await payBillCore(tx, actorUserId, companyId, input, fingerprint)).result);
 
   // No key → post directly. With a key, a retry that collides on the idempotency index
   // resolves to the ORIGINAL payment (fingerprint-verified) — a double-submit is a no-op.
@@ -267,6 +118,175 @@ export async function payBill(
     }
     throw error;
   }
+}
+
+/**
+ * MECHANICAL core of `payBill` — runs INSIDE the caller's transaction (the A/P mirror of
+ * `receivePaymentCore`). The caller authorizes, dedups, resolves the period and handles the
+ * idempotency key first. Used by bank-import (LL-077, ADR-035) to settle a bill atomically
+ * with the imported line. Returns the payment and the id of the entry it posted.
+ */
+export interface PayBillCoreResult {
+  readonly result: BillPaymentWithApplications;
+  /** The posted journal entry (sourceType BILL_PAYMENT). */
+  readonly journalEntryId: string;
+}
+
+export async function payBillCore(
+  tx: Tx,
+  actorUserId: string,
+  companyId: string,
+  input: PayBillInput,
+  fingerprint: string | undefined,
+): Promise<PayBillCoreResult> {
+  const amount = computeBillPaymentAmount(input.applications);
+  const apAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_PAYABLE');
+  if (apAccountId === null) {
+    throw new BillPaymentError('AP_ACCOUNT_NOT_CONFIGURED', 'No Accounts Payable account is configured.');
+  }
+
+  // The paid vendor must exist in this company.
+  const ven = await tx
+    .select({ id: schema.vendors.id })
+    .from(schema.vendors)
+    .where(and(eq(schema.vendors.companyId, companyId), eq(schema.vendors.id, input.vendorId)))
+    .limit(1);
+  if (ven[0] === undefined) {
+    throw new BillPaymentError('VENDOR_NOT_FOUND', 'That vendor does not exist in this company.');
+  }
+
+  // The cash account must be in-company, ACTIVE, and an asset (money leaves there).
+  const cashRows = await tx
+    .select({
+      status: schema.accounts.status,
+      accountType: schema.accounts.accountType,
+      systemAccountType: schema.accounts.systemAccountType,
+    })
+    .from(schema.accounts)
+    .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.cashAccountId)))
+    .limit(1);
+  const cash = cashRows[0];
+  if (cash === undefined) {
+    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'The cash account does not exist in this company.');
+  }
+  if (cash.status !== 'ACTIVE') {
+    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'The cash account is inactive.');
+  }
+  if (cash.accountType !== 'ASSET') {
+    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment must pay from an asset account.');
+  }
+  // The cash account may not be a control account with a subsidiary ledger. Paying
+  // "from" A/P (a LIABILITY, already excluded by the ASSET check) would be
+  // self-canceling; crediting A/R (an ASSET, so it WOULD pass the ASSET check) would
+  // reduce the A/R control through an A/P document, breaking the A/R aging⇔control
+  // tie. Both are refused. The cash line (Cr) is client-supplied (AGENTS §6).
+  if (cash.systemAccountType === 'ACCOUNTS_RECEIVABLE' || cash.systemAccountType === 'ACCOUNTS_PAYABLE') {
+    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment cannot pay from a control account (Accounts Receivable / Payable).');
+  }
+
+  // Lock and validate each applied bill; collect those this payment fully pays. Lock
+  // the bills in a deterministic (id-sorted) order so two concurrent payments touching
+  // the same bills in a different input order cannot deadlock (Gate 5). Applications
+  // are deduped by bill id above, so the sort is a total order.
+  const fullyPaid: string[] = [];
+  for (const app of [...input.applications].sort((a, b) => a.billId.localeCompare(b.billId))) {
+    const rows = await tx
+      .select()
+      .from(schema.bills)
+      .where(and(eq(schema.bills.companyId, companyId), eq(schema.bills.id, app.billId)))
+      .for('update')
+      .limit(1);
+    const bill = rows[0];
+    if (bill === undefined) {
+      throw new BillPaymentError('BILL_NOT_FOUND', 'An applied bill does not exist in this company.');
+    }
+    if (bill.vendorId !== input.vendorId) {
+      throw new BillPaymentError('BILL_WRONG_VENDOR', 'An applied bill belongs to a different vendor.');
+    }
+    if (bill.status !== 'OPEN') {
+      throw new BillPaymentError('BILL_NOT_OPEN', 'Only an open bill can receive a payment.');
+    }
+    const open = toMoney(bill.total).minus(await billReductionsTotal(tx, companyId, app.billId));
+    const applying = toMoney(app.amountApplied);
+    if (applying.greaterThan(open)) {
+      throw new BillPaymentError(
+        'OVERAPPLIED',
+        `Applying ${app.amountApplied} exceeds bill ${bill.id}'s open balance ${open.toFixed(4)}.`,
+      );
+    }
+    if (applying.equals(open)) {
+      fullyPaid.push(bill.id);
+    }
+  }
+
+  const paymentRows = await tx
+    .insert(schema.billPayments)
+    .values({
+      companyId,
+      vendorId: input.vendorId,
+      paymentDate: input.paymentDate,
+      amount,
+      cashAccountId: input.cashAccountId,
+      method: input.method,
+      reference: input.reference,
+      memo: input.memo,
+      status: 'POSTED',
+      createdBy: actorUserId,
+    })
+    .returning();
+  const payment = paymentRows[0];
+  if (payment === undefined) throw new Error('bill payment insert returned no row');
+
+  await tx.insert(schema.billPaymentApplications).values(
+    input.applications.map((a) => ({
+      billPaymentId: payment.id,
+      companyId,
+      billId: a.billId,
+      amountApplied: a.amountApplied,
+    })),
+  );
+
+  // Post: Dr A/P = amount (vendor-tagged) / Cr cash = amount.
+  const ledgerLines: PostJournalEntryInput['lines'] = [
+    { accountId: apAccountId, debit: amount, credit: '0', vendorId: input.vendorId },
+    { accountId: input.cashAccountId, debit: '0', credit: amount },
+  ];
+  const debits = sumMoney(ledgerLines.map((l) => l.debit));
+  const credits = sumMoney(ledgerLines.map((l) => l.credit));
+  if (!moneyEquals(debits, credits)) {
+    throw new Error(`bill payment ${payment.id} posting is unbalanced`);
+  }
+  const ledgerInput: PostJournalEntryInput = {
+    companyId,
+    actorUserId,
+    transactionDate: input.paymentDate,
+    postingDate: input.paymentDate,
+    description: input.reference !== undefined ? `Bill payment ${input.reference}` : 'Bill payment',
+    sourceType: 'BILL_PAYMENT',
+    sourceId: payment.id,
+    idempotencyKey: input.idempotencyKey,
+    lines: ledgerLines,
+  };
+  const posted = await postEntryCore(tx, ledgerInput, input.paymentDate, fingerprint);
+
+  if (fullyPaid.length > 0) {
+    await tx
+      .update(schema.bills)
+      .set({ status: 'PAID', updatedAt: sql`now()` })
+      .where(and(eq(schema.bills.companyId, companyId), inArray(schema.bills.id, fullyPaid), eq(schema.bills.status, 'OPEN')));
+  }
+
+  await recordAuditEvent({
+    tx,
+    companyId,
+    actorUserId,
+    action: 'BILL_PAYMENT_MADE',
+    entityType: 'bill_payment',
+    entityId: payment.id,
+    after: { amount, applications: input.applications.length, paidBills: fullyPaid.length },
+  });
+
+  return { result: await loadBillPayment(tx, companyId, payment.id), journalEntryId: posted.entry.id };
 }
 
 export async function voidBillPayment(

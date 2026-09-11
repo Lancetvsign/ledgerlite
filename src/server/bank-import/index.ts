@@ -2,6 +2,8 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import Decimal from 'decimal.js';
+
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
@@ -9,13 +11,16 @@ import { getDb, getDbTx, schema } from '@/db';
 import { toMoney } from '@/lib/decimal';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
+import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
 import { isIdempotencyViolation, LedgerError, postEntryCore } from '@/server/ledger';
+import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
 import { extractedTransactionsSchema } from '@/validation/bank-import';
 
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
 
+import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
 import type { PostJournalEntryInput } from '@/validation/journal';
 import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } from '@/validation/bank-import';
@@ -35,9 +40,15 @@ import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } fro
  *                   A/R, A/P, Opening Balance Equity and the bank account itself are never
  *                   valid categories (the control lock only guards JOURNAL_ENTRY, so this
  *                   exclusion is enforced HERE, as opening balances does).
+ *                   LL-077 (ADR-035): a line may instead be APPLIED to one open invoice
+ *                   (money in) or bill (money out). That creates a real customer payment /
+ *                   bill payment through the payment services' transaction-aware cores,
+ *                   inside the line's own transaction — so A/R and A/P move only via their
+ *                   documents and the aging⇔control reconciliation holds automatically.
  *
  * Nothing reaches the ledger un-reviewed: staging never posts, and posting requires an
- * explicit per-line decision. `journal.post` (LEDGER_WRITERS) gates every operation.
+ * explicit per-line decision. `journal.post` (LEDGER_WRITERS) gates every operation;
+ * applying additionally requires `payment.create` / `bill_payment.create`.
  */
 
 /** Accounts a bank-import line may never be categorised to. */
@@ -276,8 +287,44 @@ export async function listImportBatches(actorUserId: string, companyId: string):
 }
 
 export interface PostImportResult {
+  /** Lines that reached the ledger (categorised AND applied). */
   readonly posted: number;
   readonly ignored: number;
+  /** The subset of `posted` settled against an open invoice / bill (LL-077). */
+  readonly applied: number;
+}
+
+type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
+
+/** What one validated decision will do. Built for EVERY decision before ANY line is written. */
+type LinePlan =
+  | { readonly kind: 'post'; readonly line: BankImportLine; readonly accountId: string }
+  | { readonly kind: 'apply_invoice'; readonly line: BankImportLine; readonly invoice: OpenInvoice; readonly amount: string }
+  | { readonly kind: 'apply_bill'; readonly line: BankImportLine; readonly bill: OpenBill; readonly amount: string };
+
+/**
+ * Lock the line and report whether it is still STAGED. Concurrent submits of the same line
+ * serialise here; the loser sees POSTED/IGNORED and creates nothing. Lock order is always
+ * line → document (no other path locks a bank-import line), so no cycle is possible.
+ */
+async function lockStagedLine(tx: Tx, companyId: string, lineId: string): Promise<boolean> {
+  const rows = await tx
+    .select({ status: schema.bankImportLines.status })
+    .from(schema.bankImportLines)
+    .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, lineId)))
+    .for('update')
+    .limit(1);
+  return rows[0]?.status === 'STAGED';
+}
+
+/** The payment fields a bank line implies; the amount is the whole line, never input. */
+function paymentFieldsFor(line: BankImportLine): { reference: string | undefined; memo: string; method: string } {
+  const ref = line.description?.trim().slice(0, 100) ?? '';
+  return {
+    reference: ref === '' ? undefined : ref,
+    memo: `Bank import line ${String(line.lineNumber)}`,
+    method: 'Bank import',
+  };
 }
 
 export async function postImportLines(
@@ -287,6 +334,14 @@ export async function postImportLines(
   input: PostImportLinesInput,
 ): Promise<PostImportResult> {
   await requirePermission(actorUserId, companyId, 'journal.post');
+  // Applying a line creates a real payment document, so the document capabilities apply
+  // too (today every journal.post holder has them; checked explicitly regardless).
+  if (input.decisions.some((d) => d.action === 'apply_invoice')) {
+    await requirePermission(actorUserId, companyId, 'payment.create');
+  }
+  if (input.decisions.some((d) => d.action === 'apply_bill')) {
+    await requirePermission(actorUserId, companyId, 'bill_payment.create');
+  }
   const db = getDb();
 
   const batchRows = await db
@@ -306,11 +361,22 @@ export async function postImportLines(
   const pickable = await pickableAccounts(companyId, batch.bankAccountId);
   const allowedIds = new Set(pickable.map((a) => a.id));
 
-  // Validate EVERY decision before posting ANY, so a bad account or closed period on one
-  // line stops the whole submit up front rather than after some lines have posted.
-  const toPost: { line: BankImportLine; accountId: string }[] = [];
+  // Open documents are loaded only when some decision applies to one (company-scoped lists,
+  // so a foreign or closed document is simply absent — one "not open" answer, no leak).
+  let openInvoices: Map<string, OpenInvoice> | null = null;
+  let openBills: Map<string, OpenBill> | null = null;
+  const invoicesById = async (): Promise<Map<string, OpenInvoice>> =>
+    (openInvoices ??= new Map((await listOpenInvoices(actorUserId, companyId)).map((i) => [i.id, i])));
+  const billsById = async (): Promise<Map<string, OpenBill>> =>
+    (openBills ??= new Map((await listOpenBills(actorUserId, companyId)).map((b) => [b.id, b])));
+
+  // Validate EVERY decision before posting ANY, so a bad account, closed period or
+  // over-application on one line stops the whole submit up front rather than after some
+  // lines have posted.
+  const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
+  const appliedSoFar = new Map<string, Decimal>(); // documentId → Σ|amount| within THIS submit
   for (const d of input.decisions) {
     const line = byId.get(d.lineId);
     if (line === undefined) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
@@ -319,16 +385,58 @@ export async function postImportLines(
       toIgnore.push(line);
       continue;
     }
-    if (d.accountId === undefined) {
-      throw new BankImportError('ACCOUNT_REQUIRED', `Line ${String(line.lineNumber)} needs an account to post to.`);
+    const n = String(line.lineNumber);
+
+    let plan: LinePlan;
+    if (d.action === 'post') {
+      if (d.accountId === undefined) {
+        throw new BankImportError('ACCOUNT_REQUIRED', `Line ${n} needs an account to post to.`);
+      }
+      if (!allowedIds.has(d.accountId)) {
+        // Either not this company's active account, or an excluded one (A/R, A/P, OBE, the bank).
+        throw new BankImportError(
+          'CONTROL_ACCOUNT_NOT_ALLOWED',
+          `Line ${n}: choose an active account that is not Accounts Receivable, Accounts Payable, Opening Balance Equity, or the bank account itself.`,
+        );
+      }
+      plan = { kind: 'post', line, accountId: d.accountId };
+    } else {
+      // apply_invoice / apply_bill — the whole line settles ONE open document (ADR-035).
+      const amt = toMoney(line.amount);
+      if (d.documentId === undefined) {
+        throw new BankImportError('DOCUMENT_REQUIRED', `Line ${n} needs an open ${d.action === 'apply_invoice' ? 'invoice' : 'bill'} to apply to.`);
+      }
+      if (d.action === 'apply_invoice' ? !amt.isPositive() : !amt.isNegative()) {
+        throw new BankImportError(
+          'WRONG_DIRECTION',
+          `Line ${n}: money in can only be applied to an invoice, money out only to a bill.`,
+        );
+      }
+      const abs = amt.abs();
+      let openBalance: string;
+      if (d.action === 'apply_invoice') {
+        const invoice = (await invoicesById()).get(d.documentId);
+        if (invoice === undefined) throw new BankImportError('DOCUMENT_NOT_OPEN', `Line ${n}: that invoice is not open.`);
+        openBalance = invoice.openBalance;
+        plan = { kind: 'apply_invoice', line, invoice, amount: abs.toFixed(4) };
+      } else {
+        const bill = (await billsById()).get(d.documentId);
+        if (bill === undefined) throw new BankImportError('DOCUMENT_NOT_OPEN', `Line ${n}: that bill is not open.`);
+        openBalance = bill.openBalance;
+        plan = { kind: 'apply_bill', line, bill, amount: abs.toFixed(4) };
+      }
+      // Cumulative within the submit: two lines aimed at one document fail HERE, not after
+      // the first has posted. The core re-checks under lock; this is the up-front gate.
+      const cumulative = (appliedSoFar.get(d.documentId) ?? new Decimal(0)).plus(abs);
+      if (cumulative.greaterThan(toMoney(openBalance))) {
+        throw new BankImportError(
+          'OVERAPPLIED',
+          `Line ${n}: applying ${cumulative.toFixed(4)} exceeds the document's open balance ${toMoney(openBalance).toFixed(4)}.`,
+        );
+      }
+      appliedSoFar.set(d.documentId, cumulative);
     }
-    if (!allowedIds.has(d.accountId)) {
-      // Either not this company's active account, or an excluded one (A/R, A/P, OBE, the bank).
-      throw new BankImportError(
-        'CONTROL_ACCOUNT_NOT_ALLOWED',
-        `Line ${String(line.lineNumber)}: choose an active account that is not Accounts Receivable, Accounts Payable, Opening Balance Equity, or the bank account itself.`,
-      );
-    }
+
     let open = periodOpenByDate.get(line.txnDate);
     if (open === undefined) {
       open = (await getAccountingPeriod(companyId, line.txnDate)).status === 'OPEN';
@@ -337,7 +445,7 @@ export async function postImportLines(
     if (!open) {
       throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${line.txnDate} is closed.`);
     }
-    toPost.push({ line, accountId: d.accountId });
+    plans.push(plan);
   }
   // If every decision targets a line that is already POSTED/IGNORED (a double-submit or a
   // retry), this is a successful no-op — invariant 6: retries are idempotent, not errors.
@@ -350,38 +458,88 @@ export async function postImportLines(
   }
 
   let posted = 0;
-  for (const { line, accountId } of toPost) {
-    try {
-      await getDbTx().transaction(async (tx) => {
-        const amt = toMoney(line.amount);
-        const abs = amt.abs().toFixed(4);
-        // money in (+): Dr bank / Cr category ; money out (−): Cr bank / Dr category
-        const ledgerLines: PostJournalEntryInput['lines'] = amt.isPositive()
-          ? [
-              { accountId: batch.bankAccountId, debit: abs, credit: '0' },
-              { accountId, debit: '0', credit: abs },
-            ]
-          : [
-              { accountId: batch.bankAccountId, debit: '0', credit: abs },
-              { accountId, debit: abs, credit: '0' },
-            ];
-        const ledgerInput: PostJournalEntryInput = {
-          companyId,
-          actorUserId,
-          transactionDate: line.txnDate,
-          postingDate: line.txnDate,
-          description: line.description ?? `Bank import line ${String(line.lineNumber)}`,
-          sourceType: 'BANK_IMPORT',
-          sourceId: line.id,
-          lines: ledgerLines,
-        };
-        const entry = await postEntryCore(tx, ledgerInput, line.txnDate, undefined);
+  let applied = 0;
+  for (const plan of plans) {
+    const { line } = plan;
+    const lineIs = and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.status, 'STAGED'));
 
+    if (plan.kind === 'post') {
+      try {
+        const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
+          if (!(await lockStagedLine(tx, companyId, line.id))) return false; // decided concurrently
+          const amt = toMoney(line.amount);
+          const abs = amt.abs().toFixed(4);
+          // money in (+): Dr bank / Cr category ; money out (−): Cr bank / Dr category
+          const ledgerLines: PostJournalEntryInput['lines'] = amt.isPositive()
+            ? [
+                { accountId: batch.bankAccountId, debit: abs, credit: '0' },
+                { accountId: plan.accountId, debit: '0', credit: abs },
+              ]
+            : [
+                { accountId: batch.bankAccountId, debit: '0', credit: abs },
+                { accountId: plan.accountId, debit: abs, credit: '0' },
+              ];
+          const ledgerInput: PostJournalEntryInput = {
+            companyId,
+            actorUserId,
+            transactionDate: line.txnDate,
+            postingDate: line.txnDate,
+            description: line.description ?? `Bank import line ${String(line.lineNumber)}`,
+            sourceType: 'BANK_IMPORT',
+            sourceId: line.id,
+            lines: ledgerLines,
+          };
+          const entry = await postEntryCore(tx, ledgerInput, line.txnDate, undefined);
+
+          await tx
+            .update(schema.bankImportLines)
+            .set({ status: 'POSTED', chosenAccountId: plan.accountId, journalEntryId: entry.entry.id, updatedAt: sql`now()` })
+            .where(lineIs);
+
+          await recordAuditEvent({
+            tx,
+            companyId,
+            actorUserId,
+            action: 'BANK_IMPORT_POSTED',
+            entityType: 'bank_import_line',
+            entityId: line.id,
+            after: { batchId, accountId: plan.accountId, amount: line.amount, journalEntryId: entry.entry.id },
+          });
+          return true;
+        });
+        if (done) posted += 1; // counted only once the transaction has COMMITTED
+      } catch (error) {
+        // A concurrent submit already posted this line (source-once index) — treat as done.
+        if (!isIdempotencyViolation(error)) throw error;
+      }
+      continue;
+    }
+
+    // apply_invoice / apply_bill: a REAL customer payment / bill payment, created inside this
+    // line's transaction by the payment services' cores, so the payment and the line's POSTED
+    // flip commit together — a line can never be applied twice or left half-done. Never a
+    // BANK_IMPORT entry touching A/R or A/P (ADR-016/018/023/035).
+    const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
+      if (!(await lockStagedLine(tx, companyId, line.id))) return false; // decided concurrently
+      const fields = paymentFieldsFor(line);
+      if (plan.kind === 'apply_invoice') {
+        const { result, journalEntryId } = await receivePaymentCore(
+          tx,
+          actorUserId,
+          companyId,
+          {
+            customerId: plan.invoice.customerId,
+            paymentDate: line.txnDate,
+            depositAccountId: batch.bankAccountId,
+            ...fields,
+            applications: [{ invoiceId: plan.invoice.id, amountApplied: plan.amount }],
+          },
+          undefined,
+        );
         await tx
           .update(schema.bankImportLines)
-          .set({ status: 'POSTED', chosenAccountId: accountId, journalEntryId: entry.entry.id, updatedAt: sql`now()` })
-          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.status, 'STAGED')));
-
+          .set({ status: 'POSTED', paymentId: result.payment.id, journalEntryId, updatedAt: sql`now()` })
+          .where(lineIs);
         await recordAuditEvent({
           tx,
           companyId,
@@ -389,17 +547,45 @@ export async function postImportLines(
           action: 'BANK_IMPORT_POSTED',
           entityType: 'bank_import_line',
           entityId: line.id,
-          after: { batchId, accountId, amount: line.amount, journalEntryId: entry.entry.id },
+          after: { batchId, paymentId: result.payment.id, invoiceId: plan.invoice.id, amount: line.amount, journalEntryId },
         });
-      });
+      } else {
+        const { result, journalEntryId } = await payBillCore(
+          tx,
+          actorUserId,
+          companyId,
+          {
+            vendorId: plan.bill.vendorId,
+            paymentDate: line.txnDate,
+            cashAccountId: batch.bankAccountId,
+            ...fields,
+            applications: [{ billId: plan.bill.id, amountApplied: plan.amount }],
+          },
+          undefined,
+        );
+        await tx
+          .update(schema.bankImportLines)
+          .set({ status: 'POSTED', billPaymentId: result.payment.id, journalEntryId, updatedAt: sql`now()` })
+          .where(lineIs);
+        await recordAuditEvent({
+          tx,
+          companyId,
+          actorUserId,
+          action: 'BANK_IMPORT_POSTED',
+          entityType: 'bank_import_line',
+          entityId: line.id,
+          after: { batchId, billPaymentId: result.payment.id, billId: plan.bill.id, amount: line.amount, journalEntryId },
+        });
+      }
+      return true;
+    });
+    if (done) {
       posted += 1;
-    } catch (error) {
-      // A concurrent submit already posted this line (source-once index) — treat as done.
-      if (!isIdempotencyViolation(error)) throw error;
+      applied += 1;
     }
   }
 
-  return { posted, ignored: toIgnore.length };
+  return { posted, ignored: toIgnore.length, applied };
 }
 
 export { BankImportError } from './errors';

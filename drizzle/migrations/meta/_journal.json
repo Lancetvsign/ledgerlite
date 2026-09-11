@@ -225,6 +225,13 @@
       "when": 1789076870496,
       "tag": "0031_bank_import",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789088032169,
+      "tag": "0032_bank_import_apply",
+      "breakpoints": true
     }
   ]
 }

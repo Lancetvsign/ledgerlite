@@ -74,7 +74,6 @@ export async function receivePayment(
       'An invoice appears more than once in the applications.',
     );
   }
-  const amount = computePaymentAmount(input.applications);
 
   // Resolve-and-create the posting period BEFORE the tx (never lazily inside — a
   // concurrent create races the exclusion constraint, LL-032).
@@ -114,156 +113,7 @@ export async function receivePayment(
   }
 
   const runPayment = (): Promise<PaymentWithApplications> =>
-    getDbTx().transaction(async (tx) => {
-    const arAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_RECEIVABLE');
-    if (arAccountId === null) {
-      throw new PaymentError('AR_ACCOUNT_NOT_CONFIGURED', 'No Accounts Receivable account is configured.');
-    }
-
-    // The paying customer must exist in this company.
-    const cust = await tx
-      .select({ id: schema.customers.id })
-      .from(schema.customers)
-      .where(and(eq(schema.customers.companyId, companyId), eq(schema.customers.id, input.customerId)))
-      .limit(1);
-    if (cust[0] === undefined) {
-      throw new PaymentError('CUSTOMER_NOT_FOUND', 'That customer does not exist in this company.');
-    }
-
-    // The deposit account must be in-company, ACTIVE, and an asset (money lands there).
-    const dep = await tx
-      .select({ status: schema.accounts.status, accountType: schema.accounts.accountType })
-      .from(schema.accounts)
-      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.depositAccountId)))
-      .limit(1);
-    const deposit = dep[0];
-    if (deposit === undefined) {
-      throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'The deposit account does not exist in this company.');
-    }
-    if (deposit.status !== 'ACTIVE') {
-      throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'The deposit account is inactive.');
-    }
-    if (deposit.accountType !== 'ASSET') {
-      throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment must deposit into an asset account.');
-    }
-    // A/R is an asset, but depositing there would post Dr A/R / Cr A/R — a
-    // self-canceling entry that marks the invoice PAID without reducing the
-    // receivable. The money must land somewhere other than A/R.
-    if (input.depositAccountId === arAccountId) {
-      throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment cannot deposit into Accounts Receivable.');
-    }
-
-    // Lock and validate each applied invoice; collect those this payment fully pays. Lock
-    // the invoices in a deterministic (id-sorted) order so two concurrent payments
-    // touching the same invoices in a different input order cannot deadlock (Gate 5).
-    // Applications are deduped by invoice id above, so the sort is a total order.
-    const fullyPaid: string[] = [];
-    for (const app of [...input.applications].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))) {
-      const rows = await tx
-        .select()
-        .from(schema.invoices)
-        .where(and(eq(schema.invoices.companyId, companyId), eq(schema.invoices.id, app.invoiceId)))
-        .for('update')
-        .limit(1);
-      const invoice = rows[0];
-      if (invoice === undefined) {
-        throw new PaymentError('INVOICE_NOT_FOUND', 'An applied invoice does not exist in this company.');
-      }
-      if (invoice.customerId !== input.customerId) {
-        throw new PaymentError('INVOICE_WRONG_CUSTOMER', 'An applied invoice belongs to a different customer.');
-      }
-      if (invoice.status !== 'OPEN') {
-        throw new PaymentError('INVOICE_NOT_OPEN', 'Only an open invoice can receive a payment.');
-      }
-      const open = toMoney(invoice.total).minus(await invoiceReductionsTotal(tx, companyId, app.invoiceId));
-      const applying = toMoney(app.amountApplied);
-      if (applying.greaterThan(open)) {
-        throw new PaymentError(
-          'OVERAPPLIED',
-          `Applying ${app.amountApplied} exceeds invoice ${invoice.id}'s open balance ${open.toFixed(4)}.`,
-        );
-      }
-      // Fully paid exactly when this application clears the remaining open balance.
-      if (applying.equals(open)) {
-        fullyPaid.push(invoice.id);
-      }
-    }
-
-    const paymentRows = await tx
-      .insert(schema.payments)
-      .values({
-        companyId,
-        customerId: input.customerId,
-        paymentDate: input.paymentDate,
-        amount,
-        depositAccountId: input.depositAccountId,
-        method: input.method,
-        reference: input.reference,
-        memo: input.memo,
-        status: 'POSTED',
-        createdBy: actorUserId,
-      })
-      .returning();
-    const payment = paymentRows[0];
-    if (payment === undefined) throw new Error('payment insert returned no row');
-
-    await tx.insert(schema.paymentApplications).values(
-      input.applications.map((a) => ({
-        paymentId: payment.id,
-        companyId,
-        invoiceId: a.invoiceId,
-        amountApplied: a.amountApplied,
-      })),
-    );
-
-    // Post: Dr deposit = amount, Cr A/R = amount (A/R line tagged with the customer).
-    const ledgerLines: PostJournalEntryInput['lines'] = [
-      { accountId: input.depositAccountId, debit: amount, credit: '0' },
-      { accountId: arAccountId, debit: '0', credit: amount, customerId: input.customerId },
-    ];
-    const debits = sumMoney(ledgerLines.map((l) => l.debit));
-    const credits = sumMoney(ledgerLines.map((l) => l.credit));
-    if (!moneyEquals(debits, credits)) {
-      throw new Error(`payment ${payment.id} posting is unbalanced`);
-    }
-    const ledgerInput: PostJournalEntryInput = {
-      companyId,
-      actorUserId,
-      transactionDate: input.paymentDate,
-      postingDate: input.paymentDate,
-      description: input.reference !== undefined ? `Payment ${input.reference}` : 'Customer payment',
-      sourceType: 'CUSTOMER_PAYMENT',
-      sourceId: payment.id,
-      idempotencyKey,
-      lines: ledgerLines,
-    };
-    await postEntryCore(tx, ledgerInput, input.paymentDate, fingerprint);
-
-    if (fullyPaid.length > 0) {
-      await tx
-        .update(schema.invoices)
-        .set({ status: 'PAID', updatedAt: sql`now()` })
-        .where(
-          and(
-            eq(schema.invoices.companyId, companyId),
-            inArray(schema.invoices.id, fullyPaid),
-            eq(schema.invoices.status, 'OPEN'),
-          ),
-        );
-    }
-
-    await recordAuditEvent({
-      tx,
-      companyId,
-      actorUserId,
-      action: 'PAYMENT_RECEIVED',
-      entityType: 'payment',
-      entityId: payment.id,
-      after: { amount, applications: input.applications.length, paidInvoices: fullyPaid.length },
-    });
-
-    return await loadPayment(tx, companyId, payment.id);
-  });
+    getDbTx().transaction(async (tx) => (await receivePaymentCore(tx, actorUserId, companyId, input, fingerprint)).result);
 
   // No key → post directly. With a key, a retry that collides on the idempotency index
   // resolves to the ORIGINAL payment (fingerprint-verified) — a double-submit is a no-op.
@@ -278,6 +128,178 @@ export async function receivePayment(
     }
     throw error;
   }
+}
+
+/**
+ * MECHANICAL core of `receivePayment` — runs INSIDE the caller's transaction. The caller
+ * authorizes, dedups the applications, resolves the posting period, and handles the
+ * idempotency key BEFORE opening the tx (exactly what `receivePayment` does). Exists so a
+ * feature that must settle an invoice atomically with its own state — a bank-import line
+ * (LL-077, ADR-035) — can create a real customer payment in ITS transaction rather than
+ * posting to A/R itself. Returns the payment and the id of the entry it posted.
+ */
+export interface ReceivePaymentCoreResult {
+  readonly result: PaymentWithApplications;
+  /** The posted journal entry (sourceType CUSTOMER_PAYMENT). */
+  readonly journalEntryId: string;
+}
+
+export async function receivePaymentCore(
+  tx: Tx,
+  actorUserId: string,
+  companyId: string,
+  input: ReceivePaymentInput,
+  fingerprint: string | undefined,
+): Promise<ReceivePaymentCoreResult> {
+  const amount = computePaymentAmount(input.applications);
+  const arAccountId = await resolveSystemAccount(tx, companyId, 'ACCOUNTS_RECEIVABLE');
+  if (arAccountId === null) {
+    throw new PaymentError('AR_ACCOUNT_NOT_CONFIGURED', 'No Accounts Receivable account is configured.');
+  }
+
+  // The paying customer must exist in this company.
+  const cust = await tx
+    .select({ id: schema.customers.id })
+    .from(schema.customers)
+    .where(and(eq(schema.customers.companyId, companyId), eq(schema.customers.id, input.customerId)))
+    .limit(1);
+  if (cust[0] === undefined) {
+    throw new PaymentError('CUSTOMER_NOT_FOUND', 'That customer does not exist in this company.');
+  }
+
+  // The deposit account must be in-company, ACTIVE, and an asset (money lands there).
+  const dep = await tx
+    .select({ status: schema.accounts.status, accountType: schema.accounts.accountType })
+    .from(schema.accounts)
+    .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.depositAccountId)))
+    .limit(1);
+  const deposit = dep[0];
+  if (deposit === undefined) {
+    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'The deposit account does not exist in this company.');
+  }
+  if (deposit.status !== 'ACTIVE') {
+    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'The deposit account is inactive.');
+  }
+  if (deposit.accountType !== 'ASSET') {
+    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment must deposit into an asset account.');
+  }
+  // A/R is an asset, but depositing there would post Dr A/R / Cr A/R — a
+  // self-canceling entry that marks the invoice PAID without reducing the
+  // receivable. The money must land somewhere other than A/R.
+  if (input.depositAccountId === arAccountId) {
+    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment cannot deposit into Accounts Receivable.');
+  }
+
+  // Lock and validate each applied invoice; collect those this payment fully pays. Lock
+  // the invoices in a deterministic (id-sorted) order so two concurrent payments
+  // touching the same invoices in a different input order cannot deadlock (Gate 5).
+  // Applications are deduped by invoice id above, so the sort is a total order.
+  const fullyPaid: string[] = [];
+  for (const app of [...input.applications].sort((a, b) => a.invoiceId.localeCompare(b.invoiceId))) {
+    const rows = await tx
+      .select()
+      .from(schema.invoices)
+      .where(and(eq(schema.invoices.companyId, companyId), eq(schema.invoices.id, app.invoiceId)))
+      .for('update')
+      .limit(1);
+    const invoice = rows[0];
+    if (invoice === undefined) {
+      throw new PaymentError('INVOICE_NOT_FOUND', 'An applied invoice does not exist in this company.');
+    }
+    if (invoice.customerId !== input.customerId) {
+      throw new PaymentError('INVOICE_WRONG_CUSTOMER', 'An applied invoice belongs to a different customer.');
+    }
+    if (invoice.status !== 'OPEN') {
+      throw new PaymentError('INVOICE_NOT_OPEN', 'Only an open invoice can receive a payment.');
+    }
+    const open = toMoney(invoice.total).minus(await invoiceReductionsTotal(tx, companyId, app.invoiceId));
+    const applying = toMoney(app.amountApplied);
+    if (applying.greaterThan(open)) {
+      throw new PaymentError(
+        'OVERAPPLIED',
+        `Applying ${app.amountApplied} exceeds invoice ${invoice.id}'s open balance ${open.toFixed(4)}.`,
+      );
+    }
+    // Fully paid exactly when this application clears the remaining open balance.
+    if (applying.equals(open)) {
+      fullyPaid.push(invoice.id);
+    }
+  }
+
+  const paymentRows = await tx
+    .insert(schema.payments)
+    .values({
+      companyId,
+      customerId: input.customerId,
+      paymentDate: input.paymentDate,
+      amount,
+      depositAccountId: input.depositAccountId,
+      method: input.method,
+      reference: input.reference,
+      memo: input.memo,
+      status: 'POSTED',
+      createdBy: actorUserId,
+    })
+    .returning();
+  const payment = paymentRows[0];
+  if (payment === undefined) throw new Error('payment insert returned no row');
+
+  await tx.insert(schema.paymentApplications).values(
+    input.applications.map((a) => ({
+      paymentId: payment.id,
+      companyId,
+      invoiceId: a.invoiceId,
+      amountApplied: a.amountApplied,
+    })),
+  );
+
+  // Post: Dr deposit = amount, Cr A/R = amount (A/R line tagged with the customer).
+  const ledgerLines: PostJournalEntryInput['lines'] = [
+    { accountId: input.depositAccountId, debit: amount, credit: '0' },
+    { accountId: arAccountId, debit: '0', credit: amount, customerId: input.customerId },
+  ];
+  const debits = sumMoney(ledgerLines.map((l) => l.debit));
+  const credits = sumMoney(ledgerLines.map((l) => l.credit));
+  if (!moneyEquals(debits, credits)) {
+    throw new Error(`payment ${payment.id} posting is unbalanced`);
+  }
+  const ledgerInput: PostJournalEntryInput = {
+    companyId,
+    actorUserId,
+    transactionDate: input.paymentDate,
+    postingDate: input.paymentDate,
+    description: input.reference !== undefined ? `Payment ${input.reference}` : 'Customer payment',
+    sourceType: 'CUSTOMER_PAYMENT',
+    sourceId: payment.id,
+    idempotencyKey: input.idempotencyKey,
+    lines: ledgerLines,
+  };
+  const posted = await postEntryCore(tx, ledgerInput, input.paymentDate, fingerprint);
+
+  if (fullyPaid.length > 0) {
+    await tx
+      .update(schema.invoices)
+      .set({ status: 'PAID', updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(schema.invoices.companyId, companyId),
+          inArray(schema.invoices.id, fullyPaid),
+          eq(schema.invoices.status, 'OPEN'),
+        ),
+      );
+  }
+
+  await recordAuditEvent({
+    tx,
+    companyId,
+    actorUserId,
+    action: 'PAYMENT_RECEIVED',
+    entityType: 'payment',
+    entityId: payment.id,
+    after: { amount, applications: input.applications.length, paidInvoices: fullyPaid.length },
+  });
+
+  return { result: await loadPayment(tx, companyId, payment.id), journalEntryId: posted.entry.id };
 }
 
 export async function voidPayment(
