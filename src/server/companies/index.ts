@@ -3,6 +3,7 @@ import 'server-only';
 import { and, eq } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
+import { todayInTimeZone } from '@/lib/dates';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 
 import { installDefaultChart } from '@/server/accounts/internal';
@@ -85,6 +86,22 @@ export async function createCompanyWithOwner(
 }
 
 /** Companies where the user holds an ACTIVE membership and the company is ACTIVE. */
+/**
+ * The company's calendar "today" (YYYY-MM-DD in its timezone) — the default date for every
+ * document form and report (ADR-007). Never `new Date().toISOString()`: that is UTC's day,
+ * which for a US company is already tomorrow every evening, so a bill entered at 8pm would
+ * post into the next day and drop out of "as of today" reports.
+ */
+export async function companyToday(actorUserId: string, companyId: string): Promise<string> {
+  await requireCompanyMembership(actorUserId, companyId);
+  const rows = await getDbTx()
+    .select({ timezone: schema.companies.timezone })
+    .from(schema.companies)
+    .where(eq(schema.companies.id, companyId))
+    .limit(1);
+  return todayInTimeZone(rows[0]?.timezone ?? 'UTC');
+}
+
 export async function listCompaniesForUser(
   userId: string,
 ): Promise<{ company: CompanyView; role: CompanyMembership['role'] }[]> {

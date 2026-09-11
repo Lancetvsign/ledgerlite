@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
+import { companyToday } from '@/server/companies';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
@@ -47,7 +48,7 @@ export default async function NewBillPage({
     .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name }));
 
   const params = await searchParams;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = await companyToday(user.id, membership.companyId); // the COMPANY's today (ADR-007)
 
   return (
     <BillForm

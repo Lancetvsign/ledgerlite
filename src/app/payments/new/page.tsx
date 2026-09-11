@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
+import { companyToday } from '@/server/companies';
 import { listCustomers } from '@/server/customers';
 import { listOpenInvoices } from '@/server/payments';
 import { roleHasCapability } from '@/server/rbac';
@@ -58,7 +59,7 @@ export default async function NewPaymentPage({
   }));
 
   const params = await searchParams;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = await companyToday(user.id, membership.companyId); // the COMPANY's today (ADR-007)
 
   return (
     <PaymentForm
