@@ -318,7 +318,7 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
     const db = await getTestDb();
     const entry = (await db.execute<{ id: string; deposit: string }>(sql`
       select je.id, p.deposit_account_id::text as deposit from payments p
-      join journal_entries je on je.source_type = 'CUSTOMER_PAYMENT' and je.source_id = p.id
+      join journal_entries je on je.source_type = 'CUSTOMER_PAYMENT' and je.source_id = p.id::text
       where p.id = ${after.paymentId!}`)).rows[0]!;
     expect(after.journalEntryId).toBe(entry.id); // the line points at the PAYMENT's entry
     expect(entry.deposit).toBe(c.bankId);
