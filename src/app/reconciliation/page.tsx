@@ -8,7 +8,7 @@ import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { companyToday } from '@/server/companies';
 import { roleHasCapability } from '@/server/rbac';
-import { listReconciliations } from '@/server/reconciliation';
+import { isReconcilableAccount, listReconciliations } from '@/server/reconciliation';
 import { ensureAppUser } from '@/server/users';
 
 import { startReconciliationAction } from './actions';
@@ -41,7 +41,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
   const label = (a: { accountNumber: string | null; name: string }) =>
     a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name;
   const nameById = new Map(accounts.map((a) => [a.id, label(a)]));
-  const bankAccounts = accounts.filter((a) => a.status === 'ACTIVE' && a.accountType === 'ASSET' && a.cashFlowCategory === 'CASH');
+  const bankAccounts = accounts.filter(isReconcilableAccount); // cash/bank assets and credit-card liabilities (LL-081)
   const inputClass = 'rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
   return (
@@ -52,8 +52,9 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
       </header>
 
       <p className="text-sm text-neutral-500">
-        Enter the statement date and the bank&apos;s ending figure, tick the ledger lines the bank has
-        cleared, and complete when they agree to the cent. Nothing posts; this is a control, not an entry.
+        Enter the statement date and the statement&apos;s ending figure (for a credit card, the balance
+        owed), tick the ledger lines the statement shows, and complete when they agree to the cent.
+        Nothing posts; this is a control, not an entry.
       </p>
 
       {notice !== null && (
@@ -65,7 +66,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
       {canWrite && (
         <form action={startReconciliationAction} data-testid="start-form" className="flex flex-wrap items-end gap-3 rounded border border-neutral-200 p-4 text-sm dark:border-neutral-800">
           <label className="flex flex-col gap-1">
-            <span>Bank account</span>
+            <span>Account (bank or credit card)</span>
             <select name="bankAccountId" required defaultValue="" data-testid="recon-account" className={inputClass}>
               <option value="" disabled>Choose…</option>
               {bankAccounts.map((a) => (
@@ -78,7 +79,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
             <input type="date" name="statementDate" required defaultValue={today} data-testid="recon-date" className={inputClass} />
           </label>
           <label className="flex flex-col gap-1">
-            <span>Statement ending balance</span>
+            <span>Statement ending balance (for a card: balance owed)</span>
             <input type="text" inputMode="decimal" name="statementEndingAmount" required placeholder="0.00" data-testid="recon-amount" className={inputClass} />
           </label>
           <button type="submit" data-testid="recon-start" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
@@ -123,7 +124,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
 function noticeFrom(error: string | undefined): string | null {
   if (error === undefined) return null;
   if (error === 'invalid') return 'Choose a bank account, a statement date, and the ending balance as a plain amount (e.g. 1379.50).';
-  if (error === 'NOT_A_BANK_ACCOUNT') return 'Choose an active cash/bank asset account.';
+  if (error === 'NOT_A_BANK_ACCOUNT') return 'Choose an active cash/bank asset account or a credit-card account.';
   if (error === 'ALREADY_IN_PROGRESS') return 'That account already has a reconciliation in progress — open it from the list.';
   if (error === 'DUPLICATE_STATEMENT_DATE') return 'A reconciliation for that account and statement date already exists.';
   if (error === 'STATEMENT_DATE_NOT_AFTER_LAST') return 'The statement date must be after the last completed statement for that account.';

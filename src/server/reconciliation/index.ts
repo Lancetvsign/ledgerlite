@@ -35,7 +35,43 @@ type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
  * a bar to reconciling it.
  */
 
-const SIGNED_SUM = sql`coalesce(sum(l.debit - l.credit), 0)::numeric(19,4)::text`;
+/**
+ * The account's own sign convention (LL-081): a cash ASSET reads debit − credit (money in
+ * positive); a credit-card LIABILITY reads credit − debit (charges positive, payments negative),
+ * which is how the card statement's "balance owed" is written. Both compare to the statement
+ * figure as typed by the user.
+ */
+function signedSum(liability: boolean) {
+  return sql`coalesce(sum(case when ${liability} then l.credit - l.debit else l.debit - l.credit end), 0)::numeric(19,4)::text`;
+}
+function signedAmount(liability: boolean) {
+  return sql`(case when ${liability} then l.credit - l.debit else l.debit - l.credit end)::numeric(19,4)::text`;
+}
+
+/**
+ * Which accounts can be reconciled against a statement: an ACTIVE cash/bank asset, or an ACTIVE
+ * credit-card liability (`accountSubtype = 'credit_card'`, as the standard chart marks it).
+ * Shared with the UI's account picker so both agree.
+ */
+export function isReconcilableAccount(a: {
+  status: string;
+  accountType: string;
+  cashFlowCategory: string | null;
+  accountSubtype: string | null;
+}): boolean {
+  if (a.status !== 'ACTIVE') return false;
+  if (a.accountType === 'ASSET' && a.cashFlowCategory === 'CASH') return true;
+  return a.accountType === 'LIABILITY' && a.accountSubtype === 'credit_card';
+}
+
+async function accountIsLiability(executor: Tx | PoolDatabase, companyId: string, accountId: string): Promise<boolean> {
+  const rows = await executor
+    .select({ accountType: schema.accounts.accountType })
+    .from(schema.accounts)
+    .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, accountId)))
+    .limit(1);
+  return rows[0]?.accountType === 'LIABILITY';
+}
 
 /** A 23505 on the named constraint — checked structurally and, as the ledger does, by message. */
 function isUniqueViolation(error: unknown, constraint: string): boolean {
@@ -75,13 +111,18 @@ export async function startReconciliation(
   await requirePermission(actorUserId, companyId, 'reconciliation.complete');
 
   const bankRows = await getDbTx()
-    .select({ status: schema.accounts.status, accountType: schema.accounts.accountType, cashFlowCategory: schema.accounts.cashFlowCategory })
+    .select({
+      status: schema.accounts.status,
+      accountType: schema.accounts.accountType,
+      cashFlowCategory: schema.accounts.cashFlowCategory,
+      accountSubtype: schema.accounts.accountSubtype,
+    })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))
     .limit(1);
   const bank = bankRows[0];
-  if (bank === undefined || bank.status !== 'ACTIVE' || bank.accountType !== 'ASSET' || bank.cashFlowCategory !== 'CASH') {
-    throw new ReconciliationError('NOT_A_BANK_ACCOUNT', 'Choose an active cash/bank asset account to reconcile.');
+  if (bank === undefined || !isReconcilableAccount(bank)) {
+    throw new ReconciliationError('NOT_A_BANK_ACCOUNT', 'Choose an active cash/bank asset account or a credit-card account to reconcile.');
   }
 
   const last = await lastCompletedStatementDate(getDbTx(), companyId, input.bankAccountId);
@@ -181,7 +222,7 @@ export interface ReconciliationLineView {
   readonly entryNumber: string | null;
   readonly postingDate: string;
   readonly description: string | null;
-  /** Signed, from the bank account's side: debit − credit (money in positive). */
+  /** Signed in the account's own convention: cash = debit − credit (money in positive); credit card = credit − debit (charges positive). */
   readonly amount: string;
   readonly cleared: boolean;
   /** The line came from a bank-statement import — the bank has, by definition, seen it. */
@@ -207,6 +248,8 @@ export async function getReconciliation(actorUserId: string, companyId: string, 
   const db = getDbTx();
   const rec = await loadHeader(db, companyId, id, false);
   if (rec === undefined) return null;
+  const liability = await accountIsLiability(db, companyId, rec.bankAccountId);
+  const SIGNED_SUM = signedSum(liability);
 
   const figures = await db.execute<{ opening: string; here: string; ledger: string }>(sql`
     select
@@ -232,7 +275,7 @@ export async function getReconciliation(actorUserId: string, companyId: string, 
   }>(sql`
     select l.id as journal_line_id, e.id as entry_id, e.entry_number::text as entry_number,
            e.posting_date::text as posting_date, coalesce(l.description, e.description) as description,
-           (l.debit - l.credit)::numeric(19,4)::text as amount,
+           ${signedAmount(liability)} as amount,
            (rl.id is not null) as cleared,
            exists (select 1 from bank_import_lines b where b.company_id = l.company_id and b.journal_entry_id = e.id) as from_import
     from journal_lines l
@@ -330,6 +373,7 @@ export async function completeReconciliation(actorUserId: string, companyId: str
     if (rec.status !== 'IN_PROGRESS') throw new ReconciliationError('NOT_IN_PROGRESS', 'A completed reconciliation is final.');
 
     // Opening and here collapse: the bank's figure must equal everything ever cleared on this account.
+    const SIGNED_SUM = signedSum(await accountIsLiability(tx, companyId, rec.bankAccountId));
     const sum = await tx.execute<{ cleared: string; lines: string }>(sql`
       select ${SIGNED_SUM} as cleared, count(*) filter (where rl.reconciliation_id = ${rec.id})::text as lines
       from bank_reconciliation_lines rl

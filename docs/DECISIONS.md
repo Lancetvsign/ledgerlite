@@ -2023,7 +2023,12 @@ update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2
   next statement — the correct signal, not a bug.
 - **No closed-period guard**: nothing posts, and reconciling a closed month is routine.
 - **Authorization:** the pre-existing `reconciliation.view` (everyone) and `reconciliation.complete`
-  (ALL_WRITERS — a bookkeeper reconciles) capabilities; no new capability. **ASSET + CASH accounts only.**
+  (ALL_WRITERS — a bookkeeper reconciles) capabilities; no new capability.
+- **Reconcilable accounts (LL-081 amendment):** an ACTIVE cash/bank asset (`cashFlowCategory = CASH`) **or
+  an ACTIVE credit-card liability** (`accountSubtype = 'credit_card'`, as the standard chart marks
+  `2100 Credit Card`). The figures use the account's own sign: assets read `debit − credit` (money in
+  positive), credit cards read `credit − debit` (charges positive, payments negative) — the way a card
+  statement states its balance owed — so the same zero-difference rule applies unchanged.
 
 ### Consequences
 
@@ -2033,7 +2038,7 @@ update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2
 
 ### Revisit if
 
-Credit-card (liability) reconciliation, reopening a completed reconciliation, auto-matching candidates
+Reopening a completed reconciliation, auto-matching candidates
 to imported statement lines, a printable reconciliation report, or coupling to period close is wanted.
 
 ## ADR-037 — Money is displayed at two decimals with thousands separators; stored and computed at four

@@ -309,3 +309,47 @@ describe('authorization', () => {
     await expect(getReconciliation(outsider, c.companyId, rec.id)).rejects.toThrow();
   });
 });
+
+describe('credit-card reconciliation (LL-081)', () => {
+  /** A card charge: Dr expense / Cr card. A card payment: Dr card / Cr bank. */
+  async function cardSetup(c: Ctx): Promise<{ cardId: string; expenseId: string; plainLiabilityId: string }> {
+    const card = await createAccount(c.userId, c.companyId, createAccountInput.parse({ name: 'Visa', accountType: 'LIABILITY', accountSubtype: 'credit_card' }));
+    const expense = await createAccount(c.userId, c.companyId, createAccountInput.parse({ name: 'Travel', accountType: 'EXPENSE' }));
+    const plain = await createAccount(c.userId, c.companyId, createAccountInput.parse({ name: 'Loan', accountType: 'LIABILITY' }));
+    return { cardId: card.id, expenseId: expense.id, plainLiabilityId: plain.id };
+  }
+
+  it('reconciles a card statement: charges positive, payments negative, balance owed completes at zero', async () => {
+    const c = await setup();
+    const { cardId, expenseId } = await cardSetup(c);
+    const charge = await postJournalEntry(postJournalEntryInput.parse({
+      companyId: c.companyId, actorUserId: c.userId, transactionDate: '2026-06-05', sourceType: 'JOURNAL_ENTRY',
+      lines: [{ accountId: expenseId, debit: '500.00' }, { accountId: cardId, credit: '500.00' }],
+    }));
+    const payment = await postJournalEntry(postJournalEntryInput.parse({
+      companyId: c.companyId, actorUserId: c.userId, transactionDate: '2026-06-20', sourceType: 'JOURNAL_ENTRY',
+      lines: [{ accountId: cardId, debit: '150.00' }, { accountId: c.bankId, credit: '150.00' }],
+    }));
+    const chargeLine = await bankLineOf(c, charge.entry.id, cardId);
+    const paymentLine = await bankLineOf(c, payment.entry.id, cardId);
+
+    const rec = await start(c, '350.0000', '2026-06-30', cardId); // the card says: you owe 350
+    let view = (await getReconciliation(c.userId, c.companyId, rec.id))!;
+    expect(view.lines.map((l) => [l.postingDate, l.amount])).toEqual([['2026-06-05', '500.0000'], ['2026-06-20', '-150.0000']]);
+    expect(view.ledgerAsOf).toBe('350.0000');
+    expect(view.difference).toBe('350.0000');
+
+    await setCleared(c.userId, c.companyId, rec.id, { journalLineIds: [chargeLine, paymentLine] });
+    view = (await getReconciliation(c.userId, c.companyId, rec.id))!;
+    expect(view.clearedHere).toBe('350.0000');
+    expect(view.difference).toBe('0.0000');
+    await expect(completeReconciliation(c.userId, c.companyId, rec.id)).resolves.toMatchObject({ status: 'COMPLETED' });
+  });
+
+  it('refuses a liability that is not a credit card', async () => {
+    const c = await setup();
+    const { plainLiabilityId } = await cardSetup(c);
+    expect((await errOf(start(c, '0.00', '2026-06-30', plainLiabilityId))).code).toBe('NOT_A_BANK_ACCOUNT');
+  });
+});
+
