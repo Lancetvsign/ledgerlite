@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { formatMoney } from '@/lib/money-format';
 import { getCashFlowStatement } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
@@ -96,15 +97,15 @@ export default async function CashFlowPage({
           <tfoot>
             <tr className="border-t-2 border-neutral-300 font-semibold dark:border-neutral-700">
               <td className="py-2 pr-2">Net change in cash</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="cf-net-change">{cf.netChangeInCash}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="cf-net-change">{formatMoney(cf.netChangeInCash)}</td>
             </tr>
             <tr>
               <td className="py-1 pr-2 text-neutral-500">Cash at beginning of period</td>
-              <td className="py-1 pr-2 text-right tabular-nums" data-testid="cf-beginning">{cf.beginningCash}</td>
+              <td className="py-1 pr-2 text-right tabular-nums" data-testid="cf-beginning">{formatMoney(cf.beginningCash)}</td>
             </tr>
             <tr className="font-medium">
               <td className="py-1 pr-2">Cash at end of period</td>
-              <td className="py-1 pr-2 text-right tabular-nums" data-testid="cf-ending">{cf.endingCash}</td>
+              <td className="py-1 pr-2 text-right tabular-nums" data-testid="cf-ending">{formatMoney(cf.endingCash)}</td>
             </tr>
           </tfoot>
         </table>
@@ -144,7 +145,7 @@ function Line({ label, amount }: { label: string; amount: string }) {
   return (
     <tr data-testid="cash-flow-row" className="border-b border-neutral-100 dark:border-neutral-800">
       <td className="py-2 pr-2">{label}</td>
-      <td className="py-2 pr-2 text-right tabular-nums">{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
     </tr>
   );
 }
@@ -153,7 +154,7 @@ function Subtotal({ label, amount, testid }: { label: string; amount: string; te
   return (
     <tr className="border-t border-neutral-300 font-medium dark:border-neutral-700">
       <td className="py-2 pr-2">{label}</td>
-      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{formatMoney(amount)}</td>
     </tr>
   );
 }

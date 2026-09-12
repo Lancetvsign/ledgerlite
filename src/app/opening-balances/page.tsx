@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { companyToday } from '@/server/companies';
@@ -79,8 +80,8 @@ export default async function OpeningBalancesPage({
             {existing.lines.map((l) => (
               <tr key={l.id} className="border-b border-neutral-100 dark:border-neutral-800">
                 <td className="py-1 pr-2">{nameById.get(l.accountId) ?? l.accountId}</td>
-                <td className="py-1 pr-2 text-right tabular-nums">{l.debit}</td>
-                <td className="py-1 pr-2 text-right tabular-nums">{l.credit}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{formatMoney(l.debit)}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{formatMoney(l.credit)}</td>
               </tr>
             ))}
           </tbody>

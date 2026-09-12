@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listBills } from '@/server/bills';
 import { roleHasCapability } from '@/server/rbac';
@@ -118,7 +119,7 @@ export default async function BillsPage({
                 <td className="py-2 pr-2">{vendorName.get(bill.vendorId) ?? '—'}</td>
                 <td className="py-2 pr-2 text-neutral-500">{bill.billDate}</td>
                 <td className="py-2 pr-2">{bill.status}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{bill.total}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(bill.total)}</td>
               </tr>
             ))
           )}

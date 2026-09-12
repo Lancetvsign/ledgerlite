@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listCustomers } from '@/server/customers';
 import { listPayments } from '@/server/payments';
@@ -117,7 +118,7 @@ export default async function PaymentsPage({
                 </td>
                 <td className="py-2 pr-2 text-neutral-500">{payment.reference ?? '—'}</td>
                 <td className="py-2 pr-2">{payment.status}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{payment.amount}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(payment.amount)}</td>
               </tr>
             ))
           )}

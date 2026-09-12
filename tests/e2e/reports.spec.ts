@@ -71,12 +71,12 @@ test('trial balance is balanced and its A/R reconciles to the aging grand total'
   await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
   await expect(
     page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' }),
-  ).toContainText('60.0000');
+  ).toContainText('60.00');
 
   // A/R aging: the grand total equals that A/R control — reconciliation on screen.
   await page.goto('/reports/aging');
-  await expect(page.getByTestId('aging-total')).toHaveText('60.0000');
-  await expect(page.getByTestId('aging-row').filter({ hasText: 'Acme LLC' })).toContainText('60.0000');
+  await expect(page.getByTestId('aging-total')).toHaveText('60.00');
+  await expect(page.getByTestId('aging-row').filter({ hasText: 'Acme LLC' })).toContainText('60.00');
 });
 
 test('a customer statement shows opening, activity and closing', async ({ page }) => {
@@ -91,13 +91,13 @@ test('a customer statement shows opening, activity and closing', async ({ page }
 
   await expect(page.getByTestId('statement')).toBeVisible();
   await expect(page.getByTestId('statement-customer-name')).toHaveText('Beta Co');
-  await expect(page.getByTestId('statement-opening')).toHaveText('0.0000');
+  await expect(page.getByTestId('statement-opening')).toHaveText('0.00');
   await expect(page.getByTestId('statement-row')).toHaveCount(2);
   await expect(page.getByTestId('statement-table')).toContainText('INVOICE');
-  await expect(page.getByTestId('statement-table')).toContainText('200.0000');
+  await expect(page.getByTestId('statement-table')).toContainText('200.00');
   await expect(page.getByTestId('statement-table')).toContainText('CUSTOMER_PAYMENT');
-  await expect(page.getByTestId('statement-table')).toContainText('50.0000');
-  await expect(page.getByTestId('statement-closing')).toHaveText('150.0000');
+  await expect(page.getByTestId('statement-table')).toContainText('50.00');
+  await expect(page.getByTestId('statement-closing')).toHaveText('150.00');
 });
 
 test.describe('unauthenticated access', () => {

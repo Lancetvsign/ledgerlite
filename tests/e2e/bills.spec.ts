@@ -65,7 +65,7 @@ test('create → finalize → pay a bill in full, then void the payment; the bil
   const billId = await openBill(page, 'Globex Supply', '100.00');
 
   const paymentId = await payBill(page, 'Globex Supply', '100.00');
-  await expect(page.getByTestId('bill-payment-amount')).toHaveText('100.0000');
+  await expect(page.getByTestId('bill-payment-amount')).toHaveText('100.00');
 
   // The bill is now fully paid.
   await page.goto(`/bills/${billId}`);
@@ -98,12 +98,12 @@ test('the A/P aging grand total on screen equals the A/P control in the trial ba
   await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
   await expect(
     page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Payable' }),
-  ).toContainText('60.0000');
+  ).toContainText('60.00');
 
   // A/P aging: the grand total equals that A/P control — the reconciliation on screen.
   await page.goto('/reports/ap-aging');
-  await expect(page.getByTestId('ap-aging-total')).toHaveText('60.0000');
-  await expect(page.getByTestId('ap-aging-row').filter({ hasText: 'Globex Supply' })).toContainText('60.0000');
+  await expect(page.getByTestId('ap-aging-total')).toHaveText('60.00');
+  await expect(page.getByTestId('ap-aging-row').filter({ hasText: 'Globex Supply' })).toContainText('60.00');
 });
 
 test('a vendor statement shows opening, activity and closing', async ({ page }) => {
@@ -123,13 +123,13 @@ test('a vendor statement shows opening, activity and closing', async ({ page }) 
 
   await expect(page.getByTestId('vendor-statement')).toBeVisible();
   await expect(page.getByTestId('vendor-statement-name')).toHaveText('Beta Supply');
-  await expect(page.getByTestId('vendor-statement-opening')).toHaveText('0.0000');
+  await expect(page.getByTestId('vendor-statement-opening')).toHaveText('0.00');
   await expect(page.getByTestId('vendor-statement-row')).toHaveCount(2);
   await expect(page.getByTestId('vendor-statement-table')).toContainText('EXPENSE');
-  await expect(page.getByTestId('vendor-statement-table')).toContainText('200.0000');
+  await expect(page.getByTestId('vendor-statement-table')).toContainText('200.00');
   await expect(page.getByTestId('vendor-statement-table')).toContainText('BILL_PAYMENT');
-  await expect(page.getByTestId('vendor-statement-table')).toContainText('50.0000');
-  await expect(page.getByTestId('vendor-statement-closing')).toHaveText('150.0000');
+  await expect(page.getByTestId('vendor-statement-table')).toContainText('50.00');
+  await expect(page.getByTestId('vendor-statement-closing')).toHaveText('150.00');
 });
 
 test('the bill-payment form only shows the selected vendor’s open bills', async ({ page }) => {

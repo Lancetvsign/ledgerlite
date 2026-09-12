@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
@@ -79,7 +80,7 @@ export default async function BillPaymentDetailPage({
         <dt className="text-neutral-500">Status</dt>
         <dd data-testid="bill-payment-status" className="font-medium">{payment.status}</dd>
         <dt className="text-neutral-500">Amount</dt>
-        <dd data-testid="bill-payment-amount" className="tabular-nums">{payment.amount}</dd>
+        <dd data-testid="bill-payment-amount" className="tabular-nums">{formatMoney(payment.amount)}</dd>
         <dt className="text-neutral-500">Date</dt>
         <dd>{payment.paymentDate}</dd>
         <dt className="text-neutral-500">Paid from</dt>
@@ -99,7 +100,7 @@ export default async function BillPaymentDetailPage({
           {applications.map((a) => (
             <tr key={a.id} className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">{billNumber.get(a.billId) ?? '(bill)'}</td>
-              <td className="py-2 pr-2 text-right tabular-nums">{a.amountApplied}</td>
+              <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(a.amountApplied)}</td>
             </tr>
           ))}
         </tbody>

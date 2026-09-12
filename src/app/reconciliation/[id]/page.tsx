@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney, toInputAmount } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
@@ -100,7 +101,7 @@ export default async function ReconciliationPage({
           </label>
           <label className="flex flex-col gap-1">
             <span>Statement ending balance</span>
-            <input type="text" inputMode="decimal" name="statementEndingAmount" defaultValue={rec.statementEndingAmount} data-testid="recon-edit-amount" className={inputClass} />
+            <input type="text" inputMode="decimal" name="statementEndingAmount" defaultValue={toInputAmount(rec.statementEndingAmount)} data-testid="recon-edit-amount" className={inputClass} />
           </label>
           <button type="submit" data-testid="recon-update" className="rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700">Update statement</button>
         </form>
@@ -141,7 +142,7 @@ export default async function ReconciliationPage({
                   {l.fromImport && <span className="ml-2 text-xs text-neutral-400">from statement import</span>}
                 </td>
                 <td className="py-2 pr-2">{l.description ?? ''}</td>
-                <td className="py-2 pr-2 text-right tabular-nums" data-testid={`recon-amount-${String(i)}`}>{l.amount}</td>
+                <td className="py-2 pr-2 text-right tabular-nums" data-testid={`recon-amount-${String(i)}`}>{formatMoney(l.amount)}</td>
               </tr>
             ))}
           </tbody>
@@ -180,7 +181,7 @@ function Figure({ label, value, testid, emphasis = false }: { label: string; val
   return (
     <div className="rounded border border-neutral-200 p-3 dark:border-neutral-800">
       <div className="text-xs uppercase tracking-wide text-neutral-500">{label}</div>
-      <div className={`tabular-nums ${emphasis ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}`} data-testid={testid}>{value}</div>
+      <div className={`tabular-nums ${emphasis ? 'font-semibold text-amber-700 dark:text-amber-300' : ''}`} data-testid={testid}>{formatMoney(value)}</div>
     </div>
   );
 }

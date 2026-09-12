@@ -61,7 +61,7 @@ test('receive a payment then void it; the invoice tracks PAID → OPEN', async (
   await expect(page).toHaveURL(/\/payments\/[0-9a-f-]{36}$/);
   const paymentId = page.url().split('/').pop() ?? '';
   await expect(page.getByTestId('payment-status')).toHaveText('POSTED');
-  await expect(page.getByTestId('payment-amount')).toHaveText('100.0000');
+  await expect(page.getByTestId('payment-amount')).toHaveText('100.00');
 
   // The invoice is now fully paid.
   await page.goto(`/invoices/${invoiceId}`);

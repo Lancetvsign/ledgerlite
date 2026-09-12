@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
@@ -105,7 +106,7 @@ export default async function InvoiceDetailPage({
               <td className="py-2 pr-2">{accountName.get(line.accountId) ?? '—'}</td>
               <td className="py-2 pr-2 text-neutral-500">{line.description ?? '—'}</td>
               <td className="py-2 pr-2 text-right tabular-nums">{line.quantity}</td>
-              <td className="py-2 pr-2 text-right tabular-nums">{line.unitPrice}</td>
+              <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(line.unitPrice)}</td>
               <td className="py-2 pr-2 text-right tabular-nums">{line.taxRate}</td>
             </tr>
           ))}
@@ -113,15 +114,15 @@ export default async function InvoiceDetailPage({
         <tfoot>
           <tr>
             <td className="py-1 pr-2 text-right text-neutral-500" colSpan={4}>Subtotal</td>
-            <td className="py-1 pr-2 text-right tabular-nums">{invoice.subtotal}</td>
+            <td className="py-1 pr-2 text-right tabular-nums">{formatMoney(invoice.subtotal)}</td>
           </tr>
           <tr>
             <td className="py-1 pr-2 text-right text-neutral-500" colSpan={4}>Tax</td>
-            <td className="py-1 pr-2 text-right tabular-nums">{invoice.taxTotal}</td>
+            <td className="py-1 pr-2 text-right tabular-nums">{formatMoney(invoice.taxTotal)}</td>
           </tr>
           <tr className="font-medium">
             <td className="py-1 pr-2 text-right" colSpan={4}>Total</td>
-            <td className="py-1 pr-2 text-right tabular-nums" data-testid="invoice-total">{invoice.total}</td>
+            <td className="py-1 pr-2 text-right tabular-nums" data-testid="invoice-total">{formatMoney(invoice.total)}</td>
           </tr>
         </tfoot>
       </table>

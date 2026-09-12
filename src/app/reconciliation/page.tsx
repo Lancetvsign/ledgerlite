@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { companyToday } from '@/server/companies';
@@ -106,7 +107,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
                 <tr key={r.id} data-testid="recon-row" data-status={r.status} className="border-b border-neutral-100 dark:border-neutral-800">
                   <td className="py-2 pr-2">{nameById.get(r.bankAccountId) ?? r.bankAccountId}</td>
                   <td className="py-2 pr-2 tabular-nums">{r.statementDate}</td>
-                  <td className="py-2 pr-2 text-right tabular-nums">{r.statementEndingAmount}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.statementEndingAmount)}</td>
                   <td className="py-2 pr-2">{r.status}</td>
                   <td className="py-2 pr-2"><Link href={`/reconciliation/${r.id}`} data-testid="recon-link" className="underline">Open</Link></td>
                 </tr>

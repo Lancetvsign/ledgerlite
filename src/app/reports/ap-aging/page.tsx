@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { formatMoney } from '@/lib/money-format';
 
 import { getApAging } from '@/server/reports';
 
@@ -66,12 +67,12 @@ export default async function ApAgingPage({
                 aging!.vendors.map((v) => (
                   <tr key={v.vendorId} data-testid="ap-aging-row" className="border-b border-neutral-100 dark:border-neutral-800">
                     <td className="py-2 pr-2">{v.vendorName}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{v.buckets.current}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{v.buckets.d1to30}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{v.buckets.d31to60}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{v.buckets.d61to90}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{v.buckets.d90plus}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{v.total}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.current)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d1to30)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d31to60)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d61to90)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d90plus)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(v.total)}</td>
                   </tr>
                 ))
               )}
@@ -79,11 +80,11 @@ export default async function ApAgingPage({
             <tfoot>
               <tr className="border-t-2 border-neutral-300 font-medium dark:border-neutral-700">
                 <td className="py-2 pr-2">Grand total</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{aging!.totals.current}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{aging!.totals.d1to30}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{aging!.totals.d31to60}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{aging!.totals.d61to90}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{aging!.totals.d90plus}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.current)}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d1to30)}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d31to60)}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d61to90)}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d90plus)}</td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="ap-aging-total">
                   {aging!.totals.total}
                 </td>

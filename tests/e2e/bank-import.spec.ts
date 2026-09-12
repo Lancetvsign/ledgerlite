@@ -88,7 +88,7 @@ test('upload, review (change + ignore), post, and see it in the ledger', async (
   // The canned statement: deposit +1500 (Sales Revenue), Office Depot −120.50 (Office
   // Supplies), rent −2000 (Rent) — suggestions mapped from the extractor's categories.
   await expect(page.getByTestId('import-line-row')).toHaveCount(3);
-  await expect(page.getByTestId('import-amount-0')).toHaveText('1500.0000');
+  await expect(page.getByTestId('import-amount-0')).toHaveText('1,500.00');
   await expect(page.getByTestId('import-account-0')).toHaveValue(/./); // Sales Revenue preselected
   await expect(page.getByTestId('import-account-0').locator('option:checked')).toHaveText('4000 · Sales Revenue');
   await expect(page.getByTestId('import-account-1').locator('option:checked')).toHaveText('6300 · Office Supplies');
@@ -105,7 +105,7 @@ test('upload, review (change + ignore), post, and see it in the ledger', async (
 
   // The ledger reflects it: Checking = +1500 − 120.50 (rent ignored) on the dashboard.
   await page.goto('/dashboard');
-  await expect(page.getByTestId('dashboard-cash')).toHaveText('1379.5000');
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('1,379.50');
   await expect(page.getByTestId('dashboard-recent-row')).toHaveCount(2);
 });
 
@@ -155,9 +155,9 @@ test('applies a deposit to an open invoice and a payment to an open bill (LL-077
   await page.goto(`/bills/${billId}`);
   await expect(page.getByTestId('bill-status')).toHaveText('PAID');
   await page.goto('/dashboard');
-  await expect(page.getByTestId('dashboard-ar')).toHaveText('0.0000');
-  await expect(page.getByTestId('dashboard-ap')).toHaveText('0.0000');
-  await expect(page.getByTestId('dashboard-cash')).toHaveText('1379.5000');
+  await expect(page.getByTestId('dashboard-ar')).toHaveText('0.00');
+  await expect(page.getByTestId('dashboard-ap')).toHaveText('0.00');
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('1,379.50');
 });
 
 test.describe('unauthenticated', () => {

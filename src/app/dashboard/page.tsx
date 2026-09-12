@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { formatMoney } from '@/lib/money-format';
 
 import { listRecentEntries } from '@/server/ledger';
 import {
@@ -81,7 +82,7 @@ export default async function DashboardPage() {
                     {e.description ?? e.sourceType.replace(/_/g, ' ').toLowerCase()}
                     {e.status === 'REVERSED' && <span className="ml-2 text-xs text-neutral-400">reversed</span>}
                   </td>
-                  <td className="py-2 pr-2 text-right tabular-nums">{e.total}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(e.total)}</td>
                 </tr>
               ))}
             </tbody>
@@ -104,7 +105,7 @@ function Stat({ label, value, testid }: { label: string; value: string; testid: 
   return (
     <div className="rounded border border-neutral-200 p-4 dark:border-neutral-800">
       <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums" data-testid={testid}>{value}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums" data-testid={testid}>{formatMoney(value)}</div>
     </div>
   );
 }
