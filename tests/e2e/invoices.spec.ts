@@ -45,7 +45,7 @@ test('draft → finalize → void, end to end', async ({ page }) => {
   await expect(page).toHaveURL(/\/invoices\/[0-9a-f-]{36}$/);
   await expect(page.getByTestId('invoice-status')).toHaveText('DRAFT');
   await expect(page.getByTestId('invoice-customer-name')).toHaveText('Acme LLC');
-  await expect(page.getByTestId('invoice-total')).toHaveText('200.0000');
+  await expect(page.getByTestId('invoice-total')).toHaveText('200.00');
 
   // Finalize — assigns a number, posts to the GL, status → OPEN.
   await page.getByTestId('finalize-invoice').click();

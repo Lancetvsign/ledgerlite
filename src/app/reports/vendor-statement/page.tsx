@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { getVendorStatement } from '@/server/reports';
 import { listVendors } from '@/server/vendors';
@@ -109,7 +110,7 @@ export default async function VendorStatementPage({
 
           <div className="flex justify-between rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-800">
             <span>Opening balance</span>
-            <span className="tabular-nums" data-testid="vendor-statement-opening">{statement.openingBalance}</span>
+            <span className="tabular-nums" data-testid="vendor-statement-opening">{formatMoney(statement.openingBalance)}</span>
           </div>
 
           <table className="w-full border-collapse text-sm" data-testid="vendor-statement-table">
@@ -138,9 +139,9 @@ export default async function VendorStatementPage({
                     <td className="py-2 pr-2 tabular-nums">{l.entryNumber}</td>
                     <td className="py-2 pr-2">{l.sourceType}</td>
                     <td className="py-2 pr-2">{l.description ?? '—'}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{l.charge}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{l.payment}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{l.balance}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(l.charge)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(l.payment)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(l.balance)}</td>
                   </tr>
                 ))
               )}
@@ -149,7 +150,7 @@ export default async function VendorStatementPage({
 
           <div className="flex justify-between rounded bg-neutral-900 px-3 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
             <span>Closing balance</span>
-            <span className="tabular-nums" data-testid="vendor-statement-closing">{statement.closingBalance}</span>
+            <span className="tabular-nums" data-testid="vendor-statement-closing">{formatMoney(statement.closingBalance)}</span>
           </div>
         </section>
       )}

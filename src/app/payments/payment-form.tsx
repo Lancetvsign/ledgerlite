@@ -1,6 +1,7 @@
 'use client';
 
 import Decimal from 'decimal.js';
+import { formatMoney } from '@/lib/money-format';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
@@ -164,7 +165,7 @@ export function PaymentForm({
                 <tr key={inv.id} data-testid="apply-row" className="border-b border-neutral-100 dark:border-neutral-800">
                   <td className="py-1 pr-2">{inv.invoiceNumber ?? '(draft)'}</td>
                   <td className="py-1 pr-2 text-neutral-500">{inv.invoiceDate}</td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{inv.openBalance}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{formatMoney(inv.openBalance)}</td>
                   <td className="py-1 pr-2 text-right">
                     <input type="hidden" name="applyInvoiceId" value={inv.id} />
                     <input type="text" inputMode="decimal" name="applyAmount"
@@ -183,7 +184,7 @@ export function PaymentForm({
           <tfoot>
             <tr className="border-t border-neutral-300 font-medium dark:border-neutral-700">
               <td className="py-2 pr-2 text-right" colSpan={3}>Payment total</td>
-              <td className="py-2 pr-2 text-right" data-testid="payment-total">{total.toFixed(2)}</td>
+              <td className="py-2 pr-2 text-right" data-testid="payment-total">{formatMoney(total)}</td>
             </tr>
           </tfoot>
         </table>

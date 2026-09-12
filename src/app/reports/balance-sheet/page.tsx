@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { formatMoney } from '@/lib/money-format';
 
 import { getBalanceSheet } from '@/server/reports';
 
@@ -69,11 +70,11 @@ export default async function BalanceSheetPage({
             ))}
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Retained earnings (prior years)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-prior-retained">{bs.equity.priorRetainedEarnings}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-prior-retained">{formatMoney(bs.equity.priorRetainedEarnings)}</td>
             </tr>
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Net income (current year)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-current-net-income">{bs.equity.currentNetIncome}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-current-net-income">{formatMoney(bs.equity.currentNetIncome)}</td>
             </tr>
             <SubtotalLine label="Total equity" amount={bs.equity.total} testid="bs-equity-total" />
           </tbody>
@@ -82,7 +83,7 @@ export default async function BalanceSheetPage({
             <tr className="border-t-2 border-neutral-300 font-medium dark:border-neutral-700">
               <td className="py-2 pr-2">Total liabilities &amp; equity</td>
               <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-liabilities-equity-total">
-                {bs.liabilitiesAndEquityTotal}
+                {formatMoney(bs.liabilitiesAndEquityTotal)}
               </td>
             </tr>
           </tfoot>
@@ -123,7 +124,7 @@ function AccountLine({ number, name, amount }: { number: string | null; name: st
       <td className="py-2 pr-2">
         <span className="tabular-nums text-neutral-500">{number ?? '—'}</span> {name}
       </td>
-      <td className="py-2 pr-2 text-right tabular-nums">{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
     </tr>
   );
 }
@@ -132,7 +133,7 @@ function SubtotalLine({ label, amount, testid }: { label: string; amount: string
   return (
     <tr className="border-t border-neutral-300 font-medium dark:border-neutral-700">
       <td className="py-2 pr-2">{label}</td>
-      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{formatMoney(amount)}</td>
     </tr>
   );
 }

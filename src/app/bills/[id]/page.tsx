@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
@@ -105,14 +106,14 @@ export default async function BillDetailPage({
               <td className="py-2 pr-2">{accountName.get(line.accountId) ?? '—'}</td>
               <td className="py-2 pr-2 text-neutral-500">{line.description ?? '—'}</td>
               <td className="py-2 pr-2 text-right tabular-nums">{line.quantity}</td>
-              <td className="py-2 pr-2 text-right tabular-nums">{line.unitPrice}</td>
+              <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(line.unitPrice)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr className="font-medium">
             <td className="py-1 pr-2 text-right" colSpan={3}>Total</td>
-            <td className="py-1 pr-2 text-right tabular-nums" data-testid="bill-total">{bill.total}</td>
+            <td className="py-1 pr-2 text-right tabular-nums" data-testid="bill-total">{formatMoney(bill.total)}</td>
           </tr>
         </tfoot>
       </table>

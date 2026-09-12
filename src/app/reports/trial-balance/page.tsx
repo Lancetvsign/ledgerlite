@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { formatMoney } from '@/lib/money-format';
 
 import { getTrialBalance } from '@/server/reports';
 
@@ -68,9 +69,9 @@ export default async function TrialBalancePage({
                     <td className="py-2 pr-2 tabular-nums">{r.accountNumber ?? '—'}</td>
                     <td className="py-2 pr-2">{r.accountName}</td>
                     <td className="py-2 pr-2 text-neutral-500">{r.accountType}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{r.debits}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{r.credits}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{r.balance}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.debits)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.credits)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.balance)}</td>
                   </tr>
                 ))
               )}
@@ -81,10 +82,10 @@ export default async function TrialBalancePage({
                   Totals
                 </td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="tb-total-debits">
-                  {tb!.totalDebits}
+                  {formatMoney(tb!.totalDebits)}
                 </td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="tb-total-credits">
-                  {tb!.totalCredits}
+                  {formatMoney(tb!.totalCredits)}
                 </td>
                 <td className="py-2 pr-2" />
               </tr>

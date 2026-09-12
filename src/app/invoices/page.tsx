@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listCustomers } from '@/server/customers';
 import { listInvoices } from '@/server/invoices';
@@ -118,7 +119,7 @@ export default async function InvoicesPage({
                 <td className="py-2 pr-2">{customerName.get(invoice.customerId) ?? '—'}</td>
                 <td className="py-2 pr-2 text-neutral-500">{invoice.invoiceDate}</td>
                 <td className="py-2 pr-2">{invoice.status}</td>
-                <td className="py-2 pr-2 text-right tabular-nums">{invoice.total}</td>
+                <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(invoice.total)}</td>
               </tr>
             ))
           )}

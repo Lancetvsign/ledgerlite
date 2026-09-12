@@ -42,8 +42,8 @@ test('reconcile Checking against the statement: pre-ticked imports, zero differe
   await expect(page).toHaveURL(/\/reconciliation\/[0-9a-f-]{36}$/);
 
   await expect(page.getByTestId('recon-status')).toHaveText('IN_PROGRESS');
-  await expect(page.getByTestId('recon-statement')).toHaveText('1379.5000');
-  await expect(page.getByTestId('recon-difference')).toHaveText('1379.5000'); // nothing saved yet
+  await expect(page.getByTestId('recon-statement')).toHaveText('1,379.50');
+  await expect(page.getByTestId('recon-difference')).toHaveText('1,379.50'); // nothing saved yet
   await expect(page.getByTestId('recon-line-row')).toHaveCount(2);
   await expect(page.getByTestId('recon-tick-0')).toBeChecked(); // from statement import → pre-ticked
   await expect(page.getByTestId('recon-tick-1')).toBeChecked();
@@ -51,8 +51,8 @@ test('reconcile Checking against the statement: pre-ticked imports, zero differe
 
   await page.getByTestId('recon-save').click();
   await expect(page.getByTestId('notice')).toContainText('Saved 2 cleared line(s)');
-  await expect(page.getByTestId('recon-here')).toHaveText('1379.5000');
-  await expect(page.getByTestId('recon-difference')).toHaveText('0.0000');
+  await expect(page.getByTestId('recon-here')).toHaveText('1,379.50');
+  await expect(page.getByTestId('recon-difference')).toHaveText('0.00');
   await expect(page.getByTestId('recon-complete')).toBeEnabled();
 
   await page.getByTestId('recon-complete').click();
@@ -75,13 +75,13 @@ test('a wrong statement figure leaves a difference and Complete disabled; correc
   await page.getByTestId('recon-amount').fill('1400.00');
   await page.getByTestId('recon-start').click();
   await page.getByTestId('recon-save').click();
-  await expect(page.getByTestId('recon-difference')).toHaveText('20.5000');
+  await expect(page.getByTestId('recon-difference')).toHaveText('20.50');
   await expect(page.getByTestId('recon-complete')).toBeDisabled();
 
   await page.getByTestId('recon-edit-amount').fill('1379.50');
   await page.getByTestId('recon-update').click();
   await expect(page.getByTestId('notice')).toContainText('Statement details updated');
-  await expect(page.getByTestId('recon-difference')).toHaveText('0.0000');
+  await expect(page.getByTestId('recon-difference')).toHaveText('0.00');
   await expect(page.getByTestId('recon-complete')).toBeEnabled();
 });
 

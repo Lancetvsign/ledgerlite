@@ -59,9 +59,9 @@ test('dashboard shows the headline stats and recent activity', async ({ page }) 
   await page.getByTestId('dashboard-link').click();
   await expect(page).toHaveURL(/\/dashboard/);
 
-  await expect(page.getByTestId('dashboard-cash')).toHaveText('200.0000'); // Checking (CASH)
-  await expect(page.getByTestId('dashboard-ar')).toHaveText('300.0000'); // 500 invoiced − 200 paid
-  await expect(page.getByTestId('dashboard-net-income')).toHaveText('500.0000'); // revenue, no expense
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('200.00'); // Checking (CASH)
+  await expect(page.getByTestId('dashboard-ar')).toHaveText('300.00'); // 500 invoiced − 200 paid
+  await expect(page.getByTestId('dashboard-net-income')).toHaveText('500.00'); // revenue, no expense
 
   // Recent activity lists the postings (the finalized invoice and the payment).
   await expect(page.getByTestId('dashboard-recent-row').first()).toBeVisible();

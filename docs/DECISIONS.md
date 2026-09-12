@@ -2026,3 +2026,36 @@ update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2
 Credit-card (liability) reconciliation, reopening a completed reconciliation, auto-matching candidates
 to imported statement lines, a printable reconciliation report, or coupling to period close is wanted.
 
+## ADR-037 — Money is displayed at two decimals with thousands separators; stored and computed at four
+
+**Status** Accepted · **Added by** LL-079 · **Decided by** product owner
+
+### Context
+
+Every screen rendered money exactly as the database returns it — `1379.5000` — because ADR-004 forbids
+touching a monetary value as a JS number and the cheapest safe rendering was the raw NUMERIC(19,4)
+string. Accountants read `1,379.50`; four decimals look like an error and hide thousands.
+
+### Decision
+
+- One helper, `formatMoney` (`src/lib/money-format.ts`): money string (or Decimal) → `Decimal` →
+  `toFixed(2)` under the global ROUND_HALF_EVEN → thousands separators inserted by string
+  manipulation. Never a JS number, never `Intl.NumberFormat` on a parsed float. `toInputAmount` gives
+  the plain two-decimal form for form defaults (what the validators accept).
+- **Presentation only.** Storage stays NUMERIC(19,4); services return 4-dp strings; every comparison
+  (a zero-difference check, a balance assertion, an over-application guard) uses the raw strings or
+  Decimals. The UI formats at the last moment, in the cell.
+- A rounded display can show cents that do not visibly sum to a rounded total (`0.005 + 0.005` shows as
+  `0.00 + 0.00 = 0.01`); that is inherent to any 2-dp presentation of 4-dp data and is accepted.
+- e2e assertions assert the display form (`1,379.50`); integration tests keep asserting the exact 4-dp
+  strings the services return.
+
+### Consequences
+
+- 24 pages render through the helper; no service, schema, or validator changed.
+
+### Revisit if
+
+A company-level display scale/locale (e.g. `1.379,50`), a currency symbol, or negative-in-parentheses
+accounting style is wanted — all belong in the same helper.
+

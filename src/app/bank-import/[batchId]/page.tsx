@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { formatMoney } from '@/lib/money-format';
 import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
@@ -88,12 +89,12 @@ export default async function ReviewImportPage({
   const vendorName = new Map(vendors.map((v) => [v.id, v.name]));
   const invoiceOptions: DocumentOption[] = openInvoices.map((i) => ({
     id: i.id,
-    label: `${i.invoiceNumber ?? i.id.slice(0, 8)} · ${customerName.get(i.customerId) ?? 'customer'} · open ${i.openBalance}`,
+    label: `${i.invoiceNumber ?? i.id.slice(0, 8)} · ${customerName.get(i.customerId) ?? 'customer'} · open ${formatMoney(i.openBalance)}`,
     openBalance: i.openBalance,
   }));
   const billOptions: DocumentOption[] = openBills.map((b) => ({
     id: b.id,
-    label: `${b.billNumber ?? b.id.slice(0, 8)} · ${vendorName.get(b.vendorId) ?? 'vendor'} · open ${b.openBalance}`,
+    label: `${b.billNumber ?? b.id.slice(0, 8)} · ${vendorName.get(b.vendorId) ?? 'vendor'} · open ${formatMoney(b.openBalance)}`,
     openBalance: b.openBalance,
   }));
 
@@ -166,7 +167,7 @@ export default async function ReviewImportPage({
                       </span>
                     )}
                   </td>
-                  <td className="py-2 pr-2 text-right tabular-nums" data-testid={`import-amount-${String(i)}`}>{l.amount}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums" data-testid={`import-amount-${String(i)}`}>{formatMoney(l.amount)}</td>
                   {s !== null ? (
                     // Every staged row emits lineId, accountId, documentId, action — in this
                     // order, unconditionally — so the action can zip them by index.

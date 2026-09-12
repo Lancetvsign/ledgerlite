@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { formatMoney } from '@/lib/money-format';
 import { getIncomeStatement } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
@@ -85,7 +86,7 @@ export default async function IncomeStatementPage({
 
             <tr className="border-t border-neutral-300 font-medium dark:border-neutral-700">
               <td className="py-2 pr-2">Gross profit</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="is-gross-profit">{is.grossProfit}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="is-gross-profit">{formatMoney(is.grossProfit)}</td>
             </tr>
 
             <SectionHeader label="Operating expenses" />
@@ -97,7 +98,7 @@ export default async function IncomeStatementPage({
           <tfoot>
             <tr className="border-t-2 border-neutral-300 font-semibold dark:border-neutral-700">
               <td className="py-2 pr-2">Net income</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="is-net-income">{is.netIncome}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="is-net-income">{formatMoney(is.netIncome)}</td>
             </tr>
           </tfoot>
         </table>
@@ -122,7 +123,7 @@ function AccountLine({ number, name, amount }: { number: string | null; name: st
       <td className="py-2 pr-2">
         <span className="tabular-nums text-neutral-500">{number ?? '—'}</span> {name}
       </td>
-      <td className="py-2 pr-2 text-right tabular-nums">{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
     </tr>
   );
 }
@@ -131,7 +132,7 @@ function SubtotalLine({ label, amount, testid }: { label: string; amount: string
   return (
     <tr className="border-t border-neutral-300 font-medium dark:border-neutral-700">
       <td className="py-2 pr-2">{label}</td>
-      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{amount}</td>
+      <td className="py-2 pr-2 text-right tabular-nums" data-testid={testid}>{formatMoney(amount)}</td>
     </tr>
   );
 }
