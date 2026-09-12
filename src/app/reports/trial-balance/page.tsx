@@ -82,10 +82,10 @@ export default async function TrialBalancePage({
                   Totals
                 </td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="tb-total-debits">
-                  {tb!.totalDebits}
+                  {formatMoney(tb!.totalDebits)}
                 </td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="tb-total-credits">
-                  {tb!.totalCredits}
+                  {formatMoney(tb!.totalCredits)}
                 </td>
                 <td className="py-2 pr-2" />
               </tr>

@@ -86,7 +86,7 @@ export default async function ApAgingPage({
                 <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d61to90)}</td>
                 <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(aging!.totals.d90plus)}</td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="ap-aging-total">
-                  {aging!.totals.total}
+                  {formatMoney(aging!.totals.total)}
                 </td>
               </tr>
             </tfoot>

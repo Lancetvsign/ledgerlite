@@ -70,11 +70,11 @@ export default async function BalanceSheetPage({
             ))}
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Retained earnings (prior years)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-prior-retained">{bs.equity.priorRetainedEarnings}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-prior-retained">{formatMoney(bs.equity.priorRetainedEarnings)}</td>
             </tr>
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Net income (current year)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-current-net-income">{bs.equity.currentNetIncome}</td>
+              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-current-net-income">{formatMoney(bs.equity.currentNetIncome)}</td>
             </tr>
             <SubtotalLine label="Total equity" amount={bs.equity.total} testid="bs-equity-total" />
           </tbody>
