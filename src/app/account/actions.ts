@@ -5,8 +5,8 @@ import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
-import { setActiveCompany } from '@/server/authorization/company-context';
-import { createCompanyWithOwner } from '@/server/companies';
+import { clearActiveCompanyIf, setActiveCompany } from '@/server/authorization/company-context';
+import { CompanyError, createCompanyWithOwner, deleteCompany } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
@@ -45,4 +45,29 @@ export async function createCompanyAction(formData: FormData): Promise<void> {
   const { company } = await createCompanyWithOwner(userId, parsed.data, chart);
   await setActiveCompany(userId, company.id);
   redirect('/account');
+}
+
+/**
+ * Deletes (archives or purges) a company — LL-082. The service authorizes
+ * (OWNER only) BEFORE comparing the typed name, so a wrong name for a company the
+ * user does not own is the same denial as any other. Every outcome is a redirect
+ * with a notice code; nothing about the company is echoed back.
+ */
+export async function deleteCompanyAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const rawId = formData.get('companyId');
+  const rawName = formData.get('confirmLegalName');
+  const companyId = typeof rawId === 'string' ? rawId : '';
+  const confirmLegalName = typeof rawName === 'string' ? rawName : '';
+
+  let mode: 'archived' | 'purged';
+  try {
+    ({ mode } = await deleteCompany(userId, companyId, { confirmLegalName }));
+  } catch (error) {
+    if (error instanceof CompanyError) redirect(`/account?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect('/account?error=denied');
+    throw error;
+  }
+  await clearActiveCompanyIf(companyId);
+  redirect(`/account?ok=company-${mode}`);
 }

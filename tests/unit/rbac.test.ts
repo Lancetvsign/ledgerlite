@@ -20,6 +20,7 @@ import {
 const EXPECTED: Record<(typeof ROLES)[number], readonly Capability[]> = {
   OWNER: [
     'company.manage',
+    'company.delete',
     'user.manage',
     'account.view',
     'account.manage',

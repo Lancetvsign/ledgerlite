@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
-import { createCompanyWithOwner, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
+import { createCompanyWithOwner, deleteCompany, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createVendor, deactivateVendor, listVendors, updateVendor } from '@/server/vendors';
@@ -70,6 +70,11 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'deactivate (state transition path)',
         expect: 'denied',
         run: (attacker, victim) => requirePermission(attacker, victim.companyId, 'company.manage'),
+      },
+      {
+        operation: 'delete (archive/purge) with the correct legal name',
+        expect: 'denied',
+        run: (attacker, victim) => deleteCompany(attacker, victim.companyId, { confirmLegalName: 'Alpha LLC' }),
       },
       {
         operation: 'list (self-scoped listing must not contain it)',
