@@ -3,7 +3,9 @@ import { expect, test, type Page } from '@playwright/test';
 import { BANK_IMPORT_STORAGE } from './constants';
 
 /**
- * Bank-statement import UI — LL-076a. Drives the real upload → review → post loop with the
+ * Bank-statement import UI — LL-076a.
+ * Post/apply assertions allow 15 s: the action posts several ledger entries (and, for LL-077,
+ * runs the payment cores) on CI's shared Neon compute, which can exceed the 5 s default. Drives the real upload → review → post loop with the
  * extractor stubbed to a canned statement (BANK_IMPORT_TEST_EXTRACTOR=1 on the e2e server;
  * the real AI extractor is non-deterministic and needs a key, so it is never exercised in
  * CI). Asserts the suggested accounts, a per-line change, an ignore, and that the posted
@@ -98,7 +100,7 @@ test('upload, review (change + ignore), post, and see it in the ledger', async (
   await page.getByTestId('import-action-2').selectOption('ignore');
   await page.getByTestId('post-import-lines').click();
 
-  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 1');
+  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 1', { timeout: 15_000 });
   await expect(page.getByTestId('import-status-0')).toHaveText('POSTED');
   await expect(page.getByTestId('import-status-1')).toHaveText('POSTED');
   await expect(page.getByTestId('import-status-2')).toHaveText('IGNORED');
@@ -120,7 +122,7 @@ test('a second upload of the same statement flags duplicates', async ({ page }) 
   };
   await upload();
   await page.getByTestId('post-import-lines').click(); // post all three (suggestions preselected)
-  await expect(page.getByTestId('notice')).toContainText('Posted 3');
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
 
   await upload();
   await expect(page.getByTestId('duplicate-flag')).toHaveCount(3);
@@ -144,8 +146,8 @@ test('applies a deposit to an open invoice and a payment to an open bill (LL-077
 
   await page.getByTestId('import-action-2').selectOption('ignore');
   await page.getByTestId('post-import-lines').click();
-  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 1');
-  await expect(page.getByTestId('notice')).toContainText('2 applied');
+  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 1', { timeout: 15_000 });
+  await expect(page.getByTestId('notice')).toContainText('2 applied', { timeout: 15_000 });
   await expect(page.getByTestId('import-applied-0')).toContainText('applied to payment');
   await expect(page.getByTestId('import-applied-1')).toContainText('applied to bill payment');
 

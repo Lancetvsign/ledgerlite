@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BankImportError } from '@/server/bank-import/errors';
-import { cannedExtractor, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor } from '@/server/bank-import/extract';
+import { buildContextPrompt, cannedExtractor, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor } from '@/server/bank-import/extract';
 import { extractPdfText } from '@/server/bank-import/pdf-text';
 
 const usage = {
@@ -183,3 +183,40 @@ function buildPdf(text: string | null): Uint8Array {
   body += `trailer\n<< /Size ${String(objects.length + 1)} /Root 1 0 R >>\nstartxref\n${String(xrefAt)}\n%%EOF\n`;
   return new Uint8Array(Buffer.from(body, 'latin1'));
 }
+
+describe('chart-aware prompt (LL-080)', () => {
+  it('lists the company chart and its past decisions, and nothing else about the company', () => {
+    const text = buildContextPrompt({
+      accounts: [{ number: '6300', name: 'Office Supplies', type: 'EXPENSE' }, { number: null, name: 'Consulting Sales', type: 'REVENUE' }],
+      examples: [{ description: 'OFFICE DEPOT #1234', account: 'Office Supplies' }],
+    });
+    expect(text).toContain('- 6300 Office Supplies (EXPENSE)');
+    expect(text).toContain('- Consulting Sales (REVENUE)');
+    expect(text).toContain('"OFFICE DEPOT #1234" → Office Supplies');
+    expect(buildContextPrompt(undefined)).toBe('');
+    expect(buildContextPrompt({ accounts: [], examples: [] })).toBe('');
+  });
+
+  it('the model call carries the chart and examples in its prompt', async () => {
+    let prompt = '';
+    const model = new MockLanguageModelV4({
+      doGenerate: (options) => {
+        prompt = JSON.stringify(options.prompt);
+        return Promise.resolve({
+          content: [{ type: 'text' as const, text: '{"transactions":[]}' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage,
+          warnings: [],
+        });
+      },
+    });
+    await createAiExtractor({ model, readText: readStatement })({
+      bytes: BYTES,
+      context: { accounts: [{ number: '6300', name: 'Office Supplies', type: 'EXPENSE' }], examples: [{ description: 'OFFICE DEPOT #1234', account: 'Office Supplies' }] },
+    });
+    expect(prompt).toContain('6300 Office Supplies (EXPENSE)');
+    expect(prompt).toContain('OFFICE DEPOT #1234');
+    expect(prompt).toContain('ACME BANK Statement'); // the statement text still follows
+  });
+});
+

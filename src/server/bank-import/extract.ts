@@ -40,9 +40,34 @@ import type { ExtractedTransaction } from '@/validation/bank-import';
  * mandatory per-line human review is the backstop against a fabricated or altered row; that
  * is why nothing posts un-reviewed.
  */
+/** One chart account the model may categorise to (LL-080). */
+export interface ChartAccountHint {
+  readonly number: string | null;
+  readonly name: string;
+  readonly type: string;
+}
+
+/** A past decision — the account this company posted a similar description to (LL-080). */
+export interface HistoryExample {
+  readonly description: string;
+  readonly account: string;
+}
+
+/**
+ * What the extractor knows about the company (LL-080): its pickable chart and its recent
+ * decisions, so the model proposes one of THESE accounts rather than a free-text category
+ * and follows the company's own precedent. Names/descriptions only — never amounts, never
+ * account ids (§9: the least that lets the model do the job).
+ */
+export interface ExtractionContext {
+  readonly accounts: readonly ChartAccountHint[];
+  readonly examples: readonly HistoryExample[];
+}
+
 export interface ExtractorInput {
   /** The uploaded file, in memory. Never persisted. */
   readonly bytes: Uint8Array;
+  readonly context?: ExtractionContext;
 }
 
 export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractedTransaction[]>;
@@ -88,7 +113,7 @@ const modelOutputSchema = z.object({
       category: z
         .string()
         .optional()
-        .describe('A short bookkeeping category for this line, e.g. "Sales Revenue", "Office Supplies", "Rent", "Utilities", "Bank Fees", "Owner Contribution". Omit if unsure.'),
+        .describe('The account this line belongs to, chosen ONLY from the chart of accounts provided: give that account\'s number or its exact name. Omit if none fits.'),
     }),
   ),
 });
@@ -100,8 +125,26 @@ Rules:
 - amount is a signed decimal STRING with up to 4 decimal places: positive for money coming INTO the account (deposits, credits, refunds), negative for money going OUT (withdrawals, debits, checks, fees, payments).
 - date is YYYY-MM-DD. Infer the year from the statement period when a line shows only the month and day.
 - description is the statement's own text for the line, trimmed.
-- category is a short suggested bookkeeping category; omit it rather than guess wildly.
+- category is the account for the line, chosen ONLY from the company's chart of accounts given below (answer with the account number or its exact name). Follow the company's past decisions when a description matches one. Omit it rather than guess.
 If the text contains no transactions, return an empty list.`;
+
+const MAX_CHART_ACCOUNTS = 300;
+const MAX_HISTORY_EXAMPLES = 60;
+
+/** The company-specific part of the prompt: its chart and its precedent (LL-080). */
+export function buildContextPrompt(context: ExtractionContext | undefined): string {
+  if (context === undefined) return '';
+  const accounts = context.accounts.slice(0, MAX_CHART_ACCOUNTS)
+    .map((a) => `- ${a.number !== null && a.number !== '' ? `${a.number} ` : ''}${a.name} (${a.type})`)
+    .join('\n');
+  const examples = context.examples.slice(0, MAX_HISTORY_EXAMPLES)
+    .map((e) => `- "${e.description}" → ${e.account}`)
+    .join('\n');
+  return (
+    (accounts === '' ? '' : `Chart of accounts (choose category from these only):\n${accounts}\n\n`) +
+    (examples === '' ? '' : `The company's past decisions (statement description → account). Match these first:\n${examples}\n\n`)
+  );
+}
 
 export interface AiExtractorOptions {
   /** The model to call; defaults to `BANK_IMPORT_MODEL` or `DEFAULT_BANK_IMPORT_MODEL` through the gateway. */
@@ -114,15 +157,16 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
   const readText = options.readText ?? extractPdfText;
   const model: LanguageModel = options.model ?? resolveModel();
 
-  return async ({ bytes }) => {
+  return async ({ bytes, context }) => {
     const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
+    const contextPrompt = buildContextPrompt(context);
 
     let output: z.infer<typeof modelOutputSchema>;
     try {
       const result = await generateText({
         model,
         system: SYSTEM_PROMPT,
-        prompt: `Statement text:\n\n${text}`,
+        prompt: `${contextPrompt}Statement text:\n\n${text}`,
         output: Output.object({ schema: modelOutputSchema }),
         // No explicit temperature: some models reject one in structured-output mode, and
         // the gateway surfaces that as an opaque internal error.
