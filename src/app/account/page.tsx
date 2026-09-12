@@ -77,13 +77,6 @@ export default async function AccountPage() {
               New Journal Entry
             </Link>
           )}
-      <dl className="text-sm">
-        <dt className="text-neutral-500">Signed in as</dt>
-        <dd data-testid="account-email" className="font-mono">
-          {appUser.email}
-        </dd>
-      </dl>
-      <CompanyPanel companies={companies} active={active} />
           {roleHasCapability(active.role, 'journal.post') && (
             <Link href="/opening-balances" data-testid="opening-balances-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
               Opening Balances
@@ -106,6 +99,13 @@ export default async function AccountPage() {
           )}
         </nav>
       )}
+      <dl className="text-sm">
+        <dt className="text-neutral-500">Signed in as</dt>
+        <dd data-testid="account-email" className="font-mono">
+          {appUser.email}
+        </dd>
+      </dl>
+      <CompanyPanel companies={companies} active={active} />
       <SignOutButton />
     </main>
   );
