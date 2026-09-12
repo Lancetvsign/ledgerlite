@@ -73,7 +73,17 @@ type PickableAccount = {
   id: string;
   accountNumber: string | null;
   name: string;
+  accountType: string;
 };
+
+/**
+ * The "payee key" of a statement description: lower-cased with reference numbers, dates,
+ * check numbers and punctuation stripped, so `OFFICE DEPOT #1234` and `OFFICE DEPOT #9876`
+ * are the same payee. Mirrors the SQL expression in `suggestFromHistory` exactly.
+ */
+function payeeKey(d: string): string {
+  return d.toLowerCase().replace(/[0-9#*/.:-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 /** Map the extractor's free-text category to a chart account by name or number (case-insensitive). */
 function mapCategory(category: string | undefined, accounts: readonly PickableAccount[]): string | null {
@@ -85,33 +95,59 @@ function mapCategory(category: string | undefined, accounts: readonly PickableAc
 }
 
 /**
- * History fallback: for each statement description, the account this company most often
- * confirmed for it before (over POSTED bank-import lines). Exact, case-insensitive
- * description match — bank descriptions for a recurring payee are usually identical
- * strings. One query for the whole batch; returns normalised description → account id.
+ * What this company decided before (LL-080): for each statement description, the account it
+ * most often POSTED a matching line to — the user's corrections included, because a posted
+ * line's `chosen_account_id` is what they confirmed, not what was suggested. Two matches, in
+ * priority order: the exact (case-insensitive) description, then the payee key. One query
+ * for the whole batch.
  */
+interface HistoryMatch {
+  readonly exact: Map<string, string>;
+  readonly payee: Map<string, string>;
+}
+
 async function suggestFromHistory(
   companyId: string,
   descriptions: readonly string[],
   allowedIds: ReadonlySet<string>,
-): Promise<Map<string, string>> {
-  const keys = [...new Set(descriptions.map(normalizeDescription))];
-  const out = new Map<string, string>();
-  if (keys.length === 0) return out;
-  const rows = await getDb().execute<{ key: string; account_id: string; n: string }>(sql`
-    select lower(trim(description)) as key, chosen_account_id::text as account_id, count(*)::text as n
+): Promise<HistoryMatch> {
+  const exactKeys = [...new Set(descriptions.map(normalizeDescription))];
+  const payeeKeys = [...new Set(descriptions.map(payeeKey).filter((k) => k !== ''))];
+  const out: HistoryMatch = { exact: new Map(), payee: new Map() };
+  if (exactKeys.length === 0) return out;
+  // Same character class as payeeKey(): digits, #, *, /, ., :, hyphen (hyphen last — no escaping games).
+  const PAYEE_SQL = sql`trim(regexp_replace(regexp_replace(lower(description), '[0-9#*/.:-]+', ' ', 'g'), '\\s+', ' ', 'g'))`;
+  const rows = await getDb().execute<{ kind: string; key: string; account_id: string; n: string }>(sql`
+    select 'exact' as kind, lower(trim(description)) as key, chosen_account_id::text as account_id, count(*)::text as n
     from bank_import_lines
-    where company_id = ${companyId}
-      and status = 'POSTED'
-      and chosen_account_id is not null
-      and lower(trim(description)) in (${sql.join(keys.map((k) => sql`${k}`), sql`, `)})
-    group by 1, 2
-    order by 1, count(*) desc, 2`);
-  // Rows arrive most-used first per key; keep the first allowed account for each.
+    where company_id = ${companyId} and status = 'POSTED' and chosen_account_id is not null
+      and lower(trim(description)) in (${sql.join(exactKeys.map((k) => sql`${k}`), sql`, `)})
+    group by 1, 2, 3
+    union all
+    select 'payee' as kind, ${PAYEE_SQL} as key, chosen_account_id::text as account_id, count(*)::text as n
+    from bank_import_lines
+    where company_id = ${companyId} and status = 'POSTED' and chosen_account_id is not null
+      and ${PAYEE_SQL} in (${sql.join((payeeKeys.length === 0 ? [''] : payeeKeys).map((k) => sql`${k}`), sql`, `)})
+    group by 1, 2, 3
+    order by 1, 2, 4 desc, 3`);
+  // Rows arrive most-used first per (kind, key); keep the first allowed account for each.
   for (const r of rows.rows) {
-    if (!out.has(r.key) && allowedIds.has(r.account_id)) out.set(r.key, r.account_id);
+    const target = r.kind === 'exact' ? out.exact : out.payee;
+    if (!target.has(r.key) && allowedIds.has(r.account_id)) target.set(r.key, r.account_id);
   }
   return out;
+}
+
+/** Recent distinct (description → account name) decisions, for the model's examples (LL-080). */
+async function historyExamples(companyId: string, limit = 60): Promise<{ description: string; account: string }[]> {
+  const rows = await getDb().execute<{ description: string; account: string }>(sql`
+    select distinct on (lower(trim(l.description))) l.description, a.name as account
+    from bank_import_lines l
+    join accounts a on a.company_id = l.company_id and a.id = l.chosen_account_id
+    where l.company_id = ${companyId} and l.status = 'POSTED' and l.chosen_account_id is not null and l.description is not null
+    order by lower(trim(l.description)), l.updated_at desc
+    limit ${limit}`);
+  return rows.rows;
 }
 
 /** The ACTIVE accounts a line may be categorised to: not control, not OBE, not the bank account. */
@@ -121,6 +157,7 @@ async function pickableAccounts(companyId: string, bankAccountId: string): Promi
       id: schema.accounts.id,
       accountNumber: schema.accounts.accountNumber,
       name: schema.accounts.name,
+      accountType: schema.accounts.accountType,
       systemAccountType: schema.accounts.systemAccountType,
     })
     .from(schema.accounts)
@@ -131,7 +168,7 @@ async function pickableAccounts(companyId: string, bankAccountId: string): Promi
   return rows
     .filter((a) => a.id !== bankAccountId)
     .filter((a) => a.systemAccountType === null || !EXCLUDED_SYSTEM_TYPES.has(a.systemAccountType))
-    .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name }));
+    .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name, accountType: a.accountType }));
 }
 
 export async function stageImport(
@@ -158,9 +195,18 @@ export async function stageImport(
     throw new BankImportError('INVALID_BANK_ACCOUNT', 'Choose an active cash/bank asset account to import into.');
   }
 
+  // The model gets the company's chart and its recent decisions (LL-080), so it proposes one
+  // of THIS company's accounts and follows the company's precedent.
+  const pickable = await pickableAccounts(companyId, input.bankAccountId);
+  const allowedIds = new Set(pickable.map((a) => a.id));
+  const examples = await historyExamples(companyId);
+
   // Extract, then validate EVERY row — a single malformed row rejects the batch rather than
   // silently dropping a transaction.
-  const raw = await extractor({ bytes: input.fileBytes });
+  const raw = await extractor({
+    bytes: input.fileBytes,
+    context: { accounts: pickable.map((a) => ({ number: a.accountNumber, name: a.name, type: a.accountType })), examples },
+  });
   const parsed = extractedTransactionsSchema.safeParse(raw);
   if (!parsed.success) {
     // Field path + rule only — never the offending value (it is statement content, §9).
@@ -174,10 +220,8 @@ export async function stageImport(
     throw new BankImportError('EXTRACTION_FAILED', 'No transactions were found in the statement.');
   }
 
-  const pickable = await pickableAccounts(companyId, input.bankAccountId);
-  const allowedIds = new Set(pickable.map((a) => a.id));
-
-  // Suggest an account per line: the extractor's category mapped to the chart, else history.
+  // Suggest an account per line — history FIRST (it encodes the user's corrections), the
+  // exact description before the payee key, then the model's chart pick (LL-080).
   type StagedLine = {
     lineNumber: number;
     txnDate: string;
@@ -190,7 +234,11 @@ export async function stageImport(
   const staged: StagedLine[] = [];
   const history = await suggestFromHistory(companyId, txns.map((t) => t.description), allowedIds);
   for (const [i, t] of txns.entries()) {
-    const suggested = mapCategory(t.category, pickable) ?? history.get(normalizeDescription(t.description)) ?? null;
+    const suggested =
+      history.exact.get(normalizeDescription(t.description)) ??
+      history.payee.get(payeeKey(t.description)) ??
+      mapCategory(t.category, pickable) ??
+      null;
     staged.push({
       lineNumber: i + 1,
       txnDate: t.date,

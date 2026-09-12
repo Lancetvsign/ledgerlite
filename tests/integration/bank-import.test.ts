@@ -507,3 +507,69 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
     expect(await balance(c, await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'))).toBe('1500.0000');
   });
 });
+
+describe('stageImport — chart-aware categorisation that learns from corrections (LL-080)', () => {
+  it('hands the extractor the company chart and its past decisions', async () => {
+    const c = await setup();
+    // A prior import where the user CORRECTED the model's suggestion (Supplies → Rent) and posted.
+    const first = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
+      { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Supplies Expense' },
+    ]));
+    const line = (await getImportBatch(c.userId, c.companyId, first.id))!.lines[0]!;
+    expect(line.suggestedAccountId).toBe(c.suppliesId);
+    await postImportLines(c.userId, c.companyId, first.id, { decisions: [{ lineId: line.id, action: 'post', accountId: c.rentId }] });
+
+    let seen: { accounts: readonly { number: string | null; name: string; type: string }[]; examples: readonly { description: string; account: string }[] } | undefined;
+    const spy: TransactionExtractor = (input) => {
+      seen = input.context;
+      return Promise.resolve([{ date: '2026-07-05', description: 'SOMETHING NEW', amount: '-1.00' }]);
+    };
+    await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, spy);
+    expect(seen).toBeDefined();
+    const names = seen!.accounts.map((a) => a.name);
+    expect(names).toEqual(expect.arrayContaining(['Consulting Sales', 'Supplies Expense', 'Rent Expense']));
+    expect(names).not.toContain('Operating Bank'); // the bank account itself is never a category
+    expect(seen!.accounts.find((a) => a.name === 'Rent Expense')?.type).toBe('EXPENSE');
+    expect(seen!.examples).toEqual([{ description: 'MONTHLY RENT PAYMENT', account: 'Rent Expense' }]);
+  });
+
+  it('the company’s past decision wins over the model’s suggestion (learns from corrections)', async () => {
+    const c = await setup();
+    const first = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
+      { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Supplies Expense' },
+    ]));
+    const line = (await getImportBatch(c.userId, c.companyId, first.id))!.lines[0]!;
+    await postImportLines(c.userId, c.companyId, first.id, { decisions: [{ lineId: line.id, action: 'post', accountId: c.rentId }] });
+
+    // Same description again; the model insists on Supplies — history says Rent.
+    const second = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
+      { date: '2026-07-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Supplies Expense' },
+    ]));
+    expect((await getImportBatch(c.userId, c.companyId, second.id))!.lines[0]?.suggestedAccountId).toBe(c.rentId);
+  });
+
+  it('matches a recurring payee whose reference number changes (payee key), exact match first', async () => {
+    const c = await setup();
+    const first = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
+      { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' },
+      { date: '2026-06-04', description: 'CHECK 1042 - ACME', amount: '-50.00' },
+    ]));
+    const [depot, check] = (await getImportBatch(c.userId, c.companyId, first.id))!.lines;
+    await postImportLines(c.userId, c.companyId, first.id, {
+      decisions: [
+        { lineId: depot!.id, action: 'post', accountId: c.suppliesId },
+        { lineId: check!.id, action: 'post', accountId: c.rentId },
+      ],
+    });
+
+    const second = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, fixed([
+      { date: '2026-07-03', description: 'OFFICE DEPOT #9876', amount: '-98.00' }, // new reference number
+      { date: '2026-07-04', description: 'CHECK 1057 - ACME', amount: '-50.00' }, // new check number
+      { date: '2026-07-05', description: 'office depot #1234', amount: '-1.00' }, // exact (case-insensitive)
+      { date: '2026-07-06', description: 'TOTALLY NEW PAYEE', amount: '-1.00', category: 'Consulting Sales' }, // model only
+    ]));
+    const lines = (await getImportBatch(c.userId, c.companyId, second.id))!.lines;
+    expect(lines.map((l) => l.suggestedAccountId)).toEqual([c.suppliesId, c.rentId, c.suppliesId, c.salesId]);
+  });
+});
+

@@ -1908,6 +1908,16 @@ review is the backstop against a fabricated row. Preview deployments carry the O
 perform real, billed extraction. A statement over ~200k characters of text is refused, not truncated.
 Two dependencies added: `ai`, `unpdf`.
 
+**LL-080 — chart-aware categorisation that learns from corrections.** The extractor now receives the
+company's **pickable chart** (number · name · type; control accounts and the bank account excluded) and
+up to 60 recent **past decisions** (statement description → account name, from POSTED import lines —
+i.e. what the user actually chose, corrections included) and is told to pick one of *those* accounts or
+none. Suggestion precedence is **history first**: exact description, then the *payee key* (description
+lower-cased with reference/check numbers, dates and punctuation stripped, so `OFFICE DEPOT #1234` and
+`OFFICE DEPOT #9876` are one payee), then the model's chart pick. Every posted correction therefore
+changes the next import's suggestions without any training step. §9 addendum: account names and past
+payee descriptions (never amounts or ids) are sent to the model alongside the statement text.
+
 ### Consequences
 
 - The ledger's invariants are untouched: imports are ordinary posted entries created only by
