@@ -13,6 +13,7 @@
 
 export const CAPABILITIES = [
   'company.manage',
+  'company.delete',
   'user.manage',
   'account.view',
   'account.manage',
@@ -84,9 +85,13 @@ const EVERYONE = ['OWNER', 'ADMIN', 'BOOKKEEPER', 'ACCOUNTANT', 'READ_ONLY'] as 
 const ALL_WRITERS = ['OWNER', 'ADMIN', 'BOOKKEEPER', 'ACCOUNTANT'] as const;
 const LEDGER_WRITERS = ['OWNER', 'ADMIN', 'ACCOUNTANT'] as const;
 const MANAGERS = ['OWNER', 'ADMIN'] as const;
+const OWNERS = ['OWNER'] as const;
 
 export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   'company.manage': MANAGERS,
+  // Deleting (archiving or purging) a company is the one action reserved to the OWNER
+  // alone: an ADMIN administers the tenant, the OWNER may end it (LL-082 / ADR-038).
+  'company.delete': OWNERS,
   'user.manage': MANAGERS,
   'account.view': EVERYONE,
   'account.manage': LEDGER_WRITERS,
