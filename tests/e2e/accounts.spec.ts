@@ -17,7 +17,7 @@ async function freshCompanyWithChart(page: Page): Promise<void> {
   // The chart select defaults to "standard".
   await page.getByRole('button', { name: 'Create' }).click();
   await expect(page.getByTestId('company-list')).toContainText(name);
-  await page.getByRole('link', { name: 'Chart of Accounts →' }).click();
+  await page.getByRole('link', { name: 'Chart of Accounts' }).click();
   await expect(page).toHaveURL(/\/accounts/);
 }
 

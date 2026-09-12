@@ -41,8 +41,64 @@ export default async function AccountPage() {
   ]);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-4 p-8">
+    <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-6 p-8">
       <h1 className="text-2xl font-semibold">Account</h1>
+      {active !== null && (
+        <nav aria-label="Sections" data-testid="account-nav" className="flex flex-wrap gap-2">
+          <Link href="/dashboard" data-testid="dashboard-link" className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300">
+            Dashboard
+          </Link>
+          <a href="/accounts" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Chart of Accounts
+          </a>
+          <Link href="/customers" data-testid="customers-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Customers
+          </Link>
+          <Link href="/vendors" data-testid="vendors-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Vendors
+          </Link>
+          <Link href="/invoices" data-testid="invoices-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Invoices
+          </Link>
+          <Link href="/payments" data-testid="payments-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Payments
+          </Link>
+          <Link href="/bills" data-testid="bills-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Bills
+          </Link>
+          <Link href="/bill-payments" data-testid="bill-payments-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Bill Payments
+          </Link>
+          <Link href="/reports" data-testid="reports-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Reports
+          </Link>
+          {roleHasCapability(active.role, 'journal.create') && (
+            <Link href="/journal/new" data-testid="new-journal-entry-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+              New Journal Entry
+            </Link>
+          )}
+          {roleHasCapability(active.role, 'journal.post') && (
+            <Link href="/opening-balances" data-testid="opening-balances-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+              Opening Balances
+            </Link>
+          )}
+          {roleHasCapability(active.role, 'period.close') && (
+            <Link href="/year-end" data-testid="year-end-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+              Year-end Close
+            </Link>
+          )}
+          {roleHasCapability(active.role, 'journal.post') && (
+            <Link href="/bank-import" data-testid="bank-import-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+              Bank Import
+            </Link>
+          )}
+          {roleHasCapability(active.role, 'reconciliation.view') && (
+            <Link href="/reconciliation" data-testid="reconciliation-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+              Bank Reconciliation
+            </Link>
+          )}
+        </nav>
+      )}
       <dl className="text-sm">
         <dt className="text-neutral-500">Signed in as</dt>
         <dd data-testid="account-email" className="font-mono">
@@ -50,62 +106,6 @@ export default async function AccountPage() {
         </dd>
       </dl>
       <CompanyPanel companies={companies} active={active} />
-      {active !== null && (
-        <nav className="flex flex-col gap-1">
-          <Link href="/dashboard" data-testid="dashboard-link" className="text-sm font-medium text-neutral-800 underline dark:text-neutral-100">
-            Dashboard →
-          </Link>
-          <a href="/accounts" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Chart of Accounts →
-          </a>
-          <Link href="/customers" data-testid="customers-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Customers →
-          </Link>
-          <Link href="/vendors" data-testid="vendors-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Vendors →
-          </Link>
-          <Link href="/invoices" data-testid="invoices-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Invoices →
-          </Link>
-          <Link href="/payments" data-testid="payments-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Payments →
-          </Link>
-          <Link href="/bills" data-testid="bills-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Bills →
-          </Link>
-          <Link href="/bill-payments" data-testid="bill-payments-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Bill Payments →
-          </Link>
-          <Link href="/reports" data-testid="reports-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-            Reports →
-          </Link>
-          {roleHasCapability(active.role, 'journal.create') && (
-            <Link href="/journal/new" data-testid="new-journal-entry-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-              New Journal Entry →
-            </Link>
-          )}
-          {roleHasCapability(active.role, 'journal.post') && (
-            <Link href="/opening-balances" data-testid="opening-balances-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-              Opening Balances →
-            </Link>
-          )}
-          {roleHasCapability(active.role, 'period.close') && (
-            <Link href="/year-end" data-testid="year-end-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-              Year-end Close →
-            </Link>
-          )}
-          {roleHasCapability(active.role, 'journal.post') && (
-            <Link href="/bank-import" data-testid="bank-import-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-              Bank Import →
-            </Link>
-          )}
-          {roleHasCapability(active.role, 'reconciliation.view') && (
-            <Link href="/reconciliation" data-testid="reconciliation-link" className="text-sm text-neutral-600 underline dark:text-neutral-300">
-              Bank Reconciliation →
-            </Link>
-          )}
-        </nav>
-      )}
       <SignOutButton />
     </main>
   );
