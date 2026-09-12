@@ -2059,3 +2059,46 @@ string. Accountants read `1,379.50`; four decimals look like an error and hide t
 A company-level display scale/locale (e.g. `1.379,50`), a currency symbol, or negative-in-parentheses
 accounting style is wanted — all belong in the same helper.
 
+
+## ADR-038 — Deleting a company archives it when anything was ever recorded; purges it only when nothing was
+
+**Status** Accepted · **Added by** LL-082 · **Decided by** product owner ("make a way to delete a company")
+
+### Context
+
+Financial records must never be silently destroyed (AGENTS.md §4: posted entries are immutable; the
+audit log is append-only at the database — migration 0004 raises on any UPDATE or DELETE, for every
+role). Yet a mistaken or test company must be removable. Every tenant table references `companies`
+with `ON DELETE restrict`, so a physical delete must remove children explicitly, and it is *impossible*
+while a single `audit_events` row exists for the company.
+
+### Decision
+
+- **One service, `deleteCompany(actor, companyId, { confirmLegalName })`**, OWNER-only through a new
+  capability `company.delete` (the first capability held by OWNER and not ADMIN: an admin administers
+  the tenant, the owner may end it). Authorization runs **before** the typed-name comparison, so a
+  mismatch is never an oracle for a company the actor does not own.
+- **Typed confirmation:** the actor retypes the legal name exactly (surrounding whitespace forgiven).
+- **Archive** when the company has any POSTED/REVERSED journal entry **or any audit event**: status →
+  `INACTIVE` inside a transaction, with a `COMPANY_ARCHIVED` audit row written first. Nothing else
+  changes; `requireCompanyMembership` already requires an ACTIVE company, so every service fails closed
+  and every listing hides it. Irreversible from the UI; records retained.
+- **Purge** only when nothing was ever recorded (no postings, no audit trail — i.e. a company created
+  and then untouched): rows deleted children-first in one transaction (`PURGE_ORDER`), then the company.
+  The purge is recorded in the application log by id only; there is no audit row because the company's
+  audit log would be its own victim. An integration test compares `PURGE_ORDER` against
+  `information_schema` so a new tenant table cannot be forgotten.
+- The plan considered purging any company without postings; the append-only audit trigger makes that
+  impossible for a company that has created so much as a customer, and weakening the trigger is not an
+  option (AGENTS.md §4/§5). Archive is the answer for every such company.
+
+### Consequences
+
+- Migration 0034 is expand-only: one enum value. No table, column or trigger changes.
+- An archived company's members lose access instantly; reactivation is a deliberate follow-up, not a
+  toggle.
+
+### Revisit if
+
+Reactivating an archived company, purging archived companies under a retention policy (a reviewed
+migration that lifts the audit trigger), or transferring ownership before deletion is wanted.

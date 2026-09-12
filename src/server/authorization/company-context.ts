@@ -50,3 +50,15 @@ export async function setActiveCompany(userId: string, companyId: string): Promi
     path: '/',
   });
 }
+
+/**
+ * Drops the pointer when it names `companyId` — after a company is deleted (LL-082)
+ * so the next page shows the picker immediately. Purely cosmetic for safety: a
+ * stale pointer already yields NULL above, because the company is no longer ACTIVE.
+ */
+export async function clearActiveCompanyIf(companyId: string): Promise<void> {
+  const jar = await cookies();
+  if (jar.get(ACTIVE_COMPANY_COOKIE)?.value === companyId) {
+    jar.delete(ACTIVE_COMPANY_COOKIE);
+  }
+}

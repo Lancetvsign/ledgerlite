@@ -1,4 +1,6 @@
-import { createCompanyAction, switchCompanyAction } from './actions';
+import { roleHasCapability } from '@/server/rbac';
+
+import { createCompanyAction, deleteCompanyAction, switchCompanyAction } from './actions';
 
 import type { CompanyMembership } from '@/db/schema';
 import type { CompanyView } from '@/server/companies';
@@ -37,14 +39,50 @@ export function CompanyPanel({
                     </span>
                   )}
                 </span>
-                {!isActive && (
-                  <form action={switchCompanyAction}>
-                    <input type="hidden" name="companyId" value={company.id} />
-                    <button type="submit" className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700">
-                      Switch
-                    </button>
-                  </form>
-                )}
+                <span className="flex items-center gap-2">
+                  {!isActive && (
+                    <form action={switchCompanyAction}>
+                      <input type="hidden" name="companyId" value={company.id} />
+                      <button type="submit" className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700">
+                        Switch
+                      </button>
+                    </form>
+                  )}
+                  {roleHasCapability(role, 'company.delete') && (
+                    // Progressive disclosure without client JS: the confirmation form is
+                    // hidden until the owner opens it, and the typed name is compared
+                    // server-side (LL-082).
+                    <details className="relative">
+                      <summary className="cursor-pointer list-none rounded border border-red-300 px-2 py-1 text-xs text-red-700 dark:border-red-800 dark:text-red-300">
+                        Delete…
+                      </summary>
+                      <form
+                        action={deleteCompanyAction}
+                        className="absolute right-0 z-10 mt-1 flex w-72 flex-col gap-2 rounded border border-neutral-300 bg-white p-3 shadow dark:border-neutral-700 dark:bg-neutral-900"
+                      >
+                        <input type="hidden" name="companyId" value={company.id} />
+                        <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                          Type the company name to confirm. A company with posted history is archived
+                          (hidden, records kept); an untouched company is removed.
+                        </p>
+                        <input
+                          name="confirmLegalName"
+                          placeholder="Type the company name to confirm"
+                          autoComplete="off"
+                          required
+                          className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                        />
+                        <button
+                          type="submit"
+                          data-testid="delete-company-confirm"
+                          className="rounded bg-red-700 px-2 py-1 text-xs text-white hover:bg-red-800"
+                        >
+                          Delete company
+                        </button>
+                      </form>
+                    </details>
+                  )}
+                </span>
               </li>
             );
           })}

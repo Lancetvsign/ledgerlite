@@ -1,14 +1,19 @@
 import 'server-only';
 
-import { and, eq } from 'drizzle-orm';
+import { and, count, eq, inArray, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
 import { todayInTimeZone } from '@/lib/dates';
-import { requireCompanyMembership, requirePermission } from '@/server/authorization';
+import { log } from '@/lib/logging';
+import { recordAuditEvent } from '@/server/audit';
+import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
 
 import { installDefaultChart } from '@/server/accounts/internal';
 
+import { CompanyError } from './errors';
 import { insertMembership, selectActiveMembers } from './internal';
+
+export { CompanyError, type CompanyErrorCode } from './errors';
 
 import type { AppUser, Company, CompanyMembership } from '@/db/schema';
 import type { CoaChoice } from '@/server/accounts/default-coa';
@@ -164,3 +169,133 @@ export async function hasActiveMembership(userId: string, companyId: string): Pr
   return rows.length > 0;
 }
 
+
+/**
+ * Tenant-owned tables, CHILDREN FIRST, for the purge path of deleteCompany. Every
+ * table here carries a company_id; the integration suite (company-delete.test.ts)
+ * compares this list against information_schema so a new tenant table cannot be
+ * forgotten. `audit_events` is deliberately absent: it is append-only at the
+ * database (migration 0004), so a company that has ANY audit history can never be
+ * purged — it is archived instead (ADR-038).
+ */
+export const PURGE_ORDER = [
+  'bank_reconciliation_lines',
+  'bank_reconciliations',
+  'bank_import_lines',
+  'bank_import_batches',
+  'payment_applications',
+  'bill_payment_applications',
+  'writeoffs',
+  'credit_memos',
+  'vendor_credits',
+  'payments',
+  'bill_payments',
+  'invoice_lines',
+  'invoices',
+  'bill_lines',
+  'bills',
+  'journal_lines',
+  'journal_entries',
+  'accounting_periods',
+  'company_counters',
+  'accounts',
+  'customers',
+  'vendors',
+  'company_memberships',
+] as const;
+
+export type DeleteCompanyResult = { mode: 'archived' | 'purged' };
+
+/**
+ * Deletes a company — AUTHORIZED (company.delete, OWNER only) — LL-082 / ADR-038.
+ *
+ * Two outcomes, decided inside the transaction under a row lock:
+ * - ARCHIVE when the company has any posted/reversed journal entry OR any audit
+ *   event. Status becomes INACTIVE: it vanishes from every listing and every
+ *   membership check fails closed (requireCompanyMembership requires an ACTIVE
+ *   company), while every row is retained. Financial history is never destroyed.
+ * - PURGE only when nothing has ever been recorded about the company (no postings,
+ *   no audit trail): the rows are physically deleted, children first, in one
+ *   transaction. Because the audit log is append-only at the database, this is
+ *   the only case in which a physical delete is even possible.
+ *
+ * The caller must retype the company's legal name exactly. Authorization runs
+ * BEFORE the name comparison so a mismatch never becomes an oracle for a company
+ * the actor does not own.
+ */
+export async function deleteCompany(
+  actorUserId: string,
+  companyId: string,
+  input: { confirmLegalName: string },
+): Promise<DeleteCompanyResult> {
+  await requirePermission(actorUserId, companyId, 'company.delete');
+
+  return await getDbTx().transaction(async (tx) => {
+    const locked = await tx
+      .select()
+      .from(schema.companies)
+      .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
+      .for('update');
+    const company = locked[0];
+    // Archived (or gone) between the permission check and the lock: same denial
+    // shape as any other missing company — never a distinguishable "already deleted".
+    if (company === undefined) throw new AuthorizationDenied();
+
+    if (input.confirmLegalName.trim() !== company.legalName) {
+      throw new CompanyError('NAME_MISMATCH', 'The typed name does not match the company legal name.');
+    }
+
+    // Every posting takes the company's counter row FOR UPDATE (ADR-003), so holding
+    // it here serialises this decision against in-flight postings: the count below
+    // cannot go stale between "no posted entries" and the purge.
+    await tx
+      .select({ companyId: schema.companyCounters.companyId })
+      .from(schema.companyCounters)
+      .where(eq(schema.companyCounters.companyId, companyId))
+      .for('update');
+
+    const [posted] = await tx
+      .select({ n: count() })
+      .from(schema.journalEntries)
+      .where(
+        and(
+          eq(schema.journalEntries.companyId, companyId),
+          inArray(schema.journalEntries.status, ['POSTED', 'REVERSED']),
+        ),
+      );
+    const [audited] = await tx
+      .select({ n: count() })
+      .from(schema.auditEvents)
+      .where(eq(schema.auditEvents.companyId, companyId));
+    const postedEntries = posted?.n ?? 0;
+    const auditEvents = audited?.n ?? 0;
+
+    if (postedEntries > 0 || auditEvents > 0) {
+      // Audit first, inside the same transaction: a rolled-back archive leaves no
+      // record of an archive that never happened.
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId,
+        action: 'COMPANY_ARCHIVED',
+        entityType: 'company',
+        entityId: companyId,
+        before: { status: company.status },
+        after: { status: 'INACTIVE', postedEntries, auditEvents },
+      });
+      await tx
+        .update(schema.companies)
+        .set({ status: 'INACTIVE', updatedAt: sql`now()` })
+        .where(eq(schema.companies.id, companyId));
+      return { mode: 'archived' };
+    }
+
+    for (const table of PURGE_ORDER) {
+      await tx.execute(sql`delete from ${sql.identifier(table)} where company_id = ${companyId}`);
+    }
+    await tx.delete(schema.companies).where(eq(schema.companies.id, companyId));
+    // Ids only — never the company's name or any content (AGENTS.md §9).
+    log.info('company purged', { companyId, actorUserId, tables: PURGE_ORDER.length });
+    return { mode: 'purged' };
+  });
+}
