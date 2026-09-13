@@ -1930,6 +1930,13 @@ payee descriptions (never amounts or ids) are sent to the model alongside the st
 Reconciliation to open invoices/bills, scanned-PDF (vision/OCR) support, a persisted rules table, CSV/OFX
 intake, or auto-posting of high-confidence lines is wanted.
 
+**Amendment (LL-084):** the model's category text is mapped to an account by
+`src/server/bank-import/categorize.ts` in four tiers (exact name/number → leading or parenthesised
+number token → punctuation-insensitive name equality with "&" ≡ "and" → unique containment). Any
+tier that would identify more than one account answers null: the picker is pre-selected only for an
+unambiguous recommendation, never a guess. Staging logs counts (history / model / unmapped /
+uncategorised) per batch.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner

@@ -18,6 +18,7 @@ import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server
 import { getAccountingPeriod } from '@/server/periods';
 import { extractedTransactionsSchema } from '@/validation/bank-import';
 
+import { mapCategoryToAccount } from './categorize';
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
 
@@ -85,14 +86,6 @@ function payeeKey(d: string): string {
   return d.toLowerCase().replace(/[0-9#*/.:-]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Map the extractor's free-text category to a chart account by name or number (case-insensitive). */
-function mapCategory(category: string | undefined, accounts: readonly PickableAccount[]): string | null {
-  if (category === undefined) return null;
-  const c = category.trim().toLowerCase();
-  if (c === '') return null;
-  const hit = accounts.find((a) => a.name.toLowerCase() === c || (a.accountNumber ?? '').toLowerCase() === c);
-  return hit?.id ?? null;
-}
 
 /**
  * What this company decided before (LL-080): for each statement description, the account it
@@ -233,12 +226,16 @@ export async function stageImport(
   };
   const staged: StagedLine[] = [];
   const history = await suggestFromHistory(companyId, txns.map((t) => t.description), allowedIds);
+  const tally = { history: 0, model: 0, unmapped: 0, uncategorised: 0 };
   for (const [i, t] of txns.entries()) {
-    const suggested =
-      history.exact.get(normalizeDescription(t.description)) ??
-      history.payee.get(payeeKey(t.description)) ??
-      mapCategory(t.category, pickable) ??
-      null;
+    const fromHistory =
+      history.exact.get(normalizeDescription(t.description)) ?? history.payee.get(payeeKey(t.description)) ?? null;
+    const fromModel = fromHistory === null ? mapCategoryToAccount(t.category, pickable) : null;
+    const suggested = fromHistory ?? fromModel;
+    if (fromHistory !== null) tally.history += 1;
+    else if (fromModel !== null) tally.model += 1;
+    else if (t.category === undefined || t.category.trim() === '') tally.uncategorised += 1;
+    else tally.unmapped += 1;
     staged.push({
       lineNumber: i + 1,
       txnDate: t.date,
@@ -249,6 +246,10 @@ export async function stageImport(
       dedupHash: dedupHash(input.bankAccountId, t),
     });
   }
+
+  // Counts only — never a description or category (statement content, §9). `unmapped` is the
+  // signal that the model named something the chart mapping could not resolve.
+  log.info('bank-import: suggestions', { stage: 'suggest', rows: txns.length, ...tally });
 
   return await getDbTx().transaction(async (tx) => {
     const batchRows = await tx
