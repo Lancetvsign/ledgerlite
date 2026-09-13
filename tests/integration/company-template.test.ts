@@ -135,12 +135,14 @@ describe('setCompanyTemplate — designation', () => {
     const stranger = await makeUser();
     const id = await makeCompany(owner);
     await insertMembership(id, admin, 'ADMIN');
-    for (const p of [
-      setCompanyTemplate(admin, id, true),
-      setCompanyTemplate(stranger, id, true),
-      setCompanyTemplate(owner, 'not-a-uuid', true),
+    // Thunks, not promises: an eagerly created rejecting promise awaited later is
+    // an unhandled rejection that fails the vitest run even when every test passes.
+    for (const run of [
+      () => setCompanyTemplate(admin, id, true),
+      () => setCompanyTemplate(stranger, id, true),
+      () => setCompanyTemplate(owner, 'not-a-uuid', true),
     ]) {
-      await expect(p).rejects.toBeInstanceOf(AuthorizationDenied);
+      await expect(run()).rejects.toBeInstanceOf(AuthorizationDenied);
     }
     expect(await hasTemplateCompany()).toBe(false);
   });
