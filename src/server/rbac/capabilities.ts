@@ -176,3 +176,20 @@ export function roleHasCapability(role: Role, capability: Capability): boolean {
 export function capabilitiesForRole(role: Role): ReadonlySet<Capability> {
   return CAPABILITIES_BY_ROLE.get(role) ?? new Set();
 }
+
+/**
+ * The role ceiling (LL-086 / ADR-041): `actor` may grant, change or remove a
+ * membership holding `target` only when every capability `target` holds, `actor`
+ * holds too. Derived from the grant matrix, so it names no role: today OWNER covers
+ * every role, ADMIN covers every role except OWNER (it lacks company.delete and
+ * company.template), and every role covers itself. A future OWNER-only capability
+ * tightens the ceiling automatically. This closes GATE-1 §2 ("ADMIN may grant OWNER").
+ */
+export function roleCovers(actor: Role, target: Role): boolean {
+  const held = CAPABILITIES_BY_ROLE.get(actor);
+  if (held === undefined) return false;
+  for (const capability of capabilitiesForRole(target)) {
+    if (!held.has(capability)) return false;
+  }
+  return true;
+}

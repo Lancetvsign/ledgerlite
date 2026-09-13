@@ -74,3 +74,11 @@ export const RECONCILIATION_USER = {
   password: 'synthetic-password-1',
   name: 'Reconciliation Tester',
 };
+
+/** LL-086 team/members specs — its own session; the spec also signs up an invitee itself. */
+export const MEMBERS_STORAGE = 'tests/e2e/.auth/members.json';
+export const MEMBERS_USER = {
+  email: 'e2e-members@synthetic.test',
+  password: 'synthetic-password-1',
+  name: 'Members Tester',
+};

@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
-import { addMembershipAs } from '@/server/companies';
+import { insertMembership } from '@/server/companies/internal';
 import {
   assertPeriodOpen,
   closePeriod,
@@ -133,7 +133,7 @@ describe('close and reopen', () => {
   it('denies close to a user without period.close', async () => {
     const { user: owner, company } = await makeOwner('o@synthetic.test');
     const reader = await makeUser('r@synthetic.test');
-    await addMembershipAs(owner.id, company.id, reader.id, 'READ_ONLY');
+    await insertMembership(company.id, reader.id, 'READ_ONLY');
     const period = await getAccountingPeriod(company.id, '2026-01-15');
     // READ_ONLY lacks period.close → uniform AuthorizationDenied (not PeriodError)
     await expect(closePeriod(reader.id, company.id, period.id)).rejects.toThrow();

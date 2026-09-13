@@ -6,12 +6,12 @@ import { getDbTx, schema } from '@/db';
 import { todayInTimeZone } from '@/lib/dates';
 import { log } from '@/lib/logging';
 import { recordAuditEvent } from '@/server/audit';
-import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
+import { requireCompanyMembership, requirePermission } from '@/server/authorization';
 
 import { installChartFromTemplate, installDefaultChart } from '@/server/accounts/internal';
 
 import { CompanyError } from './errors';
-import { insertMembership, selectActiveMembers, selectTemplateCompany } from './internal';
+import { lockActiveCompany, selectActiveMembers, selectTemplateCompany } from './internal';
 
 export { CompanyError, type CompanyErrorCode } from './errors';
 
@@ -151,21 +151,6 @@ export async function listMembersForCompany(
   return await selectActiveMembers(companyId);
 }
 
-/**
- * Grants a membership — AUTHORIZED (user.manage). The raw insert lives in
- * ./internal.ts, reachable only from server code; this is the front door the
- * future invite flow uses.
- */
-export async function addMembershipAs(
-  actorUserId: string,
-  companyId: string,
-  targetUserId: string,
-  role: CompanyMembership['role'],
-): Promise<CompanyMembership> {
-  await requirePermission(actorUserId, companyId, 'user.manage');
-  return await insertMembership(companyId, targetUserId, role);
-}
-
 /** The question LL-013's authorization layer will ask on every request. */
 export async function hasActiveMembership(userId: string, companyId: string): Promise<boolean> {
   const rows = await getDbTx()
@@ -214,6 +199,7 @@ export const PURGE_ORDER = [
   'accounts',
   'customers',
   'vendors',
+  'company_invitations',
   'company_memberships',
 ] as const;
 
@@ -245,19 +231,7 @@ async function countPostedEntriesLocked(tx: Tx, companyId: string): Promise<numb
   return posted?.n ?? 0;
 }
 
-/** Locks the ACTIVE company row for the rest of the transaction; missing/archived → denial. */
-async function lockActiveCompany(tx: Tx, companyId: string): Promise<Company> {
-  const locked = await tx
-    .select()
-    .from(schema.companies)
-    .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
-    .for('update');
-  const company = locked[0];
-  // Archived (or gone) between the permission check and the lock: same denial
-  // shape as any other missing company — never a distinguishable "already deleted".
-  if (company === undefined) throw new AuthorizationDenied();
-  return company;
-}
+
 
 /**
  * Deletes a company — AUTHORIZED (company.delete, OWNER only) — LL-082 / ADR-038.
@@ -337,7 +311,7 @@ export async function hasTemplateCompany(): Promise<boolean> {
  * Drizzle carries the constraint name in the CAUSE chain, not the top message —
  * walk it (the same lesson accounts/index.ts records).
  */
-function errorChainText(error: unknown): string {
+export function errorChainText(error: unknown): string {
   const seen = new Set<unknown>();
   let cur: unknown = error;
   let acc = '';

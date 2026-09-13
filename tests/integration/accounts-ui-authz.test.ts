@@ -10,7 +10,8 @@ import { getAuth } from '@/lib/auth';
 import { AccountError, createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { installDefaultChart } from '@/server/accounts/internal';
 import { AuthorizationDenied } from '@/server/authorization';
-import { addMembershipAs, createCompanyWithOwner } from '@/server/companies';
+import { createCompanyWithOwner } from '@/server/companies';
+import { insertMembership } from '@/server/companies/internal';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -38,7 +39,7 @@ describe('READ_ONLY: sees but cannot change (server-enforced)', () => {
     const owner = await makeUser('owner@synthetic.test');
     const viewer = await makeUser('viewer@synthetic.test');
     const { company } = await createCompanyWithOwner(owner.id, COMPANY, 'standard');
-    await addMembershipAs(owner.id, company.id, viewer.id, 'READ_ONLY');
+    await insertMembership(company.id, viewer.id, 'READ_ONLY');
 
     // Sees the chart.
     expect((await listAccounts(viewer.id, company.id)).length).toBeGreaterThan(0);

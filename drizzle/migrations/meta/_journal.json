@@ -253,6 +253,13 @@
       "when": 1789257335896,
       "tag": "0035_company_template",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789306244574,
+      "tag": "0036_members_invitations",
+      "breakpoints": true
     }
   ]
 }

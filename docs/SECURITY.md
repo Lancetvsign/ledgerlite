@@ -69,6 +69,18 @@ capability question is unanswerable without a role, and a role only exists insid
 ACTIVE membership in one company. OWNER of Company A is nobody in Company B. LL-013
 enforces that end to end.
 
+**The role ceiling (LL-086 / ADR-041).** Team management (`user.manage`: OWNER, ADMIN) may
+grant, change or remove only roles whose capability set is a subset of the actor's own —
+`roleCovers(actor, target)` in the rbac module, derived from the grant matrix, so no role
+name is compared anywhere. Today that means an ADMIN cannot make anyone OWNER nor touch an
+existing OWNER (OWNER alone holds `company.delete` and `company.template`); any future
+OWNER-only capability tightens the ceiling automatically. A ceiling failure is the same
+uniform denial as no membership. The mirror rule protects the company: a change or removal
+is refused (`LAST_OWNER`) when no other active member would still cover the affected role.
+Invitations for emails without an account are claimed on that email's first entry; the
+invitation row — created under `user.manage` — is the authorization, and the inviter is the
+audit actor of record.
+
 ## The authorization layer (LL-013)
 
 ```ts

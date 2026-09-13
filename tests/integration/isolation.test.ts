@@ -40,6 +40,7 @@ import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
 import { insertMembership } from '@/server/companies/internal';
+import { changeMemberRole, inviteMember, listInvitations, removeMember, revokeInvitation } from '@/server/members';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { attack, type IsolationContext, type IsolationDescriptor } from '../helpers/isolation';
@@ -120,9 +121,42 @@ const REGISTRY: IsolationDescriptor[] = [
         },
       },
       {
+        operation: 'change a membership role (state transition)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => changeMemberRole(attacker, victim.companyId, recordId, 'READ_ONLY'),
+      },
+      {
         operation: 'deactivate a membership (state transition)',
         expect: 'denied',
-        run: (attacker, victim) => requirePermission(attacker, victim.companyId, 'user.manage'),
+        run: (attacker, victim, recordId) => removeMember(attacker, victim.companyId, recordId),
+      },
+    ],
+  },
+  {
+    table: 'company_invitations',
+    seed: async (victim) => {
+      const r = await inviteMember(victim.ownerUserId, victim.companyId, {
+        email: `ghost-${victim.companyId.slice(0, 8)}@synthetic.test`,
+        role: 'BOOKKEEPER',
+      });
+      if (r.mode !== 'invited') throw new Error('expected a pending invitation');
+      return { recordId: r.invitationId };
+    },
+    attempts: [
+      {
+        operation: 'list pending invitations',
+        expect: 'denied',
+        run: (attacker, victim) => listInvitations(attacker, victim.companyId),
+      },
+      {
+        operation: 'revoke an invitation by direct id',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => revokeInvitation(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'invite someone into the victim company',
+        expect: 'denied',
+        run: (attacker, victim) => inviteMember(attacker, victim.companyId, { email: 'intruder@synthetic.test', role: 'OWNER' }),
       },
     ],
   },
