@@ -101,10 +101,8 @@ describe('inviteMember', () => {
 
     const r = await invite(owner, companyId, 'Keeper@Synthetic.test', 'BOOKKEEPER');
     expect(r.mode).toBe('added');
-    expect((await listMembers(keeper.id, companyId)).map((m) => [m.email, m.role])).toEqual([
-      [keeper.email, 'BOOKKEEPER'],
-      [owner.email, 'OWNER'],
-    ].sort());
+    const roster = (await listMembers(keeper.id, companyId)).map((m) => `${m.email}:${m.role}`).sort();
+    expect(roster).toEqual([`${keeper.email}:BOOKKEEPER`, `${owner.email}:OWNER`].sort());
     expect((await audits(companyId)).filter((a) => a.action === 'MEMBER_ADDED')).toEqual([
       { action: 'MEMBER_ADDED', actor: owner.id, entity: r.mode === 'added' ? r.membershipId : '' },
     ]);
