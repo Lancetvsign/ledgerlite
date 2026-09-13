@@ -4,6 +4,8 @@
  */
 export type LedgerErrorCode =
   | 'COMPANY_NOT_FOUND'
+  /** The master template company never posts: it exists to be copied (LL-083). */
+  | 'TEMPLATE_COMPANY'
   | 'INACTIVE_ACCOUNT'
   | 'ACCOUNT_NOT_FOUND'
   | 'PERIOD_CLOSED'

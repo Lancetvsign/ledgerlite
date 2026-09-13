@@ -8,16 +8,16 @@ import { log } from '@/lib/logging';
 import { recordAuditEvent } from '@/server/audit';
 import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
 
-import { installDefaultChart } from '@/server/accounts/internal';
+import { installChartFromTemplate, installDefaultChart } from '@/server/accounts/internal';
 
 import { CompanyError } from './errors';
-import { insertMembership, selectActiveMembers } from './internal';
+import { insertMembership, selectActiveMembers, selectTemplateCompany } from './internal';
 
 export { CompanyError, type CompanyErrorCode } from './errors';
 
 import type { AppUser, Company, CompanyMembership } from '@/db/schema';
 import type { CoaChoice } from '@/server/accounts/default-coa';
-import type { CreateCompanyInput } from '@/validation/company';
+import type { CreateCompanyInput, UpdateCompanySettingsInput } from '@/validation/company';
 
 /**
  * What services RETURN for a company. `ein` is deliberately not here: the
@@ -42,12 +42,23 @@ function toView(company: Company): CompanyView {
  * create a company and becomes its OWNER. What OWNER may *do* is LL-012's
  * capability model; company-scoped authorization for everything else is LL-013.
  */
+export type ChartSource = CoaChoice | 'template';
+
 export async function createCompanyWithOwner(
   ownerUserId: string,
   input: CreateCompanyInput,
-  chart?: CoaChoice,
+  chart?: ChartSource,
 ): Promise<{ company: CompanyView; membership: CompanyMembership }> {
   return await getDbTx().transaction(async (tx) => {
+    // 'template' (LL-083 / ADR-039): the master company's chart AND its three
+    // settings are copied; the input's fiscalYearStartMonth/currencyCode/timezone
+    // are ignored on purpose (Zod defaults make "explicitly provided" undetectable,
+    // and the create form collects none of them).
+    const template = chart === 'template' ? await selectTemplateCompany(tx) : undefined;
+    if (chart === 'template' && template === undefined) {
+      throw new CompanyError('NO_TEMPLATE', 'No master template company is designated.');
+    }
+
     const companies = await tx
       .insert(schema.companies)
       .values({
@@ -56,9 +67,9 @@ export async function createCompanyWithOwner(
         email: input.email,
         phone: input.phone,
         address: input.address,
-        fiscalYearStartMonth: input.fiscalYearStartMonth,
-        currencyCode: input.currencyCode,
-        timezone: input.timezone,
+        fiscalYearStartMonth: template?.fiscalYearStartMonth ?? input.fiscalYearStartMonth,
+        currencyCode: template?.currencyCode ?? input.currencyCode,
+        timezone: template?.timezone ?? input.timezone,
       })
       .returning();
 
@@ -82,7 +93,9 @@ export async function createCompanyWithOwner(
     // Omitted (undefined) installs nothing — the company is still valid, and a
     // setup screen can install later via installDefaultChartFor. When a chart
     // IS chosen, the required system accounts arrive atomically with the company.
-    if (chart !== undefined) {
+    if (template !== undefined) {
+      await installChartFromTemplate(company.id, template.id, tx);
+    } else if (chart !== undefined && chart !== 'template') {
       await installDefaultChart(company.id, chart, tx);
     }
 
@@ -206,6 +219,46 @@ export const PURGE_ORDER = [
 
 export type DeleteCompanyResult = { mode: 'archived' | 'purged' };
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDbTx>['transaction']>[0]>[0];
+
+/**
+ * Locks the company's counter row and counts its POSTED/REVERSED entries. Every
+ * posting takes that counter row FOR UPDATE (ADR-003), so holding it serialises
+ * the caller's decision against in-flight postings: the count cannot go stale
+ * between "no posted entries" and whatever the caller does next.
+ */
+async function countPostedEntriesLocked(tx: Tx, companyId: string): Promise<number> {
+  await tx
+    .select({ companyId: schema.companyCounters.companyId })
+    .from(schema.companyCounters)
+    .where(eq(schema.companyCounters.companyId, companyId))
+    .for('update');
+  const [posted] = await tx
+    .select({ n: count() })
+    .from(schema.journalEntries)
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, companyId),
+        inArray(schema.journalEntries.status, ['POSTED', 'REVERSED']),
+      ),
+    );
+  return posted?.n ?? 0;
+}
+
+/** Locks the ACTIVE company row for the rest of the transaction; missing/archived → denial. */
+async function lockActiveCompany(tx: Tx, companyId: string): Promise<Company> {
+  const locked = await tx
+    .select()
+    .from(schema.companies)
+    .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
+    .for('update');
+  const company = locked[0];
+  // Archived (or gone) between the permission check and the lock: same denial
+  // shape as any other missing company — never a distinguishable "already deleted".
+  if (company === undefined) throw new AuthorizationDenied();
+  return company;
+}
+
 /**
  * Deletes a company — AUTHORIZED (company.delete, OWNER only) — LL-082 / ADR-038.
  *
@@ -231,43 +284,17 @@ export async function deleteCompany(
   await requirePermission(actorUserId, companyId, 'company.delete');
 
   return await getDbTx().transaction(async (tx) => {
-    const locked = await tx
-      .select()
-      .from(schema.companies)
-      .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
-      .for('update');
-    const company = locked[0];
-    // Archived (or gone) between the permission check and the lock: same denial
-    // shape as any other missing company — never a distinguishable "already deleted".
-    if (company === undefined) throw new AuthorizationDenied();
+    const company = await lockActiveCompany(tx, companyId);
 
     if (input.confirmLegalName.trim() !== company.legalName) {
       throw new CompanyError('NAME_MISMATCH', 'The typed name does not match the company legal name.');
     }
 
-    // Every posting takes the company's counter row FOR UPDATE (ADR-003), so holding
-    // it here serialises this decision against in-flight postings: the count below
-    // cannot go stale between "no posted entries" and the purge.
-    await tx
-      .select({ companyId: schema.companyCounters.companyId })
-      .from(schema.companyCounters)
-      .where(eq(schema.companyCounters.companyId, companyId))
-      .for('update');
-
-    const [posted] = await tx
-      .select({ n: count() })
-      .from(schema.journalEntries)
-      .where(
-        and(
-          eq(schema.journalEntries.companyId, companyId),
-          inArray(schema.journalEntries.status, ['POSTED', 'REVERSED']),
-        ),
-      );
+    const postedEntries = await countPostedEntriesLocked(tx, companyId);
     const [audited] = await tx
       .select({ n: count() })
       .from(schema.auditEvents)
       .where(eq(schema.auditEvents.companyId, companyId));
-    const postedEntries = posted?.n ?? 0;
     const auditEvents = audited?.n ?? 0;
 
     if (postedEntries > 0 || auditEvents > 0) {
@@ -283,9 +310,10 @@ export async function deleteCompany(
         before: { status: company.status },
         after: { status: 'INACTIVE', postedEntries, auditEvents },
       });
+      // An archived template releases the single template slot (LL-083).
       await tx
         .update(schema.companies)
-        .set({ status: 'INACTIVE', updatedAt: sql`now()` })
+        .set({ status: 'INACTIVE', isTemplate: false, updatedAt: sql`now()` })
         .where(eq(schema.companies.id, companyId));
       return { mode: 'archived' };
     }
@@ -297,5 +325,130 @@ export async function deleteCompany(
     // Ids only — never the company's name or any content (AGENTS.md §9).
     log.info('company purged', { companyId, actorUserId, tables: PURGE_ORDER.length });
     return { mode: 'purged' };
+  });
+}
+
+/** Whether a master template company is designated — a boolean only, no identity (LL-083). */
+export async function hasTemplateCompany(): Promise<boolean> {
+  return (await selectTemplateCompany()) !== undefined;
+}
+
+/**
+ * Drizzle carries the constraint name in the CAUSE chain, not the top message —
+ * walk it (the same lesson accounts/index.ts records).
+ */
+function errorChainText(error: unknown): string {
+  const seen = new Set<unknown>();
+  let cur: unknown = error;
+  let acc = '';
+  while (cur instanceof Error && !seen.has(cur)) {
+    seen.add(cur);
+    acc += ' ' + cur.message;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return acc;
+}
+
+/**
+ * Designates (`on`) or releases (`!on`) the master template — AUTHORIZED
+ * (company.template, OWNER only) — LL-083 / ADR-039.
+ *
+ * - At most one template instance-wide: the partial unique index
+ *   companies_one_template arbitrates; a loser surfaces as TEMPLATE_EXISTS.
+ * - A template never holds history: designation refuses a company with any
+ *   POSTED/REVERSED entry (counted under the counter lock), and the ledger refuses
+ *   to post into a template. Together the template has zero entries, always.
+ * - Releasing a non-template is a no-op (idempotent, no audit row).
+ */
+export async function setCompanyTemplate(
+  actorUserId: string,
+  companyId: string,
+  on: boolean,
+): Promise<CompanyView> {
+  await requirePermission(actorUserId, companyId, 'company.template');
+
+  try {
+    return await getDbTx().transaction(async (tx) => {
+      const company = await lockActiveCompany(tx, companyId);
+      if (company.isTemplate === on) return toView(company);
+
+      if (on) {
+        const posted = await countPostedEntriesLocked(tx, companyId);
+        if (posted > 0) {
+          throw new CompanyError('TEMPLATE_HAS_POSTINGS', 'A company with posted history cannot be the template.');
+        }
+      }
+
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId,
+        action: 'COMPANY_UPDATED',
+        entityType: 'company',
+        entityId: companyId,
+        before: { isTemplate: company.isTemplate },
+        after: { isTemplate: on },
+      });
+      const rows = await tx
+        .update(schema.companies)
+        .set({ isTemplate: on, updatedAt: sql`now()` })
+        .where(eq(schema.companies.id, companyId))
+        .returning();
+      const updated = rows[0];
+      if (updated === undefined) throw new Error('company update returned no row');
+      return toView(updated);
+    });
+  } catch (error) {
+    if (/companies_one_template/.test(errorChainText(error))) {
+      throw new CompanyError('TEMPLATE_EXISTS', 'Another company is already the master template.');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Updates the "typical settings" (fiscal year start, currency, timezone) —
+ * AUTHORIZED (company.manage) — LL-083. Refused once the company has posted
+ * history (SETTINGS_LOCKED): the fiscal-year start drives period boundaries and
+ * the year-end close, and a currency change under history would misstate every
+ * figure. In practice this edits the template company; the UI offers it there only.
+ */
+export async function updateCompanySettings(
+  actorUserId: string,
+  companyId: string,
+  input: UpdateCompanySettingsInput,
+): Promise<CompanyView> {
+  await requirePermission(actorUserId, companyId, 'company.manage');
+
+  return await getDbTx().transaction(async (tx) => {
+    const company = await lockActiveCompany(tx, companyId);
+    const posted = await countPostedEntriesLocked(tx, companyId);
+    if (posted > 0) {
+      throw new CompanyError('SETTINGS_LOCKED', 'Settings cannot change once the company has posted entries.');
+    }
+
+    const before = {
+      fiscalYearStartMonth: company.fiscalYearStartMonth,
+      currencyCode: company.currencyCode,
+      timezone: company.timezone,
+    };
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'COMPANY_UPDATED',
+      entityType: 'company',
+      entityId: companyId,
+      before,
+      after: { ...input },
+    });
+    const rows = await tx
+      .update(schema.companies)
+      .set({ ...input, updatedAt: sql`now()` })
+      .where(eq(schema.companies.id, companyId))
+      .returning();
+    const updated = rows[0];
+    if (updated === undefined) throw new Error('company update returned no row');
+    return toView(updated);
   });
 }

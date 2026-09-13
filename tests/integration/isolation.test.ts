@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
 import { requireCompanyMembership, requirePermission } from '@/server/authorization';
-import { createCompanyWithOwner, deleteCompany, listCompaniesForUser, listMembersForCompany } from '@/server/companies';
+import { createCompanyWithOwner, deleteCompany, listCompaniesForUser, listMembersForCompany, setCompanyTemplate, updateCompanySettings } from '@/server/companies';
 import { createAccount, deactivateAccount, listAccounts, updateAccount } from '@/server/accounts';
 import { createCustomer, deactivateCustomer, listCustomers, updateCustomer } from '@/server/customers';
 import { createVendor, deactivateVendor, listVendors, updateVendor } from '@/server/vendors';
@@ -75,6 +75,17 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'delete (archive/purge) with the correct legal name',
         expect: 'denied',
         run: (attacker, victim) => deleteCompany(attacker, victim.companyId, { confirmLegalName: 'Alpha LLC' }),
+      },
+      {
+        operation: 'designate as the master template',
+        expect: 'denied',
+        run: (attacker, victim) => setCompanyTemplate(attacker, victim.companyId, true),
+      },
+      {
+        operation: 'edit settings',
+        expect: 'denied',
+        run: (attacker, victim) =>
+          updateCompanySettings(attacker, victim.companyId, { fiscalYearStartMonth: 6, currencyCode: 'EUR', timezone: 'UTC' }),
       },
       {
         operation: 'list (self-scoped listing must not contain it)',

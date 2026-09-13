@@ -28,6 +28,11 @@ function isResolvableTimezone(tz: string): boolean {
   }
 }
 
+/** A resolvable IANA timezone — shared by creation and the settings editor. */
+export const timezoneInput = z.string().refine(isResolvableTimezone, {
+  message: 'Timezone must be a valid IANA identifier, e.g. America/Chicago.',
+});
+
 export const createCompanyInput = z.object({
   legalName: z
     .string()
@@ -47,9 +52,26 @@ export const createCompanyInput = z.object({
     .string()
     .regex(/^[A-Z]{3}$/, 'Currency must be a three-letter uppercase ISO 4217 code.')
     .default('USD'),
-  timezone: z.string().refine(isResolvableTimezone, {
-    message: 'Timezone must be a valid IANA identifier, e.g. America/Chicago.',
-  }),
+  timezone: timezoneInput,
 });
 
 export type CreateCompanyInput = z.infer<typeof createCompanyInput>;
+
+/**
+ * The "typical settings" a company carries (LL-083). Arrives from a form, so the
+ * month is coerced from its string form — this is a calendar month, never money.
+ */
+export const updateCompanySettingsInput = z.object({
+  fiscalYearStartMonth: z.coerce
+    .number()
+    .int('Fiscal year start month must be a whole number.')
+    .min(1, 'Fiscal year start month must be between 1 and 12.')
+    .max(12, 'Fiscal year start month must be between 1 and 12.'),
+  currencyCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{3}$/, 'Currency must be a three-letter uppercase ISO 4217 code.'),
+  timezone: timezoneInput,
+});
+
+export type UpdateCompanySettingsInput = z.infer<typeof updateCompanySettingsInput>;

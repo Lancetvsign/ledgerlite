@@ -112,7 +112,7 @@ export async function postEntryCore(
 ): Promise<PostedEntry> {
   // ---- 2. Company exists and is active --------------------------------------
   const company = await tx
-    .select({ id: schema.companies.id })
+    .select({ id: schema.companies.id, isTemplate: schema.companies.isTemplate })
     .from(schema.companies)
     .where(
       and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
@@ -120,6 +120,11 @@ export async function postEntryCore(
     .limit(1);
   if (company[0] === undefined) {
     throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
+  // The master template never accumulates history — it exists to be copied
+  // (LL-083 / ADR-039). Every document path funnels through here.
+  if (company[0].isTemplate) {
+    throw new LedgerError('TEMPLATE_COMPANY', 'The master template company cannot post entries.');
   }
 
   // ---- 3. Every account exists, belongs here, and is active -----------------

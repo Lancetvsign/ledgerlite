@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createCompanyInput } from '@/validation/company';
+import { createCompanyInput, updateCompanySettingsInput } from '@/validation/company';
 
 const VALID = {
   legalName: 'Synthetic Coffee LLC',
@@ -42,5 +42,26 @@ describe('createCompanyInput', () => {
     const parsed = createCompanyInput.parse({ ...VALID });
     expect('ein' in parsed).toBe(false);
     expect(Object.keys(createCompanyInput.shape)).not.toContain('ein');
+  });
+});
+
+describe('updateCompanySettingsInput (LL-083)', () => {
+  const VALID_SETTINGS = { fiscalYearStartMonth: '7', currencyCode: 'CAD', timezone: 'America/Toronto' };
+
+  it('accepts form strings and coerces the month (a calendar month, never money)', () => {
+    const parsed = updateCompanySettingsInput.parse(VALID_SETTINGS);
+    expect(parsed).toEqual({ fiscalYearStartMonth: 7, currencyCode: 'CAD', timezone: 'America/Toronto' });
+  });
+
+  it.each([
+    ['month 0', { ...VALID_SETTINGS, fiscalYearStartMonth: '0' }],
+    ['month 13', { ...VALID_SETTINGS, fiscalYearStartMonth: '13' }],
+    ['fractional month', { ...VALID_SETTINGS, fiscalYearStartMonth: '1.5' }],
+    ['non-numeric month', { ...VALID_SETTINGS, fiscalYearStartMonth: 'July' }],
+    ['lowercase currency', { ...VALID_SETTINGS, currencyCode: 'cad' }],
+    ['invented timezone', { ...VALID_SETTINGS, timezone: 'Mars/Olympus_Mons' }],
+    ['missing timezone', { fiscalYearStartMonth: '1', currencyCode: 'USD' }],
+  ])('rejects %s', (_label, input) => {
+    expect(updateCompanySettingsInput.safeParse(input).success).toBe(false);
   });
 });

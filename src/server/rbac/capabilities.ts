@@ -14,6 +14,7 @@
 export const CAPABILITIES = [
   'company.manage',
   'company.delete',
+  'company.template',
   'user.manage',
   'account.view',
   'account.manage',
@@ -92,6 +93,9 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   // Deleting (archiving or purging) a company is the one action reserved to the OWNER
   // alone: an ADMIN administers the tenant, the OWNER may end it (LL-082 / ADR-038).
   'company.delete': OWNERS,
+  // Designating (or releasing) the master template company changes what every future
+  // company in the instance receives — OWNER only, like deletion (LL-083 / ADR-039).
+  'company.template': OWNERS,
   'user.manage': MANAGERS,
   'account.view': EVERYONE,
   'account.manage': LEDGER_WRITERS,

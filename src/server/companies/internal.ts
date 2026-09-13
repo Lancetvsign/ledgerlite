@@ -4,7 +4,10 @@ import { and, eq } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
 
-import type { AppUser, CompanyMembership } from '@/db/schema';
+import type { AppUser, Company, CompanyMembership } from '@/db/schema';
+import type { PoolDatabase } from '@/db';
+
+type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
 
 /**
  * UNAUTHORIZED-BY-DEFAULT repository operations. Importable ONLY from
@@ -45,4 +48,22 @@ export async function selectActiveMembers(
         eq(schema.companyMemberships.status, 'ACTIVE'),
       ),
     );
+}
+
+/**
+ * The master template company, if one is designated (LL-083 / ADR-039).
+ *
+ * THE ONE UNAUTHORIZED COMPANY READ, BY DESIGN: company creation copies the
+ * template before the creator holds any capability anywhere. Structurally
+ * limited to the row flagged is_template (at most one, by partial unique
+ * index) and ACTIVE. Never reachable from src/app/** (fence); the app layer
+ * learns only a boolean through hasTemplateCompany().
+ */
+export async function selectTemplateCompany(executor?: Tx): Promise<Company | undefined> {
+  const rows = await (executor ?? getDbTx())
+    .select()
+    .from(schema.companies)
+    .where(and(eq(schema.companies.isTemplate, true), eq(schema.companies.status, 'ACTIVE')))
+    .limit(1);
+  return rows[0];
 }

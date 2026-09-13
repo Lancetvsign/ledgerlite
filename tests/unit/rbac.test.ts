@@ -21,6 +21,7 @@ const EXPECTED: Record<(typeof ROLES)[number], readonly Capability[]> = {
   OWNER: [
     'company.manage',
     'company.delete',
+    'company.template',
     'user.manage',
     'account.view',
     'account.manage',
