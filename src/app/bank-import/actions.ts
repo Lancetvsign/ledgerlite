@@ -6,12 +6,13 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, postImportLines, stageImport } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, postImportLines, stageImport } from '@/server/bank-import';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
 import { postImportLinesInput, stageImportInput } from '@/validation/bank-import';
+import { isUuid } from '@/lib/uuid';
 
 /**
  * Bank-import actions — LL-076. The company comes from the server-authorized session context
@@ -110,4 +111,19 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   redirect(
     `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}`,
   );
+}
+
+/** Deletes an uploaded statement that has posted nothing — LL-087. */
+export async function deleteImportBatchAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  try {
+    await deleteImportBatch(userId, companyId, batchId);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    throw error;
+  }
+  redirect('/bank-import?ok=deleted');
 }

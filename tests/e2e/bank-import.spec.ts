@@ -129,6 +129,7 @@ test('a second upload of the same statement flags duplicates', async ({ page }) 
 });
 
 test('applies a deposit to an open invoice and a payment to an open bill (LL-077)', async ({ page }) => {
+  test.slow(); // eight screens end to end; CI's shared compute makes 30s too tight
   await freshCompany(page);
   await addCustomer(page, 'Acme Corp');
   const invoiceId = await openInvoice(page, 'Acme Corp', '1500.00'); // matches the +1500 deposit
@@ -168,4 +169,25 @@ test.describe('unauthenticated', () => {
     await page.goto('/bank-import');
     await expect(page).toHaveURL(/\/sign-in/);
   });
+});
+
+test('a mistaken upload can be deleted until something posts (LL-087)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  const reviewUrl = page.url();
+  await page.locator('summary', { hasText: 'Delete this import' }).click();
+  await page.getByTestId('delete-import-batch').click();
+  await expect(page).toHaveURL(/\/bank-import\?ok=deleted$/);
+  await expect(page.getByTestId('notice')).toContainText('Import deleted');
+  await expect(page.getByTestId('no-batches')).toBeVisible();
+  await page.goto(reviewUrl);
+  await expect(page.getByTestId('notice')).toContainText('does not exist');
+
+  // Once a line has posted, the control is gone and the service refuses.
+  await uploadStatement(page);
+  await page.getByTestId('import-action-1').selectOption('ignore');
+  await page.getByTestId('import-action-2').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
+  await expect(page.getByTestId('delete-import-batch')).toHaveCount(0);
 });

@@ -23,7 +23,7 @@ export const dynamic = 'force-dynamic';
 export default async function BankImportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -34,6 +34,7 @@ export default async function BankImportPage({
 
   const params = await searchParams;
   const notice = noticeFrom(params.error);
+  const ok = params.ok === 'deleted' ? 'Import deleted. Nothing had posted from it.' : null;
   const configured = isExtractionConfigured();
 
   const accounts = await listAccounts(user.id, membership.companyId);
@@ -59,6 +60,11 @@ export default async function BankImportPage({
       {notice !== null && (
         <p role="status" data-testid="notice" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
           {notice}
+        </p>
+      )}
+      {ok !== null && (
+        <p role="status" data-testid="notice" className="rounded bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-300">
+          {ok}
         </p>
       )}
 
@@ -114,6 +120,7 @@ function noticeFrom(error: string | undefined): string | null {
   if (error === 'EXTRACTION_FAILED') return 'No usable transactions could be extracted from that statement.';
   if (error === 'SCANNED_PDF') return 'That PDF appears to be a scanned image; a text-based statement is needed.';
   if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active cash/bank asset account.';
+  if (error === 'BATCH_NOT_FOUND') return 'That import batch does not exist.';
   if (error === 'denied') return 'You do not have permission to import statements.';
   return 'The statement could not be imported.';
 }
