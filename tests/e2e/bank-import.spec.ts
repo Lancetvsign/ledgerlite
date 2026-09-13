@@ -129,6 +129,7 @@ test('a second upload of the same statement flags duplicates', async ({ page }) 
 });
 
 test('applies a deposit to an open invoice and a payment to an open bill (LL-077)', async ({ page }) => {
+  test.slow(); // eight screens end to end; CI's shared compute makes 30s too tight
   await freshCompany(page);
   await addCustomer(page, 'Acme Corp');
   const invoiceId = await openInvoice(page, 'Acme Corp', '1500.00'); // matches the +1500 deposit
