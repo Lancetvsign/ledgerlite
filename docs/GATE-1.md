@@ -30,6 +30,9 @@
    Harmless while their capability sets are identical; becomes a real escalation the day
    OWNER gains exclusive capabilities (ownership transfer, billing). **The invite-flow
    ticket must add a role-ceiling check** — recorded in SECURITY.md.
+   **CLOSED by LL-086 (ADR-041):** `addMembershipAs` is gone; every membership mutation goes
+   through `src/server/members` and the ceiling `roleCovers(actor, target)` — an actor may
+   only grant, change or remove roles whose capability set is a subset of their own.
 
 ## What Sprint 1 leaves deliberately unfinished
 

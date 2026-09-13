@@ -2,6 +2,8 @@ import 'server-only';
 
 import { and, eq } from 'drizzle-orm';
 
+import { AuthorizationDenied } from '@/server/authorization';
+
 import { getDbTx, schema } from '@/db';
 
 import type { AppUser, Company, CompanyMembership } from '@/db/schema';
@@ -66,4 +68,20 @@ export async function selectTemplateCompany(executor?: Tx): Promise<Company | un
     .where(and(eq(schema.companies.isTemplate, true), eq(schema.companies.status, 'ACTIVE')))
     .limit(1);
   return rows[0];
+}
+
+/**
+ * Locks the ACTIVE company row for the rest of the transaction; missing or archived →
+ * the uniform denial (never a distinguishable "already deleted"). Shared by the
+ * company and member services (LL-082 / LL-086).
+ */
+export async function lockActiveCompany(tx: Tx, companyId: string): Promise<Company> {
+  const locked = await tx
+    .select()
+    .from(schema.companies)
+    .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
+    .for('update');
+  const company = locked[0];
+  if (company === undefined) throw new AuthorizationDenied();
+  return company;
 }

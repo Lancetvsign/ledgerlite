@@ -89,6 +89,9 @@ export default async function AccountPage({
           <Link href="/bill-payments" data-testid="bill-payments-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
             Bill Payments
           </Link>
+          <Link href="/members" data-testid="members-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
+            Team
+          </Link>
           <Link href="/reports" data-testid="reports-link" className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800">
             Reports
           </Link>
@@ -139,6 +142,7 @@ function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'
   if (sp.ok === 'template-set') return { tone: 'ok', text: 'This company is now the master template: new companies copy its chart of accounts and settings.' };
   if (sp.ok === 'template-released') return { tone: 'ok', text: 'This company is no longer the master template.' };
   if (sp.ok === 'settings-saved') return { tone: 'ok', text: 'Settings saved.' };
+  if (sp.ok === 'you-left') return { tone: 'ok', text: 'You left the company.' };
   if (sp.error === undefined) return null;
   if (sp.error === 'NAME_MISMATCH') return { tone: 'error', text: 'The name you typed does not match the company name. Nothing was deleted.' };
   if (sp.error === 'TEMPLATE_EXISTS') return { tone: 'error', text: 'Another company is already the master template. Release it first.' };

@@ -147,3 +147,49 @@ export const companyMemberships = pgTable(
 export type AppUser = typeof users.$inferSelect;
 export type Company = typeof companies.$inferSelect;
 export type CompanyMembership = typeof companyMemberships.$inferSelect;
+
+/**
+ * Pending team invitations — LL-086 / ADR-041.
+ *
+ * A manager (`user.manage`) invites an email that has no LedgerLite user yet; the
+ * row is the authorization for the membership that appears when that email first
+ * enters the app (`ensureAppUser` → `claimPendingInvitations`). ADR-006 applies:
+ * rows move to ACCEPTED or REVOKED, never deleted. The email is stored lower-cased
+ * and trimmed (a CHECK enforces it) because Better Auth lower-cases emails at
+ * sign-up and sign-in, so the claim lookup is a plain equality on the partial index.
+ */
+export const invitationStatus = pgEnum('invitation_status', ['PENDING', 'ACCEPTED', 'REVOKED']);
+
+export const companyInvitations = pgTable(
+  'company_invitations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'restrict' }),
+    email: text('email').notNull(),
+    role: membershipRole('role').notNull(),
+    status: invitationStatus('status').notNull().default('PENDING'),
+    invitedBy: uuid('invited_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    acceptedUserId: uuid('accepted_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  },
+  (table) => [
+    // The standing tenancy constraint.
+    unique('company_invitations_company_id_id_unique').on(table.companyId, table.id),
+    check('company_invitations_email_lowercase', sql`${table.email} = lower(btrim(${table.email}))`),
+    check('company_invitations_accepted_stamp', sql`(${table.status} = 'ACCEPTED') = (${table.acceptedUserId} is not null)`),
+    check('company_invitations_resolved_stamp', sql`(${table.status} <> 'PENDING') = (${table.resolvedAt} is not null)`),
+    // One live invitation per (company, email); resolved ones may pile up as history.
+    uniqueIndex('company_invitations_pending_email_unique')
+      .on(table.companyId, table.email)
+      .where(sql`${table.status} = 'PENDING'`),
+    // The claim lookup on every authenticated entry: "any pending invitation for this email?"
+    index('company_invitations_pending_by_email_idx').on(table.email).where(sql`${table.status} = 'PENDING'`),
+  ],
+);
+
+export type CompanyInvitation = typeof companyInvitations.$inferSelect;

@@ -5,6 +5,7 @@ import {
   CAPABILITY_GRANTS,
   ROLES,
   capabilitiesForRole,
+  roleCovers,
   roleHasCapability,
   type Capability,
 } from '@/server/rbac';
@@ -250,5 +251,34 @@ describe('no bypass exists to find', () => {
     roleHasCapability('OWNER', 'journal.psot');
     // @ts-expect-error — a typo'd role must not compile
     roleHasCapability('OWNRE', 'journal.post');
+  });
+});
+
+describe('the role ceiling — roleCovers (LL-086)', () => {
+  it('every role covers itself', () => {
+    for (const role of ROLES) expect(roleCovers(role, role)).toBe(true);
+  });
+
+  it('OWNER covers every role', () => {
+    for (const role of ROLES) expect(roleCovers('OWNER', role)).toBe(true);
+  });
+
+  it('ADMIN covers every role except OWNER — the GATE-1 §2 escalation is closed', () => {
+    expect(roleCovers('ADMIN', 'OWNER')).toBe(false);
+    for (const role of ['ADMIN', 'BOOKKEEPER', 'ACCOUNTANT', 'READ_ONLY'] as const) {
+      expect(roleCovers('ADMIN', role)).toBe(true);
+    }
+  });
+
+  it('non-managers cover neither ADMIN nor OWNER; coverage follows the matrix, not a rank', () => {
+    for (const role of ['BOOKKEEPER', 'ACCOUNTANT', 'READ_ONLY'] as const) {
+      expect(roleCovers(role, 'ADMIN')).toBe(false);
+      expect(roleCovers(role, 'OWNER')).toBe(false);
+    }
+    // ACCOUNTANT holds every writer capability plus the ledger ones, so it covers
+    // BOOKKEEPER; the reverse does not hold. Everyone covers READ_ONLY.
+    expect(roleCovers('ACCOUNTANT', 'BOOKKEEPER')).toBe(true);
+    expect(roleCovers('BOOKKEEPER', 'ACCOUNTANT')).toBe(false);
+    for (const role of ROLES) expect(roleCovers(role, 'READ_ONLY')).toBe(true);
   });
 });

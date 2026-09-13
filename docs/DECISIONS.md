@@ -2222,3 +2222,50 @@ document screen yet, so their rows link to the journal entry.
 
 A multi-account general-ledger report, CSV export of the register, or drill-down from the trial
 balance / financial statements is wanted (each is a link to this page with `accountId`).
+
+## ADR-041 — Team membership: invitations claimed on entry, the role ceiling, and last-owner protection
+
+**Status** Accepted · **Added by** LL-086 · **Decided by** product owner ("start LL-086")
+
+### Context
+
+The role model was complete but unreachable: the only way to add a person was `addMembershipAs`
+(no UI, no audit) and, as GATE-1 §2 recorded, no role ceiling — an ADMIN could grant OWNER, which
+since LL-082/LL-083 means company deletion and the template. Nothing could change or remove a
+membership. The app sends no email.
+
+### Decision
+
+- **A `/members` screen** for the active company. Any member sees the roster; `user.manage`
+  (OWNER, ADMIN) adds by email with a role, changes roles, removes members, revokes invitations.
+- **Add-by-email resolves at once when the email has a LedgerLite user** (membership created, or a
+  removed one reactivated with the new role — ADR-006, never deleted). **Otherwise a PENDING
+  invitation** (`company_invitations`, migration 0036, expand-only) is stored and **claimed on that
+  email's first authenticated entry** by `ensureAppUser` → `claimPendingInvitations`, on EVERY
+  entry (one SELECT on a partial index) so an invitation created between two requests still lands
+  and no first-sign-in race can strand it. The invitation row is the authorization; the inviter is
+  the audit actor of record (`MEMBER_ADDED … via: 'invitation'`). Emails are stored lower-cased
+  (CHECK-enforced) because Better Auth lower-cases them at sign-up and sign-in.
+- **The role ceiling is capability dominance, not a rank or a new capability:**
+  `roleCovers(actor, target)` — every capability the target role holds, the actor holds too.
+  Derived from the grant matrix in the rbac module, so no role name is compared anywhere and any
+  future OWNER-only capability tightens it automatically. It applies to the role being granted, to
+  the current role of a member being changed or removed, and to the new role.
+- **Last-owner rule:** a demotion (new role does not cover the old) or removal is refused with
+  `LAST_OWNER` unless another ACTIVE member still covers the affected member's current role — for
+  an OWNER, another OWNER; for anyone else the company's OWNER always does. Self-removal is allowed
+  under the same rule.
+- `addMembershipAs` is removed; `insertMembership` stays internal (company creation) behind the
+  lint fence. Managers learn whether an email already has an account (add vs invite); accepted —
+  the roster shows it a moment later anyway.
+
+### Consequences
+
+- Five audit actions (`MEMBER_INVITED/ADDED/ROLE_CHANGED/REMOVED`, `INVITATION_REVOKED`); one new
+  tenant table registered in the isolation suite and in `PURGE_ORDER`.
+- `ensureAppUser` does one extra indexed read per request.
+
+### Revisit if
+
+Email delivery, invitation expiry or resend, an ownership-transfer wizard, or reactivating an
+archived company's memberships is wanted.
