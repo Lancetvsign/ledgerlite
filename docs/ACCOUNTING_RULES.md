@@ -316,11 +316,19 @@ it upserts on `(company_id, account_number)` with `ON CONFLICT DO NOTHING`, so a
 even two concurrent installs — yields exactly one row per account number, never a
 duplicate. No check-then-insert (which races); the unique constraint is the arbiter.
 
-Two paths, both valid: **standard** (25 accounts — checking, savings, AP/AR, credit card,
-owner equity, revenue, COGS, operating expenses) and **system-only** (the three required
-system accounts: Accounts Receivable, Retained Earnings, Opening Balance Equity). Standard
-is a superset of the required set. The installer creates **no journal entries and no
-balances** — account structure only.
+Two hardcoded paths, both valid: **standard** (24 accounts — checking, savings, A/R, A/P,
+credit card, sales tax, owner equity, revenue, COGS, operating expenses) and **system-only**
+(the four required system accounts: Accounts Receivable, Accounts Payable, Retained
+Earnings, Opening Balance Equity — ADR-027). Standard is a superset of the required set.
+The installer creates **no journal entries and no balances** — account structure only.
+
+A third source, **the master template company** (LL-083 / ADR-039), is a real company an
+OWNER designates; its ACTIVE accounts and its fiscal-year start, currency and timezone are
+COPIED into a new company at creation. It is a copy, not a link: later template edits never
+touch existing companies. After the copy the installer adds the four required system
+accounts under the same `ON CONFLICT DO NOTHING`, so every company has A/R, A/P, Retained
+Earnings and Opening Balance Equity exactly once whatever the template looks like. The
+template never posts (the ledger refuses), so its chart is structure only.
 
 When a chart is chosen at company creation it installs in the SAME transaction as the
 company and owner membership, so the system accounts the ledger needs exist from the first

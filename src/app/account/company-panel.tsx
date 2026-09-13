@@ -1,6 +1,12 @@
 import { roleHasCapability } from '@/server/rbac';
 
-import { createCompanyAction, deleteCompanyAction, switchCompanyAction } from './actions';
+import {
+  createCompanyAction,
+  deleteCompanyAction,
+  setCompanyTemplateAction,
+  switchCompanyAction,
+  updateCompanySettingsAction,
+} from './actions';
 
 import type { CompanyMembership } from '@/db/schema';
 import type { CompanyView } from '@/server/companies';
@@ -11,12 +17,21 @@ import type { CompanyView } from '@/server/companies';
  * scoped, and picking one round-trips through a server action that re-proves
  * membership before the cookie moves.
  */
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+const SMALL_BUTTON = 'rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700';
+const SMALL_INPUT = 'rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-900';
+const POPOVER = 'absolute right-0 z-10 mt-1 flex w-72 flex-col gap-2 rounded border border-neutral-300 bg-white p-3 shadow dark:border-neutral-700 dark:bg-neutral-900';
+
 export function CompanyPanel({
   companies,
   active,
+  templateExists,
 }: {
   companies: { company: CompanyView; role: CompanyMembership['role'] }[];
   active: CompanyMembership | null;
+  /** Whether a master template company exists anywhere (LL-083) — a boolean, never its identity. */
+  templateExists: boolean;
 }) {
   return (
     <section className="flex flex-col gap-3">
@@ -38,6 +53,11 @@ export function CompanyPanel({
                       active
                     </span>
                   )}
+                  {company.isTemplate && (
+                    <span data-testid="template-badge" className="ml-2 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100">
+                      template
+                    </span>
+                  )}
                 </span>
                 <span className="flex items-center gap-2">
                   {!isActive && (
@@ -47,6 +67,51 @@ export function CompanyPanel({
                         Switch
                       </button>
                     </form>
+                  )}
+                  {roleHasCapability(role, 'company.template') && (!templateExists || company.isTemplate) && (
+                    // Designate when no template exists anywhere; release only the template
+                    // itself. The service re-proves OWNER and the index arbitrates (LL-083).
+                    <form action={setCompanyTemplateAction}>
+                      <input type="hidden" name="companyId" value={company.id} />
+                      <input type="hidden" name="on" value={company.isTemplate ? '0' : '1'} />
+                      <button
+                        type="submit"
+                        data-testid={company.isTemplate ? 'release-template' : 'make-template'}
+                        className={SMALL_BUTTON}
+                      >
+                        {company.isTemplate ? 'Stop being the template' : 'Make master template'}
+                      </button>
+                    </form>
+                  )}
+                  {company.isTemplate && roleHasCapability(role, 'company.manage') && (
+                    <details className="relative">
+                      <summary className={`cursor-pointer list-none ${SMALL_BUTTON}`}>Settings…</summary>
+                      <form action={updateCompanySettingsAction} className={POPOVER}>
+                        <input type="hidden" name="companyId" value={company.id} />
+                        <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                          New companies created from the template start with these settings.
+                        </p>
+                        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                          Fiscal year starts in
+                          <select name="fiscalYearStartMonth" defaultValue={String(company.fiscalYearStartMonth)} className={SMALL_INPUT}>
+                            {MONTHS.map((m, i) => (
+                              <option key={m} value={String(i + 1)}>{m}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                          Currency (ISO 4217)
+                          <input name="currencyCode" defaultValue={company.currencyCode} maxLength={3} required className={SMALL_INPUT} />
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                          Timezone (IANA)
+                          <input name="timezone" defaultValue={company.timezone} required className={SMALL_INPUT} />
+                        </label>
+                        <button type="submit" data-testid="save-settings" className="rounded bg-neutral-900 px-2 py-1 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
+                          Save settings
+                        </button>
+                      </form>
+                    </details>
                   )}
                   {roleHasCapability(role, 'company.delete') && (
                     // Progressive disclosure without client JS: the confirmation form is
@@ -100,9 +165,10 @@ export function CompanyPanel({
           Chart of accounts
           <select
             name="chart"
-            defaultValue="standard"
+            defaultValue={templateExists ? 'template' : 'standard'}
             className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
           >
+            {templateExists && <option value="template">Master template</option>}
             <option value="standard">Standard small business</option>
             <option value="system-only">Required accounts only</option>
           </select>

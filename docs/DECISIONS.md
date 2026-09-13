@@ -2117,3 +2117,61 @@ while a single `audit_events` row exists for the company.
 
 Reactivating an archived company, purging archived companies under a retention policy (a reviewed
 migration that lifts the audit trigger), or transferring ownership before deletion is wanted.
+
+## ADR-039 — A master company is the template every new company is seeded from
+
+**Status** Accepted · **Added by** LL-083 · **Decided by** product owner ("create a master company where
+the default chart of accounts align to and other typical settings … if I change the master chart of
+accounts it will change to that for any new company")
+
+### Context
+
+The default chart was a hardcoded constant and the "typical settings" (fiscal-year start, currency,
+timezone) came from validator defaults and a literal in the create action. There was no settings editor,
+no global table, and no instance-admin concept: every capability is meaningful only inside a company
+membership (AGENTS.md §6). The owner wants to edit the defaults like any other data.
+
+### Decision
+
+- **The master IS a real company**, flagged `companies.is_template`. Its chart is edited on the existing
+  Chart of Accounts screen with the existing capabilities and audit trail; its settings are edited
+  through a small owner-side form. No separate template table, editor, or authorization model.
+- **At most one template, structurally**: partial unique index `companies_one_template` (`WHERE
+  is_template`). A losing designation surfaces as `TEMPLATE_EXISTS`; the index, not a service check,
+  arbitrates under concurrency.
+- **Designation is OWNER-only** via the new capability `company.template`. Any owner may claim the
+  EMPTY slot; only the template's own OWNER may release it. In this single-operator deployment that is
+  the intended behaviour and is stated here, not assumed.
+- **The template never holds history.** Designation refuses a company with any POSTED/REVERSED entry
+  (counted under the counter lock, like deletion), and `postEntryCore` refuses to post into a template
+  (`TEMPLATE_COMPANY`). Every document path funnels through that core; reversals need an existing
+  entry. Together: zero entries, always.
+- **Copy, not link.** `createCompanyWithOwner(…, 'template')` copies the template's ACTIVE accounts
+  (number, name, type, subtype, system role, cash-flow category, description; parents remapped) and
+  its fiscal-year start, currency and timezone — the create input's three values are ignored for that
+  source. Then the required system accounts are installed under `ON CONFLICT DO NOTHING` as a safety
+  net, so a template that renumbered A/R or lacks a required account still yields each exactly once.
+  Existing companies are never touched by a template edit.
+- **Not copied:** INACTIVE accounts, customers, vendors, documents, periods — structure only.
+- **The one unauthorized company read** is `selectTemplateCompany` (fence-covered internal module):
+  company creation copies before the creator holds any capability. It is limited to the flagged row,
+  reaches only structure, and the app layer learns a boolean only (`hasTemplateCompany`) — never the
+  template's name or id.
+- **Settings edits** (`updateCompanySettings`, `company.manage`) are refused once a company has posted
+  history (`SETTINGS_LOCKED`): the fiscal-year start drives period boundaries and the year-end close.
+  The UI offers the editor on the template row only.
+- Archiving the template (ADR-038) clears the flag so the slot is released.
+- Migration 0035 is expand-only: one enum value (`COMPANY_UPDATED`), one boolean column with a
+  constant default, one partial unique index. The hardcoded charts remain as the fallback when no
+  template exists and as the seed for building one.
+
+### Consequences
+
+- Designation writes an audit row, so a template company can only ever be archived, never purged.
+- A company created from the template while it lacked, say, Sales Tax Payable will not have it;
+  the required four are the only guarantee.
+
+### Revisit if
+
+Multi-operator hosting (an instance-admin role for the slot), multiple or per-user templates,
+re-syncing existing companies to a changed template, or copying customers/vendors is wanted.

@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { listCompaniesForUser } from '@/server/companies';
+import { hasTemplateCompany, listCompaniesForUser } from '@/server/companies';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
@@ -39,10 +39,11 @@ export default async function AccountPage({
   // Controlled provisioning (LL-011): the application user comes into being on
   // first authenticated entry. Idempotent; grants no company access.
   const appUser = await ensureAppUser(session.user);
-  const [companies, active, sp] = await Promise.all([
+  const [companies, active, sp, templateExists] = await Promise.all([
     listCompaniesForUser(appUser.id),
     getActiveCompanyMembership(appUser.id),
     searchParams,
+    hasTemplateCompany(),
   ]);
   const notice = noticeFrom(sp);
 
@@ -124,7 +125,7 @@ export default async function AccountPage({
           {appUser.email}
         </dd>
       </dl>
-      <CompanyPanel companies={companies} active={active} />
+      <CompanyPanel companies={companies} active={active} templateExists={templateExists} />
       <SignOutButton />
     </main>
   );
@@ -135,8 +136,16 @@ function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'
     return { tone: 'ok', text: 'Company archived: it had posted history, so its records are kept but it is hidden from every list.' };
   }
   if (sp.ok === 'company-purged') return { tone: 'ok', text: 'Company deleted.' };
+  if (sp.ok === 'template-set') return { tone: 'ok', text: 'This company is now the master template: new companies copy its chart of accounts and settings.' };
+  if (sp.ok === 'template-released') return { tone: 'ok', text: 'This company is no longer the master template.' };
+  if (sp.ok === 'settings-saved') return { tone: 'ok', text: 'Settings saved.' };
   if (sp.error === undefined) return null;
   if (sp.error === 'NAME_MISMATCH') return { tone: 'error', text: 'The name you typed does not match the company name. Nothing was deleted.' };
+  if (sp.error === 'TEMPLATE_EXISTS') return { tone: 'error', text: 'Another company is already the master template. Release it first.' };
+  if (sp.error === 'TEMPLATE_HAS_POSTINGS') return { tone: 'error', text: 'A company with posted entries cannot become the master template.' };
+  if (sp.error === 'NO_TEMPLATE') return { tone: 'error', text: 'There is no master template to copy. Choose a chart instead.' };
+  if (sp.error === 'SETTINGS_LOCKED') return { tone: 'error', text: 'Settings cannot change once a company has posted entries.' };
+  if (sp.error === 'invalid-settings') return { tone: 'error', text: 'Enter a month from 1 to 12, a three-letter uppercase currency code, and a valid timezone.' };
   if (sp.error === 'invalid-company') return { tone: 'error', text: 'Enter a legal name for the new company.' };
   if (sp.error === 'denied') return { tone: 'error', text: 'You do not have permission for that.' };
   return { tone: 'error', text: 'That action could not be completed.' };

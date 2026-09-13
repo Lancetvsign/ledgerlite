@@ -6,9 +6,15 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { clearActiveCompanyIf, setActiveCompany } from '@/server/authorization/company-context';
-import { CompanyError, createCompanyWithOwner, deleteCompany } from '@/server/companies';
+import {
+  CompanyError,
+  createCompanyWithOwner,
+  deleteCompany,
+  setCompanyTemplate,
+  updateCompanySettings,
+} from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
-import { createCompanyInput } from '@/validation/company';
+import { createCompanyInput, updateCompanySettingsInput } from '@/validation/company';
 
 /** Session first, always; these run with whatever the browser sent. */
 async function requireAppUserId(): Promise<string> {
@@ -39,12 +45,56 @@ export async function createCompanyAction(formData: FormData): Promise<void> {
   });
   if (!parsed.success) redirect('/account?error=invalid-company');
 
-  // Chart choice from the form; defaults to the standard small-business chart.
+  // Chart source from the form: the master template (LL-083) when offered, else
+  // the hardcoded charts; anything unrecognised is the standard chart.
   const chartRaw = formData.get('chart');
-  const chart = chartRaw === 'system-only' ? 'system-only' : 'standard';
-  const { company } = await createCompanyWithOwner(userId, parsed.data, chart);
-  await setActiveCompany(userId, company.id);
+  const chart = chartRaw === 'template' ? 'template' : chartRaw === 'system-only' ? 'system-only' : 'standard';
+  let companyId: string;
+  try {
+    ({ company: { id: companyId } } = await createCompanyWithOwner(userId, parsed.data, chart));
+  } catch (error) {
+    if (error instanceof CompanyError) redirect(`/account?error=${error.code}`);
+    throw error;
+  }
+  await setActiveCompany(userId, companyId);
   redirect('/account');
+}
+
+/** Designates or releases the master template company — LL-083 (OWNER only, in the service). */
+export async function setCompanyTemplateAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const rawId = formData.get('companyId');
+  const companyId = typeof rawId === 'string' ? rawId : '';
+  const on = formData.get('on') === '1';
+  try {
+    await setCompanyTemplate(userId, companyId, on);
+  } catch (error) {
+    if (error instanceof CompanyError) redirect(`/account?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect('/account?error=denied');
+    throw error;
+  }
+  redirect(`/account?ok=${on ? 'template-set' : 'template-released'}`);
+}
+
+/** Edits the typical settings (fiscal year start, currency, timezone) — LL-083. */
+export async function updateCompanySettingsAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const rawId = formData.get('companyId');
+  const companyId = typeof rawId === 'string' ? rawId : '';
+  const parsed = updateCompanySettingsInput.safeParse({
+    fiscalYearStartMonth: formData.get('fiscalYearStartMonth'),
+    currencyCode: formData.get('currencyCode'),
+    timezone: formData.get('timezone'),
+  });
+  if (!parsed.success) redirect('/account?error=invalid-settings');
+  try {
+    await updateCompanySettings(userId, companyId, parsed.data);
+  } catch (error) {
+    if (error instanceof CompanyError) redirect(`/account?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect('/account?error=denied');
+    throw error;
+  }
+  redirect('/account?ok=settings-saved');
 }
 
 /**

@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   char,
   index,
@@ -10,6 +11,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -87,6 +89,12 @@ export const companies = pgTable(
     currencyCode: char('currency_code', { length: 3 }).notNull().default('USD'),
     timezone: text('timezone').notNull(),
     status: companyStatus('status').notNull().default('ACTIVE'),
+    /**
+     * The master company (LL-083 / ADR-039): its chart and settings seed every NEW
+     * company created from the 'template' source. At most one instance-wide — the
+     * partial unique index below is the arbiter, not a service check.
+     */
+    isTemplate: boolean('is_template').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -95,6 +103,9 @@ export const companies = pgTable(
     check('companies_fiscal_month_range', sql`${table.fiscalYearStartMonth} between 1 and 12`),
     check('companies_currency_format', sql`${table.currencyCode} ~ '^[A-Z]{3}$'`),
     check('companies_legal_name_nonempty', sql`length(trim(${table.legalName})) > 0`),
+    // At most one template company exists; a second designation is a unique
+    // violation, which the service maps to TEMPLATE_EXISTS.
+    uniqueIndex('companies_one_template').on(table.isTemplate).where(sql`${table.isTemplate} = true`),
   ],
 );
 
