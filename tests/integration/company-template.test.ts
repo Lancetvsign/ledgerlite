@@ -48,8 +48,9 @@ async function makeUser(): Promise<string> {
 
 const INPUT = createCompanyInput.parse({ legalName: 'Master Co', timezone: 'America/Chicago' });
 
-async function makeCompany(ownerId: string, chart: CoaChoice | 'template' | undefined = 'standard', legalName = 'Some Co'): Promise<string> {
-  const { company } = await createCompanyWithOwner(ownerId, { ...INPUT, legalName }, chart);
+/** `chart: null` creates a company with NO chart at all (an explicit `undefined` would fall into the default). */
+async function makeCompany(ownerId: string, chart: CoaChoice | 'template' | null = 'standard', legalName = 'Some Co'): Promise<string> {
+  const { company } = await createCompanyWithOwner(ownerId, { ...INPUT, legalName }, chart ?? undefined);
   return company.id;
 }
 
@@ -236,7 +237,7 @@ describe('createCompanyWithOwner from the template', () => {
     expect(arRows[0]!.accountNumber).toBe('1150');
 
     await setCompanyTemplate(owner, tpl, false);
-    const bare = await makeCompany(owner, undefined, 'Bare Co');
+    const bare = await makeCompany(owner, null, 'Bare Co');
     await setCompanyTemplate(owner, bare, true);
     const { company: fromBare } = await createCompanyWithOwner(creator, INPUT, 'template');
     expect((await listAccounts(creator, fromBare.id)).map((a) => a.systemAccountType).sort()).toEqual(
@@ -246,7 +247,7 @@ describe('createCompanyWithOwner from the template', () => {
 
   it('safety net: a chart-less template whose custom account squats on 1100 still yields an (unnumbered) A/R', async () => {
     const owner = await makeUser();
-    const bare = await makeCompany(owner, undefined, 'Bare Co');
+    const bare = await makeCompany(owner, null, 'Bare Co');
     await createAccount(owner, bare, createAccountInput.parse({ accountNumber: '1100', name: 'Not Receivables', accountType: 'ASSET' }));
     await setCompanyTemplate(owner, bare, true);
 
