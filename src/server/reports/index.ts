@@ -15,3 +15,5 @@ export { getIncomeStatement } from './income-statement';
 export type { IncomeStatement, IncomeStatementRow, IncomeStatementSection } from './income-statement';
 export { getCashFlowStatement } from './cash-flow';
 export type { CashFlowStatement, CashFlowLine, CashFlowSection } from './cash-flow';
+export { getAccountRegister } from './account-register';
+export type { AccountRegister, AccountRegisterLine } from './account-register';

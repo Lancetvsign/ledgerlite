@@ -14,6 +14,7 @@ const REPORTS = [
   { href: '/reports/balance-sheet', testid: 'balance-sheet-link', title: 'Balance Sheet', blurb: 'Assets, liabilities, and equity as of a date — with net income derived into equity and the balanced check.' },
   { href: '/reports/income-statement', testid: 'income-statement-link', title: 'Income Statement', blurb: 'Revenue, COGS, gross profit, expenses, and net income over a period (P&L).' },
   { href: '/reports/cash-flow', testid: 'cash-flow-link', title: 'Cash-Flow Statement', blurb: 'Operating, investing, and financing cash flows over a period, reconciling beginning to ending cash.' },
+  { href: '/reports/register', testid: 'register-link', title: 'Account Register', blurb: 'Every posted line for one account over a period, with a running balance and links to the source documents.' },
   { href: '/reports/trial-balance', testid: 'trial-balance-link', title: 'Trial Balance', blurb: 'Every account’s derived debit/credit balance as of a date, with the balanced check.' },
   { href: '/reports/aging', testid: 'aging-link', title: 'A/R Aging', blurb: 'Open receivables per customer, bucketed by age, reconciling to the A/R control.' },
   { href: '/reports/statement', testid: 'statement-link', title: 'Customer Statement', blurb: 'One customer’s opening balance, activity, and closing balance over a period.' },

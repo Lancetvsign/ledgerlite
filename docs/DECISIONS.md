@@ -2182,3 +2182,43 @@ membership (AGENTS.md §6). The owner wants to edit the defaults like any other 
 
 Multi-operator hosting (an instance-admin role for the slot), multiple or per-user templates,
 re-syncing existing companies to a changed template, or copying customers/vendors is wanted.
+
+## ADR-040 — The account register is the ledger-derived detail behind every balance
+
+**Status** Accepted · **Added by** LL-085 · **Decided by** product owner (next-ticket choice)
+
+### Context
+
+Every balance in LedgerLite is derived from `journal_lines` (invariant 2), and the reports show those
+balances — but nothing showed the LINES behind one account with a running balance and a way back to
+the invoice, bill, payment or journal entry that produced each one. That is the screen an accountant
+opens to answer "what is in this number?".
+
+### Decision
+
+- `getAccountRegister(actor, companyId, accountId, fromDate, toDate)` in `src/server/reports`: one
+  account's opening balance (activity strictly before `fromDate`), every line posted within the period
+  in `(posting_date, entry_number, line_number)` order with a running balance, totals, and closing.
+- **Same population as every other report**: `status in ('POSTED','REVERSED')` (ADR-011), by
+  `posting_date` (ADR-002). A reversed entry and its reversal both appear and net to zero.
+- **Balance in the account's normal side**: ASSET/EXPENSE/COGS accumulate debit − credit,
+  LIABILITY/EQUITY/REVENUE credit − debit — so the register's closing equals the trial balance's
+  `balance` for that account as of `toDate` (asserted by the integration suite). Sums are carried
+  in decimal.js; PostgreSQL does the opening aggregate.
+- **Linking**: each row carries the entry id, source type/id, the reversed entry for REVERSAL rows and,
+  for BANK_IMPORT rows, the import batch. The page maps INVOICE / EXPENSE (bills) / CUSTOMER_PAYMENT /
+  BILL_PAYMENT / BANK_IMPORT to their screens and everything else (manual entries, credit memos,
+  write-offs, vendor credits, opening balances, year-end close) to the journal entry's own page.
+- `report.view` (every member) authorizes the report; the entry links land on `/journal/[id]`,
+  which every member may also view. Inactive accounts stay pickable — their history is the point.
+- The Chart of Accounts rows link straight into the register.
+
+### Consequences
+
+No schema, no stored balance, no new capability. Credit memos, write-offs and vendor credits have no
+document screen yet, so their rows link to the journal entry.
+
+### Revisit if
+
+A multi-account general-ledger report, CSV export of the register, or drill-down from the trial
+balance / financial statements is wanted (each is a link to this page with `accountId`).

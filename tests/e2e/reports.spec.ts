@@ -100,6 +100,45 @@ test('a customer statement shows opening, activity and closing', async ({ page }
   await expect(page.getByTestId('statement-closing')).toHaveText('150.00');
 });
 
+test('an account register shows opening, activity with source links, and closing (LL-085)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Gamma Inc');
+  await openInvoice(page, 'Gamma Inc', '200.00');
+  await receivePayment(page, 'Gamma Inc', '50.00'); // A/R closing = 200 − 50 = 150
+
+  await page.goto('/reports');
+  await page.getByTestId('register-link').click();
+  await expect(page).toHaveURL(/\/reports\/register$/);
+  await page.getByTestId('register-account').selectOption({ label: '1100 · Accounts Receivable' });
+  await page.getByTestId('register-submit').click();
+
+  await expect(page.getByTestId('register')).toBeVisible();
+  await expect(page.getByTestId('register-account-name')).toContainText('Accounts Receivable');
+  await expect(page.getByTestId('register-opening')).toHaveText('0.00');
+  const rows = page.getByTestId('register-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Invoice');
+  await expect(rows.nth(0)).toContainText('200.00');
+  await expect(rows.nth(1)).toContainText('Customer payment');
+  await expect(rows.nth(1)).toContainText('150.00'); // running balance after the payment
+  await expect(page.getByTestId('register-total-debits')).toHaveText('200.00');
+  await expect(page.getByTestId('register-total-credits')).toHaveText('50.00');
+  await expect(page.getByTestId('register-closing')).toHaveText('150.00');
+
+  // Source links point at the documents; entry links at the journal.
+  await expect(rows.nth(0).getByTestId('register-source-link')).toHaveAttribute('href', /\/invoices\/[0-9a-f-]{36}$/);
+  await expect(rows.nth(1).getByTestId('register-source-link')).toHaveAttribute('href', /\/payments\/[0-9a-f-]{36}$/);
+  await expect(rows.nth(0).getByTestId('register-entry-link')).toHaveAttribute('href', /\/journal\/[0-9a-f-]{36}$/);
+  await rows.nth(1).getByTestId('register-source-link').click();
+  await expect(page.getByTestId('payment-status')).toHaveText('POSTED');
+
+  // The chart of accounts drills straight into the register.
+  await page.goto('/accounts');
+  await page.getByTestId('account-row').filter({ hasText: 'Accounts Receivable' }).getByTestId('register-link-row').click();
+  await expect(page).toHaveURL(/\/reports\/register\?accountId=[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('register-closing')).toHaveText('150.00');
+});
+
 test.describe('unauthenticated access', () => {
   test.use({ storageState: { cookies: [], origins: [] } }); // fresh, signed-out session
 

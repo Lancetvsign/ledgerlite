@@ -53,6 +53,10 @@ export function AccountRow({ account, canManage }: { account: Account; canManage
             system
           </span>
         )}
+        {/* Drill-down to the account register (LL-085): every member holds report.view. */}
+        <a href={`/reports/register?accountId=${account.id}`} data-testid="register-link-row" className="ml-2 text-xs text-neutral-500 underline">
+          register
+        </a>
       </td>
       <td className="py-2 pr-2">{account.accountType}</td>
       <td className="py-2 pr-2">
