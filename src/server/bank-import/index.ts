@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 
 import Decimal from 'decimal.js';
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
@@ -646,3 +646,61 @@ export { BankImportError } from './errors';
 export type { BankImportErrorCode } from './errors';
 export { isExtractionConfigured } from './extract';
 export type { TransactionExtractor } from './extract';
+
+/**
+ * Deletes an uploaded statement (a batch and its lines) — AUTHORIZED (journal.post) —
+ * LL-087 / ADR-042. Allowed ONLY while nothing from it has posted: a batch with a POSTED
+ * line is part of the ledger's history and is refused (`BATCH_HAS_POSTINGS`). Until then
+ * it is a staging artifact — extracted text and suggestions, no accounting value — and
+ * removing a mistaken upload (wrong file, wrong company) is the honest outcome; the
+ * ADR-006 "status, never delete" rule is about records, and this is not one yet.
+ *
+ * Race-safe without relying on locks: lines are deleted only where status <> 'POSTED',
+ * and if any line remains the transaction rolls back — a posting that lands between the
+ * check and the delete wins.
+ */
+export async function deleteImportBatch(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+): Promise<{ lines: number }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+
+  return await getDbTx().transaction(async (tx) => {
+    const batchRows = await tx
+      .select({ id: schema.bankImportBatches.id })
+      .from(schema.bankImportBatches)
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+      .for('update');
+    if (batchRows[0] === undefined) {
+      throw new BankImportError('BATCH_NOT_FOUND', 'That import batch does not exist.');
+    }
+
+    const removed = await tx
+      .delete(schema.bankImportLines)
+      .where(
+        and(
+          eq(schema.bankImportLines.companyId, companyId),
+          eq(schema.bankImportLines.batchId, batchId),
+          ne(schema.bankImportLines.status, 'POSTED'),
+        ),
+      )
+      .returning({ id: schema.bankImportLines.id });
+    const remaining = await tx
+      .select({ id: schema.bankImportLines.id })
+      .from(schema.bankImportLines)
+      .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.batchId, batchId)))
+      .limit(1);
+    if (remaining.length > 0) {
+      // Rolls the line deletes back: something posted from this batch.
+      throw new BankImportError('BATCH_HAS_POSTINGS', 'Lines from this import have been posted; it cannot be deleted.');
+    }
+
+    await tx
+      .delete(schema.bankImportBatches)
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)));
+    // Ids and counts only — never statement content (§9).
+    log.info('bank-import: batch deleted', { stage: 'delete', companyId, batchId, actorUserId, lines: removed.length });
+    return { lines: removed.length };
+  });
+}

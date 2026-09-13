@@ -12,6 +12,8 @@ export type BankImportErrorCode =
   /** The chosen bank account is missing, inactive, not an asset, or not a cash account. */
   | 'INVALID_BANK_ACCOUNT'
   | 'BATCH_NOT_FOUND'
+  /** The batch has at least one POSTED line — it is part of the ledger's history now (LL-087). */
+  | 'BATCH_HAS_POSTINGS'
   | 'LINE_NOT_FOUND'
   /** A 'post' decision has no account. */
   | 'ACCOUNT_REQUIRED'

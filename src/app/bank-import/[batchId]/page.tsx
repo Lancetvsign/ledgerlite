@@ -16,7 +16,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { postImportLinesAction } from '../actions';
+import { deleteImportBatchAction, postImportLinesAction } from '../actions';
 
 /**
  * Bank-statement import — review (LL-076, LL-077). The human gate: every staged line shows
@@ -236,6 +236,26 @@ export default async function ReviewImportPage({
           </div>
         )}
       </form>
+
+      {posted === 0 && (
+        // Nothing from this upload has posted, so it is still a staging artifact and can be
+        // removed outright (LL-087 / ADR-042). Once any line posts, the service refuses.
+        <details className="self-start">
+          <summary className="cursor-pointer list-none rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 dark:border-red-800 dark:text-red-300">
+            Delete this import…
+          </summary>
+          <form action={deleteImportBatchAction} className="mt-2 flex flex-col gap-2 rounded border border-neutral-300 p-3 text-sm dark:border-neutral-700">
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            <p className="text-xs text-neutral-600 dark:text-neutral-400">
+              Removes the uploaded statement and its {String(view.lines.length)} extracted line(s). Nothing was posted, so
+              the ledger is untouched. You can upload the statement again later.
+            </p>
+            <button type="submit" data-testid="delete-import-batch" className="self-start rounded bg-red-700 px-3 py-1.5 text-sm text-white hover:bg-red-800">
+              Delete import
+            </button>
+          </form>
+        </details>
+      )}
     </main>
   );
 }
@@ -249,6 +269,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   const error = sp.error;
   if (error === undefined) return null;
   if (error === 'invalid') return 'Please check the lines and try again.';
+  if (error === 'BATCH_HAS_POSTINGS') return 'Lines from this import have already posted, so it cannot be deleted.';
   if (error === 'ACCOUNT_REQUIRED') return 'Choose an account for every line you are posting.';
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Accounts Receivable, Accounts Payable, Opening Balance Equity, and the bank account itself cannot be used — pick another account.';
   if (error === 'DOCUMENT_REQUIRED') return 'Choose an open invoice or bill for every line you are applying.';

@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
 import { createAccount } from '@/server/accounts';
-import { BankImportError, getImportBatch, postImportLines, stageImport } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
 import { notConfiguredExtractor, type TransactionExtractor } from '@/server/bank-import/extract';
 import { listOpenBills } from '@/server/bill-payments';
 import { createBill, finalizeBill } from '@/server/bills';
@@ -573,3 +573,57 @@ describe('stageImport — chart-aware categorisation that learns from correction
   });
 });
 
+
+describe('deleteImportBatch (LL-087)', () => {
+  it('removes an unposted batch and its lines; the same statement can be uploaded again without duplicate flags', async () => {
+    const c = await setup();
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'oops.pdf', fileBytes: EMPTY }, STATEMENT);
+    expect((await listImportBatches(c.userId, c.companyId)).map((b) => b.id)).toEqual([batch.id]);
+
+    await expect(deleteImportBatch(c.userId, c.companyId, batch.id)).resolves.toEqual({ lines: 3 });
+    expect(await getImportBatch(c.userId, c.companyId, batch.id)).toBeNull();
+    expect(await listImportBatches(c.userId, c.companyId)).toEqual([]);
+    const db = await getTestDb();
+    expect(Number((await db.execute<{ n: string }>(sql`select count(*)::text n from bank_import_lines where batch_id = ${batch.id}`)).rows[0]!.n)).toBe(0);
+    expect(await entryCount(c.companyId)).toBe(0);
+
+    const again = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'oops.pdf', fileBytes: EMPTY }, STATEMENT);
+    const view = (await getImportBatch(c.userId, c.companyId, again.id))!;
+    expect(view.lines.every((l) => !l.isDuplicate)).toBe(true);
+  });
+
+  it('ignored lines do not protect a batch, but one POSTED line does — and the ledger keeps its entry', async () => {
+    const c = await setup();
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 's.pdf', fileBytes: EMPTY }, STATEMENT);
+    const view = (await getImportBatch(c.userId, c.companyId, batch.id))!;
+    const [l0, l1, l2] = view.lines;
+    await postImportLines(c.userId, c.companyId, batch.id, {
+      decisions: [{ lineId: l2!.id, action: 'ignore' }],
+    });
+    // Still deletable: nothing posted.
+    const other = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'other.pdf', fileBytes: EMPTY }, STATEMENT);
+    await postImportLines(c.userId, c.companyId, other.id, { decisions: [{ lineId: (await getImportBatch(c.userId, c.companyId, other.id))!.lines[2]!.id, action: 'ignore' }] });
+    await expect(deleteImportBatch(c.userId, c.companyId, other.id)).resolves.toEqual({ lines: 3 });
+
+    await postImportLines(c.userId, c.companyId, batch.id, {
+      decisions: [{ lineId: l0!.id, action: 'post', accountId: c.salesId }],
+    });
+    expect((await errOf(deleteImportBatch(c.userId, c.companyId, batch.id))).code).toBe('BATCH_HAS_POSTINGS');
+    const after = (await getImportBatch(c.userId, c.companyId, batch.id))!;
+    expect(after.lines.map((l) => l.status)).toEqual(['POSTED', 'STAGED', 'IGNORED']); // the refused delete rolled back
+    expect(after.lines[1]!.id).toBe(l1!.id);
+    expect(await entryCount(c.companyId)).toBe(1);
+  });
+
+  it('a foreign or unknown batch is BATCH_NOT_FOUND; a BOOKKEEPER is denied', async () => {
+    const a = await setup();
+    const b = await setup();
+    const batch = await stageImport(a.userId, a.companyId, { bankAccountId: a.bankId, filename: 's.pdf', fileBytes: EMPTY }, STATEMENT);
+    expect((await errOf(deleteImportBatch(b.userId, b.companyId, batch.id))).code).toBe('BATCH_NOT_FOUND');
+    expect((await errOf(deleteImportBatch(a.userId, a.companyId, '00000000-0000-4000-8000-000000000000'))).code).toBe('BATCH_NOT_FOUND');
+    const keeper = await makeUser();
+    await insertMembership(a.companyId, keeper, 'BOOKKEEPER');
+    await expect(deleteImportBatch(keeper, a.companyId, batch.id)).rejects.toMatchObject({ name: 'AuthorizationDenied' });
+    expect(await getImportBatch(a.userId, a.companyId, batch.id)).not.toBeNull();
+  });
+});

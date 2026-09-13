@@ -2269,3 +2269,36 @@ membership. The app sends no email.
 
 Email delivery, invitation expiry or resend, an ownership-transfer wizard, or reactivating an
 archived company's memberships is wanted.
+
+## ADR-042 — An unposted bank-statement import is a staging artifact and may be deleted outright
+
+**Status** Accepted · **Added by** LL-087 · **Decided by** product owner ("add delete a download")
+
+### Context
+
+A statement uploaded by mistake (wrong file, wrong company, wrong account) sat in the import list
+forever: ADR-006 says nothing is hard-deleted and `status` is the only vocabulary. But an import
+batch whose lines have not posted holds no accounting record — only extracted statement text and
+suggestions — and keeping it retains content the owner wanted gone.
+
+### Decision
+
+- `deleteImportBatch(actor, companyId, batchId)` (`journal.post`, the same capability as staging)
+  physically deletes the batch and its lines in one transaction **only while no line is POSTED**.
+  Ignored and staged lines do not protect it; a single posted line makes it part of the ledger's
+  history and the delete is refused (`BATCH_HAS_POSTINGS`).
+- Race-safe by construction, not by locks: lines are deleted `where status <> 'POSTED'` and the
+  transaction rolls back if any line remains, so a posting that lands mid-way wins.
+- Recorded in the application log by ids and counts only, like the untouched-company purge
+  (ADR-038): there is no audit row because the artifact never reached the audit trail.
+- Duplicate detection considers POSTED lines only, so a deleted statement re-uploads clean.
+- The review page offers "Delete this import…" while nothing has posted; the service is authoritative.
+
+### Consequences
+
+ADR-006 is unchanged for records; this ADR names the second, narrow class of deletable
+staging data (after ADR-038's untouched company). No schema change.
+
+### Revisit if
+
+An import should be archivable with its content retained, or per-line un-staging is wanted.
