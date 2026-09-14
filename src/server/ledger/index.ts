@@ -111,13 +111,21 @@ export async function postEntryCore(
   fingerprint: string | undefined,
 ): Promise<PostedEntry> {
   // ---- 2. Company exists and is active --------------------------------------
+  // FOR KEY SHARE (LL-092 / Gate 6 H3): the company services that decide "this
+  // company has no posted entries" — designate as template, archive — take the
+  // row FOR UPDATE, which conflicts with KEY SHARE. A posting that reaches here
+  // therefore either sees the row BEFORE such a change (and holds the share lock
+  // until it commits, so the change waits and then counts this entry) or waits
+  // for the change and sees its result. Never both passing. Lock order everywhere
+  // is company row → counter row, so no deadlock.
   const company = await tx
     .select({ id: schema.companies.id, isTemplate: schema.companies.isTemplate })
     .from(schema.companies)
     .where(
       and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
     )
-    .limit(1);
+    .limit(1)
+    .for('key share');
   if (company[0] === undefined) {
     throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
   }

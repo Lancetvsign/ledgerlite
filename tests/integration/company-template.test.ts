@@ -20,9 +20,11 @@ import {
   setCompanyTemplate,
   updateCompanySettings,
 } from '@/server/companies';
-import { insertMembership } from '@/server/companies/internal';
+import { insertMembership, lockActiveCompany } from '@/server/companies/internal';
 import { createCustomer } from '@/server/customers';
 import { LedgerError, postJournalEntry } from '@/server/ledger';
+import { getDbTx, schema } from '@/db';
+import { eq } from 'drizzle-orm';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCompanyInput, updateCompanySettingsInput } from '@/validation/company';
@@ -292,5 +294,65 @@ describe('updateCompanySettings', () => {
     await updateCompanySettings(owner, id, input);
     await postOne(owner, id);
     expect((await errOf(updateCompanySettings(owner, id, input))).code).toBe('SETTINGS_LOCKED');
+  });
+});
+
+describe('posting vs designation cannot both pass (LL-092 / Gate 6 H3)', () => {
+  const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  it('a posting in flight waits for a designation holding the company row, then sees the template flag', async () => {
+    const owner = await makeUser();
+    const id = await makeCompany(owner);
+    const bank = await createAccount(owner, id, createAccountInput.parse({ name: 'Bank', accountType: 'ASSET', cashFlowCategory: 'CASH' }));
+    const sales = await createAccount(owner, id, createAccountInput.parse({ name: 'Sales', accountType: 'REVENUE' }));
+
+    // T2 mirrors setCompanyTemplate: lock the company row FOR UPDATE, flip the flag, hold the tx open.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const t2 = getDbTx().transaction(async (tx) => {
+      await lockActiveCompany(tx, id);
+      await tx.update(schema.companies).set({ isTemplate: true }).where(eq(schema.companies.id, id));
+      await gate;
+    });
+    await pause(200); // let T2 take the lock
+
+    // T1: a real posting. With FOR KEY SHARE it must block on T2's FOR UPDATE.
+    let settled = false;
+    const t1 = postJournalEntry(postJournalEntryInput.parse({
+      companyId: id, actorUserId: owner, transactionDate: '2026-06-01', sourceType: 'JOURNAL_ENTRY',
+      lines: [{ accountId: bank.id, debit: '100.00' }, { accountId: sales.id, credit: '100.00' }],
+    })).then(() => { settled = true; return 'posted' as const; }, (e: unknown) => { settled = true; return e; });
+    await pause(750);
+    expect(settled).toBe(false); // blocked, not posted behind the designation's back
+
+    release();
+    await t2;
+    const outcome = await t1;
+    expect(outcome).toBeInstanceOf(LedgerError);
+    expect((outcome as LedgerError).code).toBe('TEMPLATE_COMPANY');
+    expect(await hasTemplateCompany()).toBe(true);
+  });
+
+  it('a designation waits for a posting that holds the company row in key share', async () => {
+    const owner = await makeUser();
+    const id = await makeCompany(owner);
+
+    // T1 mirrors postEntryCore's company read and holds it open.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const t1 = getDbTx().transaction(async (tx) => {
+      await tx.select({ id: schema.companies.id }).from(schema.companies).where(eq(schema.companies.id, id)).for('key share');
+      await gate;
+    });
+    await pause(200);
+
+    let settled = false;
+    const t2 = setCompanyTemplate(owner, id, true).then((v) => { settled = true; return v; });
+    await pause(750);
+    expect(settled).toBe(false); // FOR UPDATE waits for the key-share holder
+
+    release();
+    await t1;
+    expect((await t2).isTemplate).toBe(true); // nothing was posted, so the designation then succeeds
   });
 });

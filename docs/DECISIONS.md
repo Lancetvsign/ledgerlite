@@ -2191,6 +2191,12 @@ membership (AGENTS.md §6). The owner wants to edit the defaults like any other 
 Multi-operator hosting (an instance-admin role for the slot), multiple or per-user templates,
 re-syncing existing companies to a changed template, or copying customers/vendors is wanted.
 
+**Amendment (LL-092 / Gate 6 H3):** `postEntryCore` reads the company row `FOR KEY SHARE`. The company
+services that decide on "no posted entries" (`setCompanyTemplate`, `deleteCompany`, `updateCompanySettings`)
+take the row `FOR UPDATE`, so a posting and such a decision serialise: the posting either commits first
+(and the decision then counts it) or waits and sees the decision's result. The zero-entries and
+no-post-after-archive claims are lock-ordered, not timing-dependent.
+
 ## ADR-040 — The account register is the ledger-derived detail behind every balance
 
 **Status** Accepted · **Added by** LL-085 · **Decided by** product owner (next-ticket choice)

@@ -104,6 +104,19 @@ export async function reverseEntryCore(
    */
   manualOnly = false,
 ): Promise<PostedEntry> {
+  // ---- Company is ACTIVE, held FOR KEY SHARE for the rest of the transaction
+  // (LL-092): archiving takes the row FOR UPDATE, so a reversal in flight and an
+  // archive serialise the same way postings do (see postEntryCore step 2). ----
+  const companyRows = await tx
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')))
+    .limit(1)
+    .for('key share');
+  if (companyRows[0] === undefined) {
+    throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
+
   // ---- Load and LOCK the original, scoped to this company. ------------------
   // FOR UPDATE serialises concurrent reversals of the same entry: the second
   // waits, then re-reads the now-REVERSED row and is rejected below — exactly
