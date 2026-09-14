@@ -17,6 +17,9 @@ import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
 import { deleteImportBatchAction, postImportLinesAction } from '../actions';
+import { BulkControls } from './bulk-controls';
+import { LineActionControls } from './line-action';
+import { ReviewStateProvider, type LineAction } from './review-state';
 
 /**
  * Bank-statement import — review (LL-076, LL-077). The human gate: every staged line shows
@@ -101,7 +104,7 @@ export default async function ReviewImportPage({
   }));
 
   /** Money in → invoices; money out → bills. Preselect when exactly one open balance equals |amount|. */
-  const suggestionFor = (l: ImportLineView): { moneyIn: boolean; options: DocumentOption[]; documentId: string; action: string } => {
+  const suggestionFor = (l: ImportLineView): { moneyIn: boolean; options: DocumentOption[]; documentId: string; action: LineAction } => {
     const amt = toMoney(l.amount);
     const moneyIn = amt.isPositive();
     if (isCard) return { moneyIn, options: [], documentId: '', action: 'post' };
@@ -117,6 +120,10 @@ export default async function ReviewImportPage({
     };
   };
 
+  // The client-side review state starts from the server's suggestion per STAGED line (LL-089).
+  const defaultActions: Record<string, LineAction> = Object.fromEntries(
+    view.lines.flatMap((l, i) => (l.status === 'STAGED' ? [[String(i), suggestionFor(l).action]] : [])),
+  );
   const staged = view.lines.filter((l) => l.status === 'STAGED').length;
   const posted = view.lines.filter((l) => l.status === 'POSTED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
@@ -144,6 +151,8 @@ export default async function ReviewImportPage({
 
       <form action={postImportLinesAction} data-testid="review-form" className="flex flex-col gap-4">
         <input type="hidden" name="batchId" value={view.batch.id} />
+        <ReviewStateProvider defaults={defaultActions}>
+        {staged > 0 && <BulkControls />}
         <table className="w-full border-collapse text-sm" data-testid="import-lines">
           <thead>
             <tr className="border-b border-neutral-300 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-700">
@@ -196,15 +205,7 @@ export default async function ReviewImportPage({
                         )}
                       </td>
                       <td className="py-2 pr-2">
-                        <select name="action" defaultValue={s.action} data-testid={`import-action-${String(i)}`} className={selectClass}>
-                          <option value="post">Post to account</option>
-                          <option value="ignore">Ignore</option>
-                          {!isCard && (s.moneyIn ? (
-                            <option value="apply_invoice">Apply to invoice</option>
-                          ) : (
-                            <option value="apply_bill">Apply to bill</option>
-                          ))}
-                        </select>
+                        <LineActionControls index={i} moneyIn={s.moneyIn} allowApply={!isCard} />
                       </td>
                     </>
                   ) : (
@@ -229,6 +230,7 @@ export default async function ReviewImportPage({
             })}
           </tbody>
         </table>
+        </ReviewStateProvider>
 
         {staged > 0 && (
           <div className="flex items-center gap-2">

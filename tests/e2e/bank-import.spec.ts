@@ -212,3 +212,27 @@ test('a credit-card statement imports into the card account and increases what i
   await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('620.50');
   await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
 });
+
+test('ignore all remaining, undo one, and post only that line (LL-089)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('ignore-all').click();
+  await expect(page.getByTestId('review-counts')).toHaveText('0 to post · 3 to ignore');
+  for (const i of [0, 1, 2]) await expect(page.getByTestId(`import-action-${String(i)}`)).toHaveValue('ignore');
+
+  await page.getByTestId('reset-all').click();
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('ignore-all').click();
+  await page.getByTestId('ignore-line-1').click(); // Undo: back to the suggestion for line 2
+  await expect(page.getByTestId('review-counts')).toHaveText('1 to post · 2 to ignore');
+  await expect(page.getByTestId('import-action-1')).toHaveValue('post');
+
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-0')).toHaveText('IGNORED');
+  await expect(page.getByTestId('import-status-1')).toHaveText('POSTED');
+  await expect(page.getByTestId('import-status-2')).toHaveText('IGNORED');
+});
