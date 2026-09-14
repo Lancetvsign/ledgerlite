@@ -214,7 +214,7 @@ describe('postImportLines — categorised entries through the ledger, once each'
         { lineId: rent!.id, action: 'ignore' },
       ],
     });
-    expect(result).toEqual({ posted: 2, ignored: 1, applied: 0 });
+    expect(result).toEqual({ posted: 2, matched: 0, ignored: 1, applied: 0 });
 
     // Bank (asset, debit-natural): +1500 − 120.50 = 1379.50. Sales credited 1500; supplies debited 120.50.
     expect(await balance(c, c.bankId)).toBe('1379.5000');
@@ -306,7 +306,7 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
     const result = await postImportLines(c.userId, c.companyId, batch.id, {
       decisions: [{ lineId: dep.id, action: 'apply_invoice', documentId: invoiceId }],
     });
-    expect(result).toEqual({ posted: 1, ignored: 0, applied: 1 });
+    expect(result).toEqual({ posted: 1, matched: 0, ignored: 0, applied: 1 });
 
     // The money landed in the bank and cleared A/R; revenue is unchanged (no double count).
     expect(await balance(c, c.bankId)).toBe('1500.0000');
@@ -430,7 +430,7 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
         { lineId: dep.id, action: 'post', accountId: c.salesId }, // even re-categorising is refused
       ],
     });
-    expect(again).toEqual({ posted: 0, ignored: 0, applied: 0 });
+    expect(again).toEqual({ posted: 0, matched: 0, ignored: 0, applied: 0 });
     expect(await paymentCount(c.companyId, 'payments')).toBe(1);
     expect(await balance(c, c.bankId)).toBe('1500.0000');
   });
@@ -446,7 +446,7 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
     const result = await postImportLines(c.userId, c.companyId, batch.id, {
       decisions: [{ lineId: supplies.id, action: 'apply_bill', documentId: billId }],
     });
-    expect(result).toEqual({ posted: 1, ignored: 0, applied: 1 });
+    expect(result).toEqual({ posted: 1, matched: 0, ignored: 0, applied: 1 });
 
     expect(await balance(c, c.bankId)).toBe('-120.5000');
     expect(await balance(c, apId)).toBe('0.0000');
@@ -477,7 +477,7 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
         { lineId: rent!.id, action: 'post', accountId: c.rentId },
       ],
     });
-    expect(result).toEqual({ posted: 3, ignored: 0, applied: 2 });
+    expect(result).toEqual({ posted: 3, matched: 0, ignored: 0, applied: 2 });
     expect(await docStatus('bills', billId)).toBe('OPEN');
     expect((await listOpenBills(c.userId, c.companyId)).find((b) => b.id === billId)?.openBalance).toBe('379.5000');
     expect(await balance(c, c.bankId)).toBe('-620.5000'); // +1500 −120.50 −2000
