@@ -75,6 +75,8 @@ export async function uploadStatementAction(formData: FormData): Promise<void> {
 export async function postImportLinesAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const batchId = opt(formData.get('batchId')) ?? '';
+  // A malformed id reads as not-found, never a database error (Gate 6 L1 / LL-093).
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
 
   // Parallel per-line arrays (the journal-form pattern), zipped by index. The review page
   // emits every one of these for EVERY staged row (blank option when unused), so the

@@ -435,6 +435,17 @@ export async function postImportLines(
   // Validate EVERY decision before posting ANY, so a bad account, closed period or
   // over-application on one line stops the whole submit up front rather than after some
   // lines have posted.
+  // One lookup, only when an apply decision is present at all (LL-093).
+  const isCard = input.decisions.some((d) => d.action === 'apply_invoice' || d.action === 'apply_bill')
+    ? (
+        await db
+          .select({ accountType: schema.accounts.accountType })
+          .from(schema.accounts)
+          .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, batch.bankAccountId)))
+          .limit(1)
+      )[0]?.accountType === 'LIABILITY'
+    : false;
+
   const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
@@ -448,18 +459,12 @@ export async function postImportLines(
       continue;
     }
 
-  // A credit-card statement posts to accounts only: paying a bill or settling an invoice
-  // from a card is not modelled (bill payments draw on cash assets) — LL-088.
-  if (input.decisions.some((d) => d.action === 'apply_invoice' || d.action === 'apply_bill')) {
-    const acct = await db
-      .select({ accountType: schema.accounts.accountType })
-      .from(schema.accounts)
-      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, batch.bankAccountId)))
-      .limit(1);
-    if (acct[0]?.accountType === 'LIABILITY') {
+    // A credit-card statement posts to accounts only: paying a bill or settling an
+    // invoice from a card is not modelled (bill payments draw on cash assets) — LL-088.
+    // Checked per LIVE decision, after the idempotent skip above (LL-093).
+    if (isCard && (d.action === 'apply_invoice' || d.action === 'apply_bill')) {
       throw new BankImportError('CARD_CANNOT_APPLY', 'Credit-card statement lines can only be posted to an account.');
     }
-  }
     const n = String(line.lineNumber);
 
     let plan: LinePlan;
