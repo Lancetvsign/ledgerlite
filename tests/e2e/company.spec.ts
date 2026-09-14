@@ -11,7 +11,7 @@ test.describe('company switcher', () => {
     await page.getByPlaceholder('New company legal name').fill(name);
     await page.getByRole('button', { name: 'Create' }).click();
 
-    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+    await expect(page.getByTestId('company-list')).toContainText(name);
     const row = page.locator('li', { hasText: name });
     await expect(row.getByTestId('active-badge')).toBeVisible();
     await expect(row).toContainText('OWNER');
@@ -44,7 +44,7 @@ test.describe('company switcher', () => {
     for (const name of [first, second]) {
       await page.getByPlaceholder('New company legal name').fill(name);
       await page.getByRole('button', { name: 'Create' }).click();
-      await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+      await expect(page.getByTestId('company-list')).toContainText(name);
     }
     // Creating the second made it active; switch back to the first.
     await page.locator('li', { hasText: first }).getByRole('button', { name: 'Switch' }).click();

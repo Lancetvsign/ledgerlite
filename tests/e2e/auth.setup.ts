@@ -1,5 +1,6 @@
 import { expect, test as setup } from '@playwright/test';
 
+import { deleteOwnedCompanies } from './company-cleanup';
 import { E2E_EMAIL as EMAIL, E2E_PASSWORD as PASSWORD, STORAGE_STATE } from './constants';
 
 /**
@@ -12,7 +13,7 @@ import { E2E_EMAIL as EMAIL, E2E_PASSWORD as PASSWORD, STORAGE_STATE } from './c
  * cannot actually produce. Locally the user persists between runs, so an
  * "already exists" answer falls through to sign-in.
  */
-setup('authenticate', async ({ request }) => {
+setup('authenticate', async ({ request, browser }) => {
   const signUp = await request.post('/api/auth/sign-up/email', {
     data: { email: EMAIL, password: PASSWORD, name: 'E2E User' },
   });
@@ -25,4 +26,12 @@ setup('authenticate', async ({ request }) => {
   }
 
   await request.storageState({ path: STORAGE_STATE });
+
+  // Older runs' companies would otherwise pile up on this user (see company-cleanup.ts).
+  const page = await browser.newPage({ storageState: STORAGE_STATE });
+  try {
+    await deleteOwnedCompanies(page);
+  } finally {
+    await page.close();
+  }
 });
