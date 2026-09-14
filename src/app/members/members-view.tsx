@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { roleCovers, type Role } from '@/server/rbac';
 
 import { changeMemberRoleAction, inviteMemberAction, removeMemberAction, revokeInvitationAction } from './actions';
+import { CopyInviteLink } from './copy-invite-link';
 
 import type { InvitationView, MemberView } from '@/server/members';
 
@@ -123,6 +124,7 @@ export function MembersView({
                   <th className="py-2 pr-2">Email</th>
                   <th className="py-2 pr-2">Role</th>
                   <th className="py-2 pr-2">Invited</th>
+                  <th className="py-2 pr-2">Link</th>
                   <th className="py-2 pr-2" />
                 </tr>
               </thead>
@@ -132,6 +134,13 @@ export function MembersView({
                     <td className="py-2 pr-2 font-mono text-xs">{i.email}</td>
                     <td className="py-2 pr-2">{i.role}</td>
                     <td className="py-2 pr-2 text-neutral-500">{i.createdAt.toISOString().slice(0, 10)}</td>
+                    <td className="py-2 pr-2">
+                      {i.hasLink ? (
+                        <CopyInviteLink invitationId={i.id} />
+                      ) : (
+                        <span className="text-xs text-neutral-500" data-testid="legacy-invitation">Created before links existed — revoke and invite again.</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-2">
                       <form action={revokeInvitationAction}>
                         <input type="hidden" name="invitationId" value={i.id} />
@@ -161,8 +170,9 @@ export function MembersView({
               Add member
             </button>
             <p className="basis-full text-xs text-neutral-500">
-              If the email already has a LedgerLite account they get access at once; otherwise the membership
-              appears when they sign up with that email. No email is sent — tell them yourself.
+              If the email already has a LedgerLite account they get access at once. Otherwise an invitation is
+              recorded: click “Get link” on its row and send that link yourself — opening it lets them create
+              their account and join. No email is sent.
             </p>
           </form>
         </section>

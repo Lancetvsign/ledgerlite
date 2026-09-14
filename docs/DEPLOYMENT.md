@@ -214,3 +214,10 @@ Verified in production (2026-09-11):
 - A failed production migration blocking promotion (only the success path has run).
 - A real statement extraction end to end — the pipeline reaches the model; first successful run
   pending the direct-Anthropic route (#78).
+
+## Sign-up is invitation-only in production (LL-090)
+
+With `APP_ENV=production` the sign-up endpoint admits only a request that arrives from a valid join link
+(`/join/<token>`, issued from Account → Team → "Get link"). Nothing to configure. To bootstrap a brand-new
+instance that has no owner yet, set `AUTH_SIGNUP_MODE=open` in the Vercel environment, create the first
+account, then remove the variable and redeploy.

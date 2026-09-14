@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, ne, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
 import { log } from '@/lib/logging';
@@ -11,13 +11,13 @@ import { lockActiveCompany } from '@/server/companies/internal';
 import { roleCovers, type Role } from '@/server/rbac';
 
 import { MemberError } from './errors';
+import { hashToken, INVITATION_TTL_MS, looksLikeToken, newToken } from './token';
 
 import type { PoolDatabase } from '@/db';
 import type { CompanyMembership } from '@/db/schema';
 import type { InviteMemberInput } from '@/validation/member';
 
 export { MemberError, type MemberErrorCode } from './errors';
-export { claimPendingInvitations } from './claim';
 
 type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
 
@@ -53,11 +53,15 @@ export interface InvitationView {
   readonly email: string;
   readonly role: Role;
   readonly createdAt: Date;
+  /** False only for rows created before LL-090 — they can never be claimed; revoke and re-invite. */
+  readonly hasLink: boolean;
+  readonly expiresAt: Date | null;
 }
 
 export type InviteResult =
   | { readonly mode: 'added'; readonly membershipId: string }
-  | { readonly mode: 'invited'; readonly invitationId: string };
+  /** `token` is the one-time secret for the join link; it exists only in memory here. */
+  | { readonly mode: 'invited'; readonly invitationId: string; readonly token: string };
 
 function requireCeiling(actor: CompanyMembership, target: Role): void {
   if (!roleCovers(actor.role, target)) {
@@ -128,16 +132,19 @@ export async function listMembers(actorUserId: string, companyId: string): Promi
 /** Pending invitations — managers only. */
 export async function listInvitations(actorUserId: string, companyId: string): Promise<InvitationView[]> {
   await requirePermission(actorUserId, companyId, 'user.manage');
-  return await getDbTx()
+  const rows = await getDbTx()
     .select({
       id: schema.companyInvitations.id,
       email: schema.companyInvitations.email,
       role: schema.companyInvitations.role,
       createdAt: schema.companyInvitations.createdAt,
+      tokenHash: schema.companyInvitations.tokenHash,
+      expiresAt: schema.companyInvitations.expiresAt,
     })
     .from(schema.companyInvitations)
     .where(and(eq(schema.companyInvitations.companyId, companyId), eq(schema.companyInvitations.status, 'PENDING')))
     .orderBy(asc(schema.companyInvitations.createdAt));
+  return rows.map(({ tokenHash, ...r }) => ({ ...r, hasLink: tokenHash !== null }));
 }
 
 /**
@@ -169,6 +176,19 @@ export async function inviteMember(
       const user = users[0];
 
       if (user !== undefined) {
+        // A pending invitation for this email is superseded by the direct add: resolve
+        // it now so it can never later rewrite the role we grant here (Gate 6 M3).
+        await tx
+          .update(schema.companyInvitations)
+          .set({ status: 'REVOKED', resolvedAt: sql`now()` })
+          .where(
+            and(
+              eq(schema.companyInvitations.companyId, companyId),
+              eq(schema.companyInvitations.email, input.email),
+              eq(schema.companyInvitations.status, 'PENDING'),
+            ),
+          );
+
         const existing = await tx
           .select()
           .from(schema.companyMemberships)
@@ -209,9 +229,11 @@ export async function inviteMember(
         return { mode: 'added', membershipId: membership.id };
       }
 
+      const token = newToken();
+      const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
       const rows = await tx
         .insert(schema.companyInvitations)
-        .values({ companyId, email: input.email, role: input.role, invitedBy: actorUserId })
+        .values({ companyId, email: input.email, role: input.role, invitedBy: actorUserId, tokenHash: hashToken(token), expiresAt })
         .returning();
       const invitation = rows[0];
       if (invitation === undefined) throw new Error('invitation insert returned no row');
@@ -222,9 +244,9 @@ export async function inviteMember(
         action: 'MEMBER_INVITED',
         entityType: 'company_invitation',
         entityId: invitation.id,
-        after: { email: input.email, role: input.role },
+        after: { email: input.email, role: input.role, expiresAt: expiresAt.toISOString() },
       });
-      return { mode: 'invited', invitationId: invitation.id };
+      return { mode: 'invited', invitationId: invitation.id, token };
     });
   } catch (error) {
     if (/company_invitations_pending_email_unique/.test(errorChainText(error))) {
@@ -335,5 +357,199 @@ export async function revokeInvitation(actorUserId: string, companyId: string, i
       before: { status: 'PENDING' },
       after: { status: 'REVOKED' },
     });
+  });
+}
+
+/**
+ * Issues a fresh join link for a PENDING invitation — AUTHORIZED (user.manage).
+ * Each issue replaces the secret, so an older link stops working (said on screen).
+ * Returns the secret once; only its hash is stored.
+ */
+export async function issueInvitationLink(
+  actorUserId: string,
+  companyId: string,
+  invitationId: string,
+): Promise<{ token: string; expiresAt: Date }> {
+  await requirePermission(actorUserId, companyId, 'user.manage');
+  const token = newToken();
+  const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
+
+  await getDbTx().transaction(async (tx) => {
+    await lockActiveCompany(tx, companyId);
+    const rows = await tx
+      .update(schema.companyInvitations)
+      .set({ tokenHash: hashToken(token), expiresAt })
+      .where(
+        and(
+          eq(schema.companyInvitations.id, invitationId),
+          eq(schema.companyInvitations.companyId, companyId),
+          eq(schema.companyInvitations.status, 'PENDING'),
+        ),
+      )
+      .returning({ id: schema.companyInvitations.id });
+    if (rows[0] === undefined) throw new AuthorizationDenied();
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'INVITATION_LINK_ISSUED',
+      entityType: 'company_invitation',
+      entityId: invitationId,
+      after: { expiresAt: expiresAt.toISOString() },
+    });
+  });
+  return { token, expiresAt };
+}
+
+export interface InvitationDescription {
+  readonly companyName: string;
+  readonly role: Role;
+  readonly email: string;
+}
+
+/**
+ * What a join link points at — for the /join page, UNAUTHENTICATED by design: the
+ * secret itself is the credential. Reveals the company's legal name and the invited
+ * role only to a holder of a live link; anything else is null.
+ */
+export async function describeInvitation(token: string): Promise<InvitationDescription | null> {
+  if (!looksLikeToken(token)) return null;
+  const rows = await getDbTx()
+    .select({
+      companyName: schema.companies.legalName,
+      role: schema.companyInvitations.role,
+      email: schema.companyInvitations.email,
+    })
+    .from(schema.companyInvitations)
+    .innerJoin(schema.companies, eq(schema.companyInvitations.companyId, schema.companies.id))
+    .where(
+      and(
+        eq(schema.companyInvitations.tokenHash, hashToken(token)),
+        eq(schema.companyInvitations.status, 'PENDING'),
+        gt(schema.companyInvitations.expiresAt, sql`now()`),
+        eq(schema.companies.status, 'ACTIVE'),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export interface ClaimResult {
+  readonly companyId: string;
+  readonly membershipId: string;
+  readonly role: Role;
+  /** True when the claimant already held an ACTIVE membership: nothing changed, the link is spent. */
+  readonly alreadyMember: boolean;
+}
+
+/**
+ * Turns a live join link into a membership for the signed-in user — LL-090.
+ *
+ * The secret is the authorization (created under user.manage by the inviter); the
+ * invitation's email is a label and is NOT compared. An ACTIVE membership is never
+ * rewritten (Gate 6 M3): the link is spent and the member keeps their role. A removed
+ * (INACTIVE) member is reactivated with the invited role. Lock order: company row,
+ * then the invitation row — the same order issueInvitationLink uses.
+ */
+export async function claimInvitation(appUserId: string, token: string): Promise<ClaimResult> {
+  const invalid = () => new MemberError('INVITATION_INVALID', 'This invitation link is not valid or has expired.');
+  if (!looksLikeToken(token)) throw invalid();
+  const tokenHash = hashToken(token);
+
+  const peek = await getDbTx()
+    .select({ companyId: schema.companyInvitations.companyId })
+    .from(schema.companyInvitations)
+    .where(eq(schema.companyInvitations.tokenHash, tokenHash))
+    .limit(1);
+  const companyId = peek[0]?.companyId;
+  if (companyId === undefined) throw invalid();
+
+  return await getDbTx().transaction(async (tx) => {
+    try {
+      await lockActiveCompany(tx, companyId);
+    } catch (error) {
+      if (error instanceof AuthorizationDenied) throw invalid(); // archived meanwhile
+      throw error;
+    }
+    const invRows = await tx
+      .select()
+      .from(schema.companyInvitations)
+      .where(and(eq(schema.companyInvitations.tokenHash, tokenHash), eq(schema.companyInvitations.companyId, companyId)))
+      .for('update');
+    const invitation = invRows[0];
+    if (
+      invitation === undefined ||
+      invitation.status !== 'PENDING' ||
+      invitation.expiresAt === null ||
+      invitation.expiresAt.getTime() <= Date.now()
+    ) {
+      throw invalid();
+    }
+
+    const existing = await tx
+      .select()
+      .from(schema.companyMemberships)
+      .where(and(eq(schema.companyMemberships.companyId, companyId), eq(schema.companyMemberships.userId, appUserId)))
+      .for('update');
+    const current = existing[0];
+
+    const spend = () =>
+      tx
+        .update(schema.companyInvitations)
+        .set({ status: 'ACCEPTED', acceptedUserId: appUserId, resolvedAt: sql`now()` })
+        .where(eq(schema.companyInvitations.id, invitation.id));
+
+    if (current?.status === 'ACTIVE') {
+      await spend();
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId: appUserId,
+        action: 'INVITATION_CLAIMED',
+        entityType: 'company_invitation',
+        entityId: invitation.id,
+        after: { membershipId: current.id, role: current.role, alreadyMember: true },
+      });
+      return { companyId, membershipId: current.id, role: current.role, alreadyMember: true };
+    }
+
+    let membership: CompanyMembership | undefined;
+    if (current !== undefined) {
+      const rows = await tx
+        .update(schema.companyMemberships)
+        .set({ status: 'ACTIVE', role: invitation.role, updatedAt: sql`now()` })
+        .where(eq(schema.companyMemberships.id, current.id))
+        .returning();
+      membership = rows[0];
+    } else {
+      const rows = await tx
+        .insert(schema.companyMemberships)
+        .values({ companyId, userId: appUserId, role: invitation.role })
+        .returning();
+      membership = rows[0];
+    }
+    if (membership === undefined) throw new Error('membership write returned no row');
+    await spend();
+
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId: appUserId,
+      action: 'INVITATION_CLAIMED',
+      entityType: 'company_invitation',
+      entityId: invitation.id,
+      after: { membershipId: membership.id, role: invitation.role },
+    });
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId: invitation.invitedBy,
+      action: 'MEMBER_ADDED',
+      entityType: 'company_membership',
+      entityId: membership.id,
+      before: current === undefined ? undefined : { status: current.status, role: current.role },
+      after: { userId: appUserId, role: invitation.role, status: 'ACTIVE', via: 'invitation', invitationId: invitation.id },
+    });
+    return { companyId, membershipId: membership.id, role: invitation.role, alreadyMember: false };
   });
 }

@@ -143,6 +143,8 @@ function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'
   if (sp.ok === 'template-released') return { tone: 'ok', text: 'This company is no longer the master template.' };
   if (sp.ok === 'settings-saved') return { tone: 'ok', text: 'Settings saved.' };
   if (sp.ok === 'you-left') return { tone: 'ok', text: 'You left the company.' };
+  if (sp.ok === 'joined') return { tone: 'ok', text: 'Welcome — you have joined the company.' };
+  if (sp.ok === 'already-member') return { tone: 'ok', text: 'You were already a member of that company; nothing changed.' };
   if (sp.error === undefined) return null;
   if (sp.error === 'NAME_MISMATCH') return { tone: 'error', text: 'The name you typed does not match the company name. Nothing was deleted.' };
   if (sp.error === 'TEMPLATE_EXISTS') return { tone: 'error', text: 'Another company is already the master template. Release it first.' };

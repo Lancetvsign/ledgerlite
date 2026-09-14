@@ -40,7 +40,7 @@ import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
 import { insertMembership } from '@/server/companies/internal';
-import { changeMemberRole, inviteMember, listInvitations, removeMember, revokeInvitation } from '@/server/members';
+import { changeMemberRole, inviteMember, issueInvitationLink, listInvitations, removeMember, revokeInvitation } from '@/server/members';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { attack, type IsolationContext, type IsolationDescriptor } from '../helpers/isolation';
@@ -152,6 +152,11 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'revoke an invitation by direct id',
         expect: 'denied',
         run: (attacker, victim, recordId) => revokeInvitation(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'issue a join link for an invitation by direct id',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => issueInvitationLink(attacker, victim.companyId, recordId),
       },
       {
         operation: 'invite someone into the victim company',

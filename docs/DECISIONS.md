@@ -2291,6 +2291,18 @@ membership. The app sends no email.
 Email delivery, invitation expiry or resend, an ownership-transfer wizard, or reactivating an
 archived company's memberships is wanted.
 
+**Amendment (LL-090 / Gate 6 H1, M2, M3):** the trust model changed. **The join link's secret is the
+authorization**, not the email: an invitation carries a 32-byte random token (stored as a SHA-256 hash,
+14-day expiry, re-issuable — each issue invalidates the previous link); `claimInvitation` grants the
+membership to whichever signed-in account presents it, and the email on the invitation is a label only.
+The email-based claim-on-entry is gone. **Production sign-up is invitation-only**: in `'invitation'` mode
+(always in production; `AUTH_SIGNUP_MODE=invitation` elsewhere) the sign-up endpoint admits only a
+request carrying the short-lived join cookie the `/join/<token>` page sets after validating the link; dev,
+CI and e2e run `'open'` mode for their fixture users. A claim never rewrites an ACTIVE membership's role
+(the link is spent; a removed member is reactivated with the invited role), and a direct add resolves any
+pending invitation for that email. Closing sign-up also closes the template-slot exposure (M2). Links are
+handed over by the owner; no mail is sent.
+
 ## ADR-042 — An unposted bank-statement import is a staging artifact and may be deleted outright
 
 **Status** Accepted · **Added by** LL-087 · **Decided by** product owner ("add delete a download")

@@ -54,7 +54,7 @@ export default async function MembersPage({
 
 function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'; text: string } | null {
   if (sp.ok === 'member-added') return { tone: 'ok', text: 'Member added: they already had an account, so they have access now.' };
-  if (sp.ok === 'member-invited') return { tone: 'ok', text: 'Invitation recorded. When that email signs up and opens LedgerLite, the membership appears automatically — let them know.' };
+  if (sp.ok === 'member-invited') return { tone: 'ok', text: 'Invitation recorded. Click “Get link” on its row and send that link to them yourself.' };
   if (sp.ok === 'role-changed') return { tone: 'ok', text: 'Role changed.' };
   if (sp.ok === 'member-removed') return { tone: 'ok', text: 'Member removed. Their history stays; they can be added again later.' };
   if (sp.ok === 'invitation-revoked') return { tone: 'ok', text: 'Invitation revoked.' };

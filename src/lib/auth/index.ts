@@ -2,10 +2,15 @@ import 'server-only';
 
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 
 import { getDbTx, schema } from '@/db';
 
+import { JOIN_COOKIE } from '@/server/members/token';
+import { isClaimableInvitationToken } from '@/server/members/token-check';
+
 import { resolveBaseUrl, resolveTrustedOrigins } from './origins';
+import { signUpMode } from './signup-mode';
 
 /**
  * Better Auth instance.
@@ -55,6 +60,22 @@ function createAuth() {
 
     emailAndPassword: {
       enabled: true,
+    },
+
+    // Invitation-only sign-up (LL-090 / ADR-041): in 'invitation' mode the sign-up
+    // endpoint admits only a request that carries a live invitation secret in the
+    // join cookie, which the /join/<token> page sets after validating the link.
+    // The gate permits ACCOUNT CREATION only; the membership is granted separately
+    // by claimInvitation. Mode is read per request so tests can flip it.
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== '/sign-up/email') return;
+        if (signUpMode() === 'open') return;
+        const token = ctx.getCookie(JOIN_COOKIE);
+        if (token === null || !(await isClaimableInvitationToken(token))) {
+          throw new APIError('FORBIDDEN', { message: 'Sign-up is by invitation only. Ask your company owner for an invitation link.' });
+        }
+      }),
     },
 
     // Better Auth rate-limits its auth endpoints in production (off in dev). The

@@ -82,6 +82,8 @@ export const auditAction = pgEnum('audit_action', [
   'MEMBER_ROLE_CHANGED',
   'MEMBER_REMOVED',
   'INVITATION_REVOKED',
+  'INVITATION_LINK_ISSUED',
+  'INVITATION_CLAIMED',
 ]);
 
 export const auditEvents = pgTable(
