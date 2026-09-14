@@ -891,7 +891,9 @@ describe('GL regression suite (release-blocking)', () => {
 
     // Raw SQL flags A/R as a cash account; the import and reconciliation front doors still refuse it.
     await db.execute(sql`update accounts set cash_flow_category = 'CASH' where id = ${arId}`);
-    expect(await codeOf(stageImport(userId, company.id, { bankAccountId: arId, filename: 'x.pdf', fileBytes: new Uint8Array() }, cannedExtractor))).toBe('INVALID_BANK_ACCOUNT');
+    const staged = await stageImport(userId, company.id, { bankAccountId: arId, filename: 'x.pdf', fileBytes: new Uint8Array() }, cannedExtractor)
+      .then(() => 'STAGED', (e: unknown) => (e as { code?: string }).code ?? 'unknown');
+    expect(staged).toBe('INVALID_BANK_ACCOUNT');
 
     // Raw BANK_IMPORT and OPENING_BALANCE lines into A/R are refused by the database itself.
     for (const source of ['BANK_IMPORT', 'OPENING_BALANCE']) {
