@@ -33,7 +33,7 @@ import { ReviewStateProvider, type LineAction } from './review-state';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY']);
+const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY', 'RETAINED_EARNINGS']);
 
 interface DocumentOption {
   readonly id: string;

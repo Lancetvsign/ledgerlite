@@ -67,6 +67,18 @@ test.describe('authenticated', () => {
     );
   });
 
+  test('a system account can be renamed but its subtype and cash-flow section are fixed (LL-091)', async ({ page }) => {
+    await freshCompanyWithChart(page);
+    const row = page.getByTestId('account-row').filter({ hasText: 'Accounts Receivable' });
+    await row.getByRole('button', { name: 'Edit' }).click();
+    const editForm = page.locator('form', { has: page.getByRole('button', { name: 'Save' }) });
+    await expect(editForm.getByTestId('system-fixed-fields')).toBeVisible();
+    await expect(editForm.getByRole('combobox')).toHaveCount(0); // no cash-flow select on a system row
+    await editForm.getByRole('textbox').first().fill('Trade Receivables');
+    await editForm.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByTestId('accounts-table')).toContainText('Trade Receivables');
+  });
+
   test('system accounts show a badge and offer no deactivate', async ({ page }) => {
     await freshCompanyWithChart(page);
     const arRow = page.getByTestId('account-row').filter({ hasText: 'Accounts Receivable' });

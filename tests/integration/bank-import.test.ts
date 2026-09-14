@@ -238,7 +238,7 @@ describe('postImportLines — categorised entries through the ledger, once each'
     const c = await setup();
     const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const line = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
-    for (const bad of [await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'), await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE'), await sysAccount(c.companyId, 'OPENING_BALANCE_EQUITY'), c.bankId]) {
+    for (const bad of [await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'), await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE'), await sysAccount(c.companyId, 'OPENING_BALANCE_EQUITY'), await sysAccount(c.companyId, 'RETAINED_EARNINGS'), c.bankId]) {
       const err = await errOf(postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: line.id, action: 'post', accountId: bad }] }));
       expect(err.code).toBe('CONTROL_ACCOUNT_NOT_ALLOWED');
     }
