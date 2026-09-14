@@ -154,8 +154,18 @@ export async function updateAccount(
   }
 
   // Editing permitted fields never touches account_type, system_account_type,
-  // or company — those are not in UpdateAccountInput, so there is nothing to
-  // guard here beyond the schema itself.
+  // or company — those are not in UpdateAccountInput. A SYSTEM account's subtype
+  // and cash-flow section are fixed too (LL-091 / Gate 6 H2): changing them is how
+  // A/R became a "cash" account and got imported into. Unchanged values pass, so
+  // renaming a system account through the row form (which submits every field)
+  // keeps working.
+  if (existing.systemAccountType !== null) {
+    const subtypeChanges = input.accountSubtype !== undefined && input.accountSubtype !== existing.accountSubtype;
+    const cashFlowChanges = input.cashFlowCategory !== undefined && input.cashFlowCategory !== existing.cashFlowCategory;
+    if (subtypeChanges || cashFlowChanges) {
+      throw new AccountError('SYSTEM_ACCOUNT_PROTECTED', 'A system account keeps its subtype and cash-flow section.');
+    }
+  }
   try {
     return await getDbTx().transaction(async (tx) => {
       const rows = await tx

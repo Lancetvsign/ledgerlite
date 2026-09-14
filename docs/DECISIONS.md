@@ -1496,6 +1496,13 @@ change here).
 
 ---
 
+**Amendment (LL-091 / Gate 6 H2):** the control-account lock now refuses every NON-DOCUMENT source —
+`JOURNAL_ENTRY`, `BANK_IMPORT` and `OPENING_BALANCE` — into Accounts Receivable and Accounts Payable
+(migration 0037 replaces both trigger functions in place). Alongside it, a system account can never be a
+statement account (`isStatementAccount` ignores subtype/cash-flow for any `system_account_type`) and
+`updateAccount` refuses to change a system account's subtype or cash-flow section. Retained Earnings is no
+longer offered as an import category. Gate 6 found that an ADMIN could flag A/R as CASH and import into it.
+
 ## ADR-026 — Document submit-once idempotency reuses the journal key, fingerprinting the REQUEST
 
 **Status** Accepted · **Added by** LL-067 · **Decided by** product owner

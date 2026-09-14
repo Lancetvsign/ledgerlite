@@ -54,6 +54,9 @@ import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
 
+import { stageImport } from '@/server/bank-import';
+import { cannedExtractor } from '@/server/bank-import/extract';
+
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
 
@@ -108,6 +111,18 @@ function post(
 }
 
 /** Runs a promise expected to throw a LedgerError; returns its code. */
+const chainText = (err: unknown): string => {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  let acc = '';
+  while (cur instanceof Error && !seen.has(cur)) {
+    seen.add(cur);
+    acc += ' ' + cur.message;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return acc;
+};
+
 async function codeOf(p: Promise<unknown>): Promise<string> {
   try {
     await p;
@@ -859,6 +874,42 @@ describe('GL regression suite (release-blocking)', () => {
     expect(await reconciles()).toBe('300.0000');
 
     await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T028 — no non-document source can move A/R, even by raw SQL or a mislabelled statement account (LL-091)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Control Source Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+
+    // Raw SQL flags A/R as a cash account; the import and reconciliation front doors still refuse it.
+    await db.execute(sql`update accounts set cash_flow_category = 'CASH' where id = ${arId}`);
+    expect(await codeOf(stageImport(userId, company.id, { bankAccountId: arId, filename: 'x.pdf', fileBytes: new Uint8Array() }, cannedExtractor))).toBe('INVALID_BANK_ACCOUNT');
+
+    // Raw BANK_IMPORT and OPENING_BALANCE lines into A/R are refused by the database itself.
+    for (const source of ['BANK_IMPORT', 'OPENING_BALANCE']) {
+      let refused = false;
+      try {
+        await db.transaction(async (tx) => {
+          const e = await tx.execute<{ id: string }>(sql`
+            insert into journal_entries (company_id, transaction_date, posting_date, status, source_type, created_by)
+            values (${company.id}, '2026-03-01', '2026-03-01', 'DRAFT', ${source}::journal_source_type, ${userId}) returning id`);
+          await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${e.rows[0]!.id}, ${company.id}, ${arId}, 1, 10, 0)`);
+        });
+      } catch (err) {
+        refused = /CONTROL_ACCOUNT_MANUAL_POST/.test(chainText(err));
+      }
+      expect(refused, source).toBe(true);
+    }
+    expect(await arNow()).toBe('0.0000');
+    expect((await getArAging(userId, company.id, '2026-12-31')).totals.total).toBe('0.0000');
   });
 
   it('GL-T027 — neither manual bypass can move A/P without its subsidiary (LL-066)', async () => {

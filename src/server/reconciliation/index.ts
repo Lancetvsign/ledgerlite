@@ -104,6 +104,7 @@ export async function startReconciliation(
       accountType: schema.accounts.accountType,
       cashFlowCategory: schema.accounts.cashFlowCategory,
       accountSubtype: schema.accounts.accountSubtype,
+      systemAccountType: schema.accounts.systemAccountType,
     })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))

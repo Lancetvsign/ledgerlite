@@ -27,13 +27,23 @@ export function AccountRow({ account, canManage }: { account: Account; canManage
           <form action={updateAccountAction} className="flex flex-wrap gap-2">
             <input type="hidden" name="accountId" value={account.id} />
             <input name="name" defaultValue={account.name} required className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
-            <input name="accountSubtype" defaultValue={account.accountSubtype ?? ''} placeholder="subtype" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
-            <select name="cashFlowCategory" aria-label="Cash-flow section" defaultValue={account.cashFlowCategory ?? ''} className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
-              <option value="">Cash-flow…</option>
-              {CASH_FLOW.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
+            {isSystem ? (
+              // A system account keeps its subtype and cash-flow section (LL-091); the
+              // server refuses a change regardless, this just does not offer one.
+              <span className="self-center text-xs text-neutral-500" data-testid="system-fixed-fields">
+                {account.accountSubtype ?? '—'} · {account.cashFlowCategory ?? 'no cash-flow section'} (fixed for system accounts)
+              </span>
+            ) : (
+              <>
+                <input name="accountSubtype" defaultValue={account.accountSubtype ?? ''} placeholder="subtype" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900" />
+                <select name="cashFlowCategory" aria-label="Cash-flow section" defaultValue={account.cashFlowCategory ?? ''} className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+                  <option value="">Cash-flow…</option>
+                  {CASH_FLOW.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </>
+            )}
             <button type="submit" className="rounded bg-neutral-900 px-2 py-1 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">Save</button>
             <button type="button" onClick={() => { setEditing(false); }} className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700">Cancel</button>
           </form>

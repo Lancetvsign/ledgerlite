@@ -55,7 +55,8 @@ import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } fro
  */
 
 /** Accounts a bank-import line may never be categorised to. */
-const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY']);
+// A bank line is never a closing entry either: Retained Earnings moves only through year-end close (LL-091).
+const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY', 'RETAINED_EARNINGS']);
 
 function normalizeDescription(d: string): string {
   return d.trim().toLowerCase();
@@ -181,6 +182,7 @@ export async function stageImport(
       accountType: schema.accounts.accountType,
       accountSubtype: schema.accounts.accountSubtype,
       cashFlowCategory: schema.accounts.cashFlowCategory,
+      systemAccountType: schema.accounts.systemAccountType,
     })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))

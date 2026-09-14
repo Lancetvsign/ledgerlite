@@ -69,6 +69,7 @@ function noticeFrom(p: { error?: string; created?: string; updated?: string; dea
   if (p.updated) return 'Account updated.';
   if (p.deactivated) return 'Account deactivated.';
   if (p.error === 'invalid') return 'Please check the form and try again.';
+  if (p.error === 'SYSTEM_ACCOUNT_PROTECTED') return 'System accounts keep their subtype and cash-flow section; only the name, number and description can change.';
   if (p.error === 'denied') return 'Not found.'; // forbidden reads as not-found
   if (p.error) return 'That action could not be completed.';
   return null;
