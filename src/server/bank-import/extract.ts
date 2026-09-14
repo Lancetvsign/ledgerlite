@@ -88,12 +88,22 @@ export const notConfiguredExtractor: TransactionExtractor = () => {
  * Synthetic, deterministic statement lines (money in is positive, out is negative). The
  * categories name standard-chart accounts so the category→account mapping is exercised.
  */
-export const cannedExtractor: TransactionExtractor = () =>
-  Promise.resolve([
-    { date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00', category: 'Sales Revenue' },
-    { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
-    { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
-  ]);
+export const cannedExtractor: TransactionExtractor = (input) =>
+  Promise.resolve(
+    input.context?.statementKind === 'credit_card'
+      ? [
+          // A card statement (LL-088/094): two purchases and the payment that mirrors the
+          // bank statement's "MONTHLY RENT PAYMENT" −2000 when that line is categorised to the card.
+          { date: '2026-06-02', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+          { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
+          { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
+        ]
+      : [
+          { date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00', category: 'Sales Revenue' },
+          { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+          { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
+        ],
+  );
 
 // ---------------------------------------------------------------------------------------
 // AI extractor

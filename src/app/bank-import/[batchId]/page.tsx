@@ -46,7 +46,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -107,6 +107,9 @@ export default async function ReviewImportPage({
   const suggestionFor = (l: ImportLineView): { moneyIn: boolean; options: DocumentOption[]; documentId: string; action: LineAction } => {
     const amt = toMoney(l.amount);
     const moneyIn = amt.isPositive();
+    // A POSTED mirror on another statement account (LL-094): default to matching it, so the
+    // transfer posts once and both statements reconcile.
+    if (l.transferCandidate?.status === 'POSTED') return { moneyIn, options: [], documentId: '', action: 'match_transfer' };
     if (isCard) return { moneyIn, options: [], documentId: '', action: 'post' };
     const options = moneyIn ? invoiceOptions : billOptions;
     const abs = amt.abs();
@@ -179,6 +182,13 @@ export default async function ReviewImportPage({
                         possible duplicate
                       </span>
                     )}
+                    {l.transferCandidate !== null && (
+                      <span data-testid="transfer-flag" className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-900 dark:bg-sky-900 dark:text-sky-100">
+                        {l.transferCandidate.status === 'POSTED'
+                          ? `transfer already posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'} on ${l.transferCandidate.txnDate}`
+                          : `possible transfer — also staged on ${nameById.get(l.transferCandidate.accountId) ?? 'another account'}; post one side, then match the other`}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 pr-2 text-right tabular-nums" data-testid={`import-amount-${String(i)}`}>{formatMoney(l.amount)}</td>
                   {s !== null ? (
@@ -187,7 +197,8 @@ export default async function ReviewImportPage({
                     <>
                       <td className="py-2 pr-2">
                         <input type="hidden" name="lineId" value={l.id} />
-                        <select name="accountId" defaultValue={l.suggestedAccountId ?? ''} data-testid={`import-account-${String(i)}`} className={selectClass}>
+                        <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
+                        <select name="accountId" defaultValue={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.accountId : (l.suggestedAccountId ?? '')} data-testid={`import-account-${String(i)}`} className={selectClass}>
                           <option value="">Choose account…</option>
                           {pickable.map((a) => (
                             <option key={a.id} value={a.id}>{label(a)}</option>
@@ -205,7 +216,14 @@ export default async function ReviewImportPage({
                         )}
                       </td>
                       <td className="py-2 pr-2">
-                        <LineActionControls index={i} moneyIn={s.moneyIn} allowApply={!isCard} />
+                        <LineActionControls
+                          index={i}
+                          moneyIn={s.moneyIn}
+                          allowApply={!isCard}
+                          {...(l.transferCandidate?.status === 'POSTED'
+                            ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
+                            : {})}
+                        />
                       </td>
                     </>
                   ) : (
@@ -268,11 +286,16 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
-    return applied === '0' ? base : `${base} ${applied} applied to open invoices/bills.`;
+    const matched = sp.matched ?? '0';
+    return (
+      base +
+      (applied === '0' ? '' : ` ${applied} applied to open invoices/bills.`) +
+      (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`)
+    );
   }
   const error = sp.error;
   if (error === undefined) return null;
@@ -282,6 +305,8 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Accounts Receivable, Accounts Payable, Opening Balance Equity, and the bank account itself cannot be used — pick another account.';
   if (error === 'DOCUMENT_REQUIRED') return 'Choose an open invoice or bill for every line you are applying.';
   if (error === 'WRONG_DIRECTION') return 'Money in can only be applied to an invoice; money out only to a bill.';
+  if (error === 'TRANSFER_ALREADY_POSTED') return 'The other side of that transfer already posted from the other account — choose “Match transfer” (or Ignore) instead of posting it again.';
+  if (error === 'TRANSFER_MISMATCH') return 'That line is not the posted mirror of the transfer — reload and review again.';
   if (error === 'CARD_CANNOT_APPLY') return 'Credit-card statement lines can only be posted to an account — pay bills from a bank account.';
   if (error === 'DOCUMENT_NOT_OPEN' || error === 'INVOICE_NOT_OPEN' || error === 'BILL_NOT_OPEN' || error === 'INVOICE_NOT_FOUND' || error === 'BILL_NOT_FOUND') {
     return 'That invoice or bill is no longer open — reload and choose again.';

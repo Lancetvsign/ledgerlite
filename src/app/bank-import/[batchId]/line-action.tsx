@@ -13,11 +13,14 @@ export function LineActionControls({
   index,
   moneyIn,
   allowApply,
+  matchLabel,
 }: {
   index: number;
   moneyIn: boolean;
   /** False on credit-card statements: lines post to accounts only (LL-088). */
   allowApply: boolean;
+  /** Present when a POSTED mirror exists on another statement account (LL-094). */
+  matchLabel?: string;
 }) {
   const { actions, defaults, setAction } = useReviewState();
   const key = String(index);
@@ -38,6 +41,7 @@ export function LineActionControls({
       >
         <option value="post">Post to account</option>
         <option value="ignore">Ignore</option>
+        {matchLabel !== undefined && <option value="match_transfer">{matchLabel}</option>}
         {allowApply &&
           (moneyIn ? (
             <option value="apply_invoice">Apply to invoice</option>

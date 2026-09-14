@@ -203,14 +203,48 @@ test('a credit-card statement imports into the card account and increases what i
   await expect(page.getByTestId('import-document-0')).toHaveCount(0); // no apply-to-document on a card
   await expect(page.getByTestId('import-action-0').locator('option[value="apply_invoice"]')).toHaveCount(0);
 
-  // Canned statement: +1500 (Sales Revenue), −120.50 (Office Supplies), −2000 (Rent) — post all.
+  // Canned CARD statement: −120.50 (Office Supplies), −45 (Travel & Meals), +2000 payment (no
+  // category — it came from Checking, which is not imported in this test). Post all.
+  await page.getByTestId('import-account-2').selectOption({ label: '1000 · Checking' });
   await page.getByTestId('post-import-lines').click();
   await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
 
-  // Card (credit-normal) = 120.50 + 2000 − 1500 = 620.50 owed.
+  // Card (credit-normal) = 120.50 + 45 − 2000 = −1,834.50 (paid ahead); books balance.
   await page.goto('/reports/trial-balance');
-  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('620.50');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('-1,834.50');
   await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+});
+
+test('a transfer imported from both statements posts once — the card side is matched, not re-posted (LL-094)', async ({ page }) => {
+  await freshCompany(page);
+  // Bank statement: the −2000 "rent" line is the card payment → categorise it to the card and post all.
+  await uploadStatement(page);
+  await page.getByTestId('import-account-2').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+
+  // Card statement: the +2000 payment is flagged as the already-posted transfer and defaults to Match.
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('transfer-flag')).toHaveCount(1);
+  await expect(page.getByTestId('transfer-flag')).toContainText('transfer already posted from 1000 · Checking');
+  await expect(page.getByTestId('import-action-2')).toHaveValue('match_transfer');
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 0. 1 matched to a transfer', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-2')).toHaveText('POSTED');
+
+  // One movement, not two: Checking 1500 − 120.50 − 2000 = −620.50; Card 120.50 + 45 − 2000 = −1,834.50.
+  await page.goto('/reports/trial-balance');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Checking' })).toContainText('-620.50');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('-1,834.50');
+  await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('dashboard-recent-row')).toHaveCount(5); // 3 bank + 2 card purchases
 });
 
 test('ignore all remaining, undo one, and post only that line (LL-089)', async ({ page }) => {

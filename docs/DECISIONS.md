@@ -1952,6 +1952,16 @@ credit card so it signs purchases as money OUT whatever the statement prints. Ca
 accounts only: applying to an invoice or bill is refused (`CARD_CANNOT_APPLY`) because bill payments
 draw on cash assets. Paying the card is the checking-statement line categorised to the card account.
 
+**Amendment (LL-094 — transfers between two statement accounts, Gate 6 M1):** when both sides of a
+transfer are imported (the checking statement's "payment to card" and the card statement's "payment
+received"), staging flags the mirror line — same company, another statement account, opposite amount,
+within three days — and, if that mirror already POSTED, the review defaults to a new decision
+**match_transfer**: the line is marked POSTED against the SAME journal entry (no second entry; the entry's
+line on this account is verified first), so the transfer posts once and both statements reconcile through
+`from_import`. Posting the exact mirror to the other statement account is refused
+(`TRANSFER_ALREADY_POSTED`); a wrong, staged or already-mirrored counterpart is `TRANSFER_MISMATCH`; one
+mirror per entry. When both sides are only staged, the flag says so and one side must post first.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner

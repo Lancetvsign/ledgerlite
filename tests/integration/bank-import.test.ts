@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { getAuth } from '@/lib/auth';
 import { createAccount } from '@/server/accounts';
 import { BankImportError, deleteImportBatch, getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
-import { notConfiguredExtractor, type TransactionExtractor } from '@/server/bank-import/extract';
+import { cannedExtractor, notConfiguredExtractor, type TransactionExtractor } from '@/server/bank-import/extract';
 import { listOpenBills } from '@/server/bill-payments';
 import { createBill, finalizeBill } from '@/server/bills';
 import { createCompanyWithOwner } from '@/server/companies';
@@ -127,6 +127,11 @@ async function balance(c: Ctx, accountId: string): Promise<string> {
 async function entryCount(companyId: string): Promise<number> {
   const db = await getTestDb();
   return Number((await db.execute<{ n: string }>(sql`select count(*)::text n from journal_entries where company_id = ${companyId} and source_type = 'BANK_IMPORT' and status = 'POSTED'`)).rows[0]?.n ?? '0');
+}
+
+async function assertLedgerIntegrityFor(c: Ctx): Promise<void> {
+  const tb = await getTrialBalance(c.userId, c.companyId, '2026-12-31');
+  expect(tb.balanced).toBe(true);
 }
 
 const errOf = async (p: Promise<unknown>): Promise<BankImportError> => {
@@ -700,5 +705,94 @@ describe('card guard placement (LL-093 / Gate 6 L2)', () => {
     expect((await errOf(postImportLines(c.userId, c.companyId, again.id, {
       decisions: [{ lineId: live.id, action: 'apply_bill', documentId: '00000000-0000-4000-8000-000000000000' }],
     }))).code).toBe('CARD_CANNOT_APPLY');
+  });
+});
+
+describe('transfers between two statement accounts post once (LL-094 / Gate 6 M1)', () => {
+  async function withCard(): Promise<Ctx & { cardId: string }> {
+    const c = await setup();
+    const card = await createAccount(c.userId, c.companyId, createAccountInput.parse({ accountNumber: '2170', name: 'Visa', accountType: 'LIABILITY', accountSubtype: 'credit_card' }));
+    return { ...c, cardId: card.id };
+  }
+  /** Bank statement posted: the −2000 "rent" line is really the card payment, categorised to the card. */
+  async function postCardPaymentFromBank(c: Ctx & { cardId: string }): Promise<{ bankLineId: string; entryId: string }> {
+    const bank = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'bank.pdf', fileBytes: EMPTY }, STATEMENT);
+    const lines = (await getImportBatch(c.userId, c.companyId, bank.id))!.lines;
+    await postImportLines(c.userId, c.companyId, bank.id, {
+      decisions: [
+        { lineId: lines[0]!.id, action: 'post', accountId: c.salesId },
+        { lineId: lines[1]!.id, action: 'post', accountId: c.suppliesId },
+        { lineId: lines[2]!.id, action: 'post', accountId: c.cardId },
+      ],
+    });
+    const after = (await getImportBatch(c.userId, c.companyId, bank.id))!.lines[2]!;
+    return { bankLineId: after.id, entryId: after.journalEntryId! };
+  }
+
+  it('the card statement flags the posted mirror, matching marks it posted against the SAME entry, and nothing double-counts', async () => {
+    const c = await withCard();
+    const { bankLineId, entryId } = await postCardPaymentFromBank(c);
+    expect(await entryCount(c.companyId)).toBe(3);
+
+    const card = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa.pdf', fileBytes: EMPTY }, cannedExtractor);
+    const view = (await getImportBatch(c.userId, c.companyId, card.id))!;
+    const [purchase, fuel, payment] = view.lines;
+    expect(payment!.amount).toBe('2000.0000');
+    expect(payment!.transferCandidate).toMatchObject({ lineId: bankLineId, status: 'POSTED', journalEntryId: entryId, accountId: c.bankId });
+    expect(purchase!.transferCandidate).toBeNull();
+
+    const r = await postImportLines(c.userId, c.companyId, card.id, {
+      decisions: [
+        { lineId: purchase!.id, action: 'post', accountId: c.suppliesId },
+        { lineId: fuel!.id, action: 'post', accountId: c.rentId },
+        { lineId: payment!.id, action: 'match_transfer', counterpartLineId: bankLineId },
+      ],
+    });
+    expect(r).toMatchObject({ posted: 2, matched: 1, ignored: 0, applied: 0 });
+    const done = (await getImportBatch(c.userId, c.companyId, card.id))!.lines[2]!;
+    expect(done).toMatchObject({ status: 'POSTED', journalEntryId: entryId, chosenAccountId: c.bankId });
+    expect(await entryCount(c.companyId)).toBe(5); // 3 + 2 purchases; the payment made NO new entry
+    // Card is credit-normal: charges 120.50 + 45 − payment 2000 = −1834.50; bank −2000 for the payment.
+    expect(await balance(c, c.cardId)).toBe('-1834.5000');
+    expect(await balance(c, c.bankId)).toBe('-620.5000'); // 1500 − 120.50 − 2000
+    await assertLedgerIntegrityFor(c);
+  });
+
+  it('posting the exact mirror again is refused; a wrong or staged counterpart is a mismatch; one mirror per entry', async () => {
+    const c = await withCard();
+    const { bankLineId } = await postCardPaymentFromBank(c);
+    const card = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa.pdf', fileBytes: EMPTY }, cannedExtractor);
+    const [purchase, , payment] = (await getImportBatch(c.userId, c.companyId, card.id))!.lines;
+
+    expect((await errOf(postImportLines(c.userId, c.companyId, card.id, {
+      decisions: [{ lineId: payment!.id, action: 'post', accountId: c.bankId }],
+    }))).code).toBe('TRANSFER_ALREADY_POSTED');
+    // Posting it to a different category is the reviewer's call (not a mirror of that entry).
+    expect((await errOf(postImportLines(c.userId, c.companyId, card.id, {
+      decisions: [{ lineId: payment!.id, action: 'match_transfer', counterpartLineId: purchase!.id }],
+    }))).code).toBe('TRANSFER_MISMATCH');
+    expect((await errOf(postImportLines(c.userId, c.companyId, card.id, {
+      decisions: [{ lineId: payment!.id, action: 'match_transfer' }],
+    }))).code).toBe('TRANSFER_MISMATCH');
+
+    await postImportLines(c.userId, c.companyId, card.id, { decisions: [{ lineId: payment!.id, action: 'match_transfer', counterpartLineId: bankLineId }] });
+    // A second card statement carrying the same payment cannot match the same entry again.
+    const card2 = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa-again.pdf', fileBytes: EMPTY }, cannedExtractor);
+    const payment2 = (await getImportBatch(c.userId, c.companyId, card2.id))!.lines[2]!;
+    expect((await errOf(postImportLines(c.userId, c.companyId, card2.id, {
+      decisions: [{ lineId: payment2.id, action: 'match_transfer', counterpartLineId: bankLineId }],
+    }))).code).toBe('TRANSFER_ALREADY_POSTED');
+  });
+
+  it('when both sides are only staged, the candidate is flagged but cannot be matched until one side posts', async () => {
+    const c = await withCard();
+    const bank = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, filename: 'bank.pdf', fileBytes: EMPTY }, STATEMENT);
+    const card = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa.pdf', fileBytes: EMPTY }, cannedExtractor);
+    const bankRent = (await getImportBatch(c.userId, c.companyId, bank.id))!.lines[2]!;
+    const payment = (await getImportBatch(c.userId, c.companyId, card.id))!.lines[2]!;
+    expect(payment.transferCandidate).toMatchObject({ lineId: bankRent.id, status: 'STAGED', journalEntryId: null });
+    expect((await errOf(postImportLines(c.userId, c.companyId, card.id, {
+      decisions: [{ lineId: payment.id, action: 'match_transfer', counterpartLineId: bankRent.id }],
+    }))).code).toBe('TRANSFER_MISMATCH');
   });
 });
