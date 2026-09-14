@@ -77,9 +77,11 @@ existing OWNER (OWNER alone holds `company.delete` and `company.template`); any 
 OWNER-only capability tightens the ceiling automatically. A ceiling failure is the same
 uniform denial as no membership. The mirror rule protects the company: a change or removal
 is refused (`LAST_OWNER`) when no other active member would still cover the affected role.
-Invitations for emails without an account are claimed on that email's first entry; the
-invitation row — created under `user.manage` — is the authorization, and the inviter is the
-audit actor of record.
+**Invitations and sign-up (LL-090).** An invitation is claimed only by presenting its join link's
+secret (random, hashed at rest, 14-day expiry, re-issuable); the invited email is a label. Production
+sign-up is invitation-only: the sign-up endpoint admits only a request carrying the join cookie that the
+`/join/<token>` page sets after validating a live link. A claim never rewrites an existing ACTIVE
+membership. Non-production environments run open sign-up (`AUTH_SIGNUP_MODE`) for fixture users.
 
 ## The authorization layer (LL-013)
 

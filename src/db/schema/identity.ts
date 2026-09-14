@@ -174,12 +174,20 @@ export const companyInvitations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
     acceptedUserId: uuid('accepted_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    /**
+     * LL-090: the invitation's secret, stored as a SHA-256 hex hash — the link the
+     * inviter hands over IS the authorization to join. Nullable only for rows created
+     * before LL-090, which can never be claimed (revoke and re-invite).
+     */
+    tokenHash: text('token_hash'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   },
   (table) => [
     // The standing tenancy constraint.
     unique('company_invitations_company_id_id_unique').on(table.companyId, table.id),
+    uniqueIndex('company_invitations_token_hash_unique').on(table.tokenHash).where(sql`${table.tokenHash} is not null`),
     check('company_invitations_email_lowercase', sql`${table.email} = lower(btrim(${table.email}))`),
     check('company_invitations_accepted_stamp', sql`(${table.status} = 'ACCEPTED') = (${table.acceptedUserId} is not null)`),
     check('company_invitations_resolved_stamp', sql`(${table.status} <> 'PENDING') = (${table.resolvedAt} is not null)`),

@@ -3,21 +3,20 @@ import { expect, test } from '@playwright/test';
 import { MEMBERS_STORAGE } from './constants';
 
 /**
- * Team membership — LL-086. The owner invites an email that has no account; that
- * email then signs up in a SECOND browser context and finds the company waiting.
+ * Team membership — LL-086 / LL-090. The owner invites an email that has no account,
+ * fetches a join link, and the invitee creates their account FROM that link in a
+ * second browser context. A superseded link is refused.
  */
 test.use({ storageState: MEMBERS_STORAGE });
 
-const ORIGIN = 'http://127.0.0.1:3200';
-
-test('invite → sign-up claims it → change role → remove', async ({ page, browser }) => {
+test('invite → join link creates the account and claims it → change role → remove (LL-090)', async ({ page, browser }) => {
   const company = `Team Co ${Date.now()}`;
   const invitee = `invitee-${Date.now()}@synthetic.test`;
 
   await page.goto('/account');
   await page.getByPlaceholder('New company legal name').fill(company);
   await page.getByRole('button', { name: 'Create' }).click();
-  await expect(page.getByTestId('company-list')).toContainText(company);
+  await expect(page.getByTestId('company-list')).toContainText(company, { timeout: 15_000 });
   await page.getByTestId('members-link').click();
   await expect(page).toHaveURL(/\/members$/);
   await expect(page.getByTestId('member-row')).toHaveCount(1);
@@ -27,23 +26,35 @@ test('invite → sign-up claims it → change role → remove', async ({ page, b
   await page.getByTestId('invite-role').selectOption('BOOKKEEPER');
   await page.getByTestId('invite-submit').click();
   await expect(page.getByTestId('notice')).toContainText('Invitation recorded');
-  await expect(page.getByTestId('invitation-row')).toHaveCount(1);
-  await expect(page.getByTestId('invitation-row')).toContainText(invitee);
+  const invitationRow = page.getByTestId('invitation-row');
+  await expect(invitationRow).toHaveCount(1);
+  await expect(invitationRow).toContainText(invitee);
 
-  // The invitee signs up and signs in elsewhere — the membership is already there.
-  const other = await browser.newContext();
+  // Get a link, then a second one: the first must stop working.
+  await invitationRow.getByTestId('get-invite-link').click();
+  const staleLink = (await invitationRow.getByTestId('invite-link').textContent()) ?? '';
+  expect(staleLink).toMatch(/\/join\/[A-Za-z0-9_-]{43}$/);
+  await invitationRow.getByTestId('get-invite-link').click();
+  await expect(invitationRow.getByTestId('invite-link')).not.toHaveText(staleLink);
+  const link = (await invitationRow.getByTestId('invite-link').textContent()) ?? '';
+
+  // The invitee opens the link in a fresh browser, creates the account, and claims.
+  // A truly signed-out browser: newContext() would otherwise inherit this spec's storage state.
+  const other = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
-    const res = await other.request.post('/api/auth/sign-up/email', {
-      data: { email: invitee, password: 'synthetic-password-1', name: 'Invitee' },
-      headers: { origin: ORIGIN },
-    });
-    expect(res.ok()).toBe(true);
     const theirs = await other.newPage();
-    await theirs.goto('/sign-in');
-    await theirs.getByLabel('Email').fill(invitee);
+    await theirs.goto(staleLink);
+    await expect(theirs.getByTestId('notice')).toContainText('not valid or has expired');
+
+    await theirs.goto(link);
+    await expect(theirs.getByTestId('join-summary')).toContainText(company);
+    await expect(theirs.getByTestId('join-summary')).toContainText('BOOKKEEPER');
+    await theirs.getByLabel('Name').fill('Invitee');
+    await expect(theirs.getByLabel('Email')).toHaveValue(invitee);
     await theirs.getByLabel('Password').fill('synthetic-password-1');
-    await theirs.getByRole('button', { name: 'Sign in' }).click();
-    await expect(theirs).toHaveURL(/\/account/);
+    await theirs.getByTestId('join-create-account').click();
+    await theirs.getByTestId('claim-invitation').click();
+    await expect(theirs).toHaveURL(/\/account\?ok=joined$/);
     const row = theirs.locator('li', { hasText: company });
     await expect(row).toBeVisible();
     await expect(row).toContainText('BOOKKEEPER');
