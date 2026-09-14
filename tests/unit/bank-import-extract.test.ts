@@ -197,6 +197,14 @@ describe('chart-aware prompt (LL-080)', () => {
     expect(buildContextPrompt({ accounts: [], examples: [] })).toBe('');
   });
 
+  it('tells the model when the statement is a credit card, so charges are money OUT (LL-088)', () => {
+    const card = buildContextPrompt({ accounts: [], examples: [], statementKind: 'credit_card' });
+    expect(card).toContain('CREDIT CARD statement');
+    expect(card).toMatch(/purchases.*money OUT/i);
+    expect(card).toMatch(/payments.*money IN/i);
+    expect(buildContextPrompt({ accounts: [], examples: [], statementKind: 'bank' })).toBe('');
+  });
+
   it('the model call carries the chart and examples in its prompt', async () => {
     let prompt = '';
     const model = new MockLanguageModelV4({

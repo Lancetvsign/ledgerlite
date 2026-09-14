@@ -1937,6 +1937,14 @@ tier that would identify more than one account answers null: the picker is pre-s
 unambiguous recommendation, never a guess. Staging logs counts (history / model / unmapped /
 uncategorised) per batch.
 
+**Amendment (LL-088 — credit-card statements):** Bank Import accepts the same accounts Reconciliation
+does (`isStatementAccount`: an ACTIVE cash/bank asset or an ACTIVE credit-card liability). The posting
+rule is unchanged — money IN debits the statement account, money OUT credits it — which for a card means
+a purchase increases what is owed and a payment reduces it; the extractor is told the statement is a
+credit card so it signs purchases as money OUT whatever the statement prints. Card lines post to
+accounts only: applying to an invoice or bill is refused (`CARD_CANNOT_APPLY`) because bill payments
+draw on cash assets. Paying the card is the checking-statement line categorised to the card account.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner

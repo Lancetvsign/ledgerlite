@@ -25,6 +25,8 @@ export type BankImportErrorCode =
   | 'DOCUMENT_REQUIRED'
   /** apply_invoice on money OUT, or apply_bill on money IN. */
   | 'WRONG_DIRECTION'
+  /** A credit-card statement line can only be posted to an account, not applied to a document (LL-088). */
+  | 'CARD_CANNOT_APPLY'
   /** The document is not an OPEN invoice / bill of this company (missing, closed, or foreign — one message). */
   | 'DOCUMENT_NOT_OPEN'
   /** The line's amount (cumulatively, within one submit) exceeds the document's open balance. */

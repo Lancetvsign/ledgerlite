@@ -81,6 +81,8 @@ export default async function ReviewImportPage({
   const label = (a: { accountNumber: string | null; name: string }) =>
     a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name;
   const nameById = new Map(accounts.map((a) => [a.id, label(a)]));
+  // A credit-card statement (LL-088): lines post to accounts only — no apply-to-document.
+  const isCard = accounts.find((a) => a.id === view.batch.bankAccountId)?.accountType === 'LIABILITY';
   const pickable = accounts
     .filter((a) => a.status === 'ACTIVE' && a.id !== view.batch.bankAccountId)
     .filter((a) => a.systemAccountType === null || !EXCLUDED_SYSTEM_TYPES.has(a.systemAccountType));
@@ -102,6 +104,7 @@ export default async function ReviewImportPage({
   const suggestionFor = (l: ImportLineView): { moneyIn: boolean; options: DocumentOption[]; documentId: string; action: string } => {
     const amt = toMoney(l.amount);
     const moneyIn = amt.isPositive();
+    if (isCard) return { moneyIn, options: [], documentId: '', action: 'post' };
     const options = moneyIn ? invoiceOptions : billOptions;
     const abs = amt.abs();
     const matches = options.filter((o) => toMoney(o.openBalance).eq(abs));
@@ -128,7 +131,8 @@ export default async function ReviewImportPage({
       </header>
 
       <p className="text-sm text-neutral-500" data-testid="batch-summary">
-        {view.batch.filename ?? 'statement'} into <strong>{nameById.get(view.batch.bankAccountId)}</strong> ·{' '}
+        {view.batch.filename ?? 'statement'} into <strong>{nameById.get(view.batch.bankAccountId)}</strong>
+        {isCard && <span data-testid="card-statement"> (credit card: charges increase what you owe, payments reduce it)</span>} ·{' '}
         {String(staged)} to review, {String(posted)} posted, {String(ignored)} ignored.
       </p>
 
@@ -182,22 +186,24 @@ export default async function ReviewImportPage({
                         </select>
                       </td>
                       <td className="py-2 pr-2">
-                        <select name="documentId" defaultValue={s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
-                          <option value="">{s.moneyIn ? 'Open invoice…' : 'Open bill…'}</option>
-                          {s.options.map((o) => (
-                            <option key={o.id} value={o.id}>{o.label}</option>
-                          ))}
-                        </select>
+                        {!isCard && (
+                          <select name="documentId" defaultValue={s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
+                            <option value="">{s.moneyIn ? 'Open invoice…' : 'Open bill…'}</option>
+                            {s.options.map((o) => (
+                              <option key={o.id} value={o.id}>{o.label}</option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className="py-2 pr-2">
                         <select name="action" defaultValue={s.action} data-testid={`import-action-${String(i)}`} className={selectClass}>
                           <option value="post">Post to account</option>
                           <option value="ignore">Ignore</option>
-                          {s.moneyIn ? (
+                          {!isCard && (s.moneyIn ? (
                             <option value="apply_invoice">Apply to invoice</option>
                           ) : (
                             <option value="apply_bill">Apply to bill</option>
-                          )}
+                          ))}
                         </select>
                       </td>
                     </>
@@ -274,6 +280,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Accounts Receivable, Accounts Payable, Opening Balance Equity, and the bank account itself cannot be used — pick another account.';
   if (error === 'DOCUMENT_REQUIRED') return 'Choose an open invoice or bill for every line you are applying.';
   if (error === 'WRONG_DIRECTION') return 'Money in can only be applied to an invoice; money out only to a bill.';
+  if (error === 'CARD_CANNOT_APPLY') return 'Credit-card statement lines can only be posted to an account — pay bills from a bank account.';
   if (error === 'DOCUMENT_NOT_OPEN' || error === 'INVOICE_NOT_OPEN' || error === 'BILL_NOT_OPEN' || error === 'INVOICE_NOT_FOUND' || error === 'BILL_NOT_FOUND') {
     return 'That invoice or bill is no longer open — reload and choose again.';
   }

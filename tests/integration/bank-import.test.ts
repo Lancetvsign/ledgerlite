@@ -627,3 +627,52 @@ describe('deleteImportBatch (LL-087)', () => {
     expect(await getImportBatch(a.userId, a.companyId, batch.id)).not.toBeNull();
   });
 });
+
+describe('credit-card statements (LL-088)', () => {
+  async function cardSetup(): Promise<Ctx & { cardId: string }> {
+    const c = await setup();
+    const card = await createAccount(c.userId, c.companyId, createAccountInput.parse({ accountNumber: '2150', name: 'Visa', accountType: 'LIABILITY', accountSubtype: 'credit_card', cashFlowCategory: 'OPERATING' }));
+    return { ...c, cardId: card.id };
+  }
+
+  it('stages into a credit-card account, tells the extractor so, and posts charges as credits and payments as debits to the card', async () => {
+    const c = await cardSetup();
+    let seenKind: string | undefined;
+    const capturing: TransactionExtractor = (input) => {
+      seenKind = input.context?.statementKind;
+      return STATEMENT(input);
+    };
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa.pdf', fileBytes: EMPTY }, capturing);
+    expect(seenKind).toBe('credit_card');
+
+    const view = (await getImportBatch(c.userId, c.companyId, batch.id))!;
+    const [payment, charge, other] = view.lines; // +1500 (a payment to the card), -120.50 (a purchase), -2000
+    await postImportLines(c.userId, c.companyId, batch.id, {
+      decisions: [
+        { lineId: payment!.id, action: 'post', accountId: c.bankId },      // paid from the bank
+        { lineId: charge!.id, action: 'post', accountId: c.suppliesId },   // a purchase
+        { lineId: other!.id, action: 'ignore' },
+      ],
+    });
+    // Card is credit-normal: charges (credits) 120.50 − payments (debits) 1500 = −1379.50.
+    expect(await balance(c, c.cardId)).toBe('-1379.5000');
+    expect(await balance(c, c.suppliesId)).toBe('120.5000');
+    expect(await balance(c, c.bankId)).toBe('-1500.0000');
+    expect(await entryCount(c.companyId)).toBe(2);
+  });
+
+  it('a card statement line cannot be applied to an invoice or bill; a non-card liability is not importable', async () => {
+    const c = await cardSetup();
+    await openBill(c, '120.50');
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.cardId, filename: 'visa.pdf', fileBytes: EMPTY }, STATEMENT);
+    const view = (await getImportBatch(c.userId, c.companyId, batch.id))!;
+    const bills = await listOpenBills(c.userId, c.companyId);
+    expect((await errOf(postImportLines(c.userId, c.companyId, batch.id, {
+      decisions: [{ lineId: view.lines[1]!.id, action: 'apply_bill', documentId: bills[0]!.id }],
+    }))).code).toBe('CARD_CANNOT_APPLY');
+    expect(await entryCount(c.companyId)).toBe(0);
+
+    const tax = await sysAccount(c.companyId, 'SALES_TAX_PAYABLE');
+    expect((await errOf(stageImport(c.userId, c.companyId, { bankAccountId: tax, filename: 'x.pdf', fileBytes: EMPTY }, STATEMENT))).code).toBe('INVALID_BANK_ACCOUNT');
+  });
+});

@@ -191,3 +191,24 @@ test('a mistaken upload can be deleted until something posts (LL-087)', async ({
   await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
   await expect(page.getByTestId('delete-import-batch')).toHaveCount(0);
 });
+
+test('a credit-card statement imports into the card account and increases what is owed (LL-088)', async ({ page }) => {
+  await freshCompany(page);
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('card-statement')).toBeVisible();
+  await expect(page.getByTestId('import-document-0')).toHaveCount(0); // no apply-to-document on a card
+  await expect(page.getByTestId('import-action-0').locator('option[value="apply_invoice"]')).toHaveCount(0);
+
+  // Canned statement: +1500 (Sales Revenue), −120.50 (Office Supplies), −2000 (Rent) — post all.
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+
+  // Card (credit-normal) = 120.50 + 2000 − 1500 = 620.50 owed.
+  await page.goto('/reports/trial-balance');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('620.50');
+  await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+});

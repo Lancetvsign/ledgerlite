@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
+import { isStatementAccount } from '@/server/accounts/statement-account';
 import { isExtractionConfigured, listImportBatches } from '@/server/bank-import';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
@@ -38,9 +39,8 @@ export default async function BankImportPage({
   const configured = isExtractionConfigured();
 
   const accounts = await listAccounts(user.id, membership.companyId);
-  const bankAccounts = accounts.filter(
-    (a) => a.status === 'ACTIVE' && a.accountType === 'ASSET' && a.cashFlowCategory === 'CASH',
-  );
+  // Bank accounts and credit cards (LL-088) — the same predicate Reconciliation uses.
+  const bankAccounts = accounts.filter(isStatementAccount);
   const batches = await listImportBatches(user.id, membership.companyId);
   const nameById = new Map(accounts.map((a) => [a.id, a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name]));
 
@@ -52,7 +52,7 @@ export default async function BankImportPage({
       </header>
 
       <p className="text-sm text-neutral-500">
-        Upload a bank statement PDF. Each transaction is extracted and staged with a suggested
+        Upload a bank or credit-card statement PDF. Each transaction is extracted and staged with a suggested
         account; you review and confirm or change every line before anything posts to the ledger.
         The file itself is never stored.
       </p>
@@ -119,7 +119,7 @@ function noticeFrom(error: string | undefined): string | null {
   if (error === 'EXTRACTION_NOT_CONFIGURED') return 'Statement extraction is not configured yet.';
   if (error === 'EXTRACTION_FAILED') return 'No usable transactions could be extracted from that statement.';
   if (error === 'SCANNED_PDF') return 'That PDF appears to be a scanned image; a text-based statement is needed.';
-  if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active cash/bank asset account.';
+  if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active bank account or credit card.';
   if (error === 'BATCH_NOT_FOUND') return 'That import batch does not exist.';
   if (error === 'denied') return 'You do not have permission to import statements.';
   return 'The statement could not be imported.';
