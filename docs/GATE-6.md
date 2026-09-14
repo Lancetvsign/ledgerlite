@@ -185,11 +185,11 @@ Dispositions are proposals for §7; nothing has been changed.
 | M1 | MEDIUM (reviewer: HIGH) | Transfers between two statement accounts double-post | Ticket — transfer detection at staging (same date, opposite amount, other statement account) with a "match" decision that posts once. Interim guidance in ADR-034: post the transfer from ONE side and ignore the mirror line. |
 | M2 | MEDIUM | Template slot claimable by any self-registered user | **FIXED — LL-090** (no self-registration in production). If sign-up stays open: operator allow-list for `setCompanyTemplate`. |
 | M3 | MEDIUM | Stale PENDING invitation overwrites a role on claim; direct add does not resolve it | **FIXED — LL-090**: resolve pending invitations on direct add; conditional upsert (only INACTIVE reactivates); company lock in the claim. |
-| M4 | MEDIUM | Reconciliation update form rewrites 4-dp amount as 2-dp | Fix now (one line): default the input to the raw stored string. |
+| M4 | MEDIUM | Reconciliation update form rewrites 4-dp amount as 2-dp | **FIXED — [LL-093](tickets/LL-093.md)**: only changed fields are sent. |
 | M5 | MEDIUM | Card sign depends on the prompt; no Charge/Payment label or flip control | Ticket — derived Charge/Payment column on card batches, "flip all signs", staging warning when a card statement is mostly positive. |
 | M6 | MEDIUM→LOW (author) | `ON DELETE CASCADE` on the two statement line tables | Follows the existing line-table convention (invoice lines, journal lines, applications); no app path deletes a parent with posted children. Ticket to switch these two to RESTRICT (expand-safe migration) with the next schema change. |
-| L1 | LOW | `postImportLinesAction` batch id unvalidated | Fix now. |
-| L2 | LOW | Card guard inside the decision loop | Fix now (hoist; check per decision). |
+| L1 | LOW | `postImportLinesAction` batch id unvalidated | **FIXED — LL-093**. |
+| L2 | LOW | Card guard inside the decision loop | **FIXED — LL-093**. |
 | L3 | LOW | Add-vs-invite oracle and forced membership of existing users | Decide in §7: keep (documented) or make invitations always require acceptance. |
 | L4 | LOW | `startReconciliation` sequence check outside the tx | Ticket (move inside the tx under an account-level lock). |
 | L5 | LOW | Duplicate detection ignores STAGED lines in other batches | Ticket. |

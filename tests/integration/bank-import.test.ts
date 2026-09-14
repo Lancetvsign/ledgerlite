@@ -676,3 +676,29 @@ describe('credit-card statements (LL-088)', () => {
     expect((await errOf(stageImport(c.userId, c.companyId, { bankAccountId: tax, filename: 'x.pdf', fileBytes: EMPTY }, STATEMENT))).code).toBe('INVALID_BANK_ACCOUNT');
   });
 });
+
+describe('card guard placement (LL-093 / Gate 6 L2)', () => {
+  it('an apply decision on an already-decided card line is an idempotent no-op; the live post decisions go through', async () => {
+    const c = await setup();
+    const card = await createAccount(c.userId, c.companyId, createAccountInput.parse({ accountNumber: '2160', name: 'Amex', accountType: 'LIABILITY', accountSubtype: 'credit_card' }));
+    const batch = await stageImport(c.userId, c.companyId, { bankAccountId: card.id, filename: 'amex.pdf', fileBytes: EMPTY }, STATEMENT);
+    const [l0, l1, l2] = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines;
+    await postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: l2!.id, action: 'ignore' }] });
+
+    // A stale re-submit carries an apply decision for the IGNORED line: skipped, not refused.
+    const r = await postImportLines(c.userId, c.companyId, batch.id, {
+      decisions: [
+        { lineId: l2!.id, action: 'apply_bill', documentId: '00000000-0000-4000-8000-000000000000' },
+        { lineId: l0!.id, action: 'post', accountId: c.bankId },
+        { lineId: l1!.id, action: 'post', accountId: c.suppliesId },
+      ],
+    });
+    expect(r.posted).toBe(2);
+    // A LIVE apply decision on a card line is still refused.
+    const again = await stageImport(c.userId, c.companyId, { bankAccountId: card.id, filename: 'amex2.pdf', fileBytes: EMPTY }, STATEMENT);
+    const live = (await getImportBatch(c.userId, c.companyId, again.id))!.lines[1]!;
+    expect((await errOf(postImportLines(c.userId, c.companyId, again.id, {
+      decisions: [{ lineId: live.id, action: 'apply_bill', documentId: '00000000-0000-4000-8000-000000000000' }],
+    }))).code).toBe('CARD_CANNOT_APPLY');
+  });
+});

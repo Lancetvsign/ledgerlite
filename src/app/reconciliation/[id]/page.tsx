@@ -95,6 +95,9 @@ export default async function ReconciliationPage({
       {editable && (
         <form action={updateReconciliationAction} data-testid="recon-update-form" className="flex flex-wrap items-end gap-3 text-sm">
           <input type="hidden" name="reconciliationId" value={rec.id} />
+          {/* What the inputs showed: an untouched field is not sent back (LL-093). */}
+          <input type="hidden" name="shownStatementDate" value={rec.statementDate} />
+          <input type="hidden" name="shownStatementEndingAmount" value={toInputAmount(rec.statementEndingAmount)} />
           <label className="flex flex-col gap-1">
             <span>Statement date</span>
             <input type="date" name="statementDate" defaultValue={rec.statementDate} data-testid="recon-edit-date" className={inputClass} />

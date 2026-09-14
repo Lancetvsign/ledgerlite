@@ -17,6 +17,8 @@ import {
 import { ensureAppUser } from '@/server/users';
 import { setClearedInput, startReconciliationInput, updateReconciliationInput } from '@/validation/reconciliation';
 
+import { changedUpdateFields } from './update-fields';
+
 /**
  * Bank-reconciliation actions — LL-078. The company comes from the server-authorized session
  * (never a form field); every service call re-authorizes (`reconciliation.complete`) and
@@ -65,10 +67,18 @@ export async function updateReconciliationAction(formData: FormData): Promise<vo
   const { userId, companyId } = await requireContext();
   const id = opt(formData.get('reconciliationId')) ?? '';
   if (!isUuid(id)) redirect('/reconciliation?error=NOT_FOUND');
-  const parsed = updateReconciliationInput.safeParse({
+  // Only fields the reviewer changed are sent, so an untouched two-decimal display
+  // never rewrites the stored four-decimal figure (LL-093).
+  const changed = changedUpdateFields({
     statementDate: opt(formData.get('statementDate')),
     statementEndingAmount: opt(formData.get('statementEndingAmount')),
+    shownDate: opt(formData.get('shownStatementDate')),
+    shownAmount: opt(formData.get('shownStatementEndingAmount')),
   });
+  if (changed.statementDate === undefined && changed.statementEndingAmount === undefined) {
+    redirect(`/reconciliation/${id}?ok=updated`); // nothing changed — nothing to write
+  }
+  const parsed = updateReconciliationInput.safeParse(changed);
   if (!parsed.success) redirect(`/reconciliation/${id}?error=invalid`);
   try {
     await updateReconciliation(userId, companyId, id, parsed.data);
