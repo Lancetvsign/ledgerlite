@@ -10,6 +10,7 @@ import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
 import { toMoney } from '@/lib/decimal';
 import { log } from '@/lib/logging';
+import { isStatementAccount } from '@/server/accounts/statement-account';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
@@ -178,15 +179,20 @@ export async function stageImport(
       id: schema.accounts.id,
       status: schema.accounts.status,
       accountType: schema.accounts.accountType,
+      accountSubtype: schema.accounts.accountSubtype,
       cashFlowCategory: schema.accounts.cashFlowCategory,
     })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))
     .limit(1);
   const bank = bankRows[0];
-  if (bank === undefined || bank.status !== 'ACTIVE' || bank.accountType !== 'ASSET' || bank.cashFlowCategory !== 'CASH') {
-    throw new BankImportError('INVALID_BANK_ACCOUNT', 'Choose an active cash/bank asset account to import into.');
+  // A cash/bank asset or a credit-card liability (LL-088). The posting rule below is the
+  // same for both: money IN debits the statement account, money OUT credits it — which for
+  // a card means a charge increases what is owed and a payment reduces it.
+  if (bank === undefined || !isStatementAccount(bank)) {
+    throw new BankImportError('INVALID_BANK_ACCOUNT', 'Choose an active bank account or credit card to import into.');
   }
+  const statementKind = bank.accountType === 'LIABILITY' ? 'credit_card' : 'bank';
 
   // The model gets the company's chart and its recent decisions (LL-080), so it proposes one
   // of THIS company's accounts and follows the company's precedent.
@@ -198,7 +204,7 @@ export async function stageImport(
   // silently dropping a transaction.
   const raw = await extractor({
     bytes: input.fileBytes,
-    context: { accounts: pickable.map((a) => ({ number: a.accountNumber, name: a.name, type: a.accountType })), examples },
+    context: { accounts: pickable.map((a) => ({ number: a.accountNumber, name: a.name, type: a.accountType })), examples, statementKind },
   });
   const parsed = extractedTransactionsSchema.safeParse(raw);
   if (!parsed.success) {
@@ -439,6 +445,19 @@ export async function postImportLines(
       toIgnore.push(line);
       continue;
     }
+
+  // A credit-card statement posts to accounts only: paying a bill or settling an invoice
+  // from a card is not modelled (bill payments draw on cash assets) — LL-088.
+  if (input.decisions.some((d) => d.action === 'apply_invoice' || d.action === 'apply_bill')) {
+    const acct = await db
+      .select({ accountType: schema.accounts.accountType })
+      .from(schema.accounts)
+      .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, batch.bankAccountId)))
+      .limit(1);
+    if (acct[0]?.accountType === 'LIABILITY') {
+      throw new BankImportError('CARD_CANNOT_APPLY', 'Credit-card statement lines can only be posted to an account.');
+    }
+  }
     const n = String(line.lineNumber);
 
     let plan: LinePlan;

@@ -4,6 +4,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDbTx, schema } from '@/db';
+import { isStatementAccount } from '@/server/accounts/statement-account';
 import { toMoney } from '@/lib/decimal';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
@@ -48,21 +49,8 @@ function signedAmount(liability: boolean) {
   return sql`(case when ${liability} then l.credit - l.debit else l.debit - l.credit end)::numeric(19,4)::text`;
 }
 
-/**
- * Which accounts can be reconciled against a statement: an ACTIVE cash/bank asset, or an ACTIVE
- * credit-card liability (`accountSubtype = 'credit_card'`, as the standard chart marks it).
- * Shared with the UI's account picker so both agree.
- */
-export function isReconcilableAccount(a: {
-  status: string;
-  accountType: string;
-  cashFlowCategory: string | null;
-  accountSubtype: string | null;
-}): boolean {
-  if (a.status !== 'ACTIVE') return false;
-  if (a.accountType === 'ASSET' && a.cashFlowCategory === 'CASH') return true;
-  return a.accountType === 'LIABILITY' && a.accountSubtype === 'credit_card';
-}
+/** Which accounts can be reconciled against a statement — the shared predicate (LL-088). */
+export const isReconcilableAccount = isStatementAccount;
 
 async function accountIsLiability(executor: Tx | PoolDatabase, companyId: string, accountId: string): Promise<boolean> {
   const rows = await executor

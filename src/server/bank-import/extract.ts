@@ -62,6 +62,11 @@ export interface HistoryExample {
 export interface ExtractionContext {
   readonly accounts: readonly ChartAccountHint[];
   readonly examples: readonly HistoryExample[];
+  /**
+   * What kind of statement this is (LL-088). A credit-card statement lists purchases as
+   * positive numbers, but for the import account they are money OUT; the prompt says so.
+   */
+  readonly statementKind?: 'bank' | 'credit_card';
 }
 
 export interface ExtractorInput {
@@ -140,7 +145,12 @@ export function buildContextPrompt(context: ExtractionContext | undefined): stri
   const examples = context.examples.slice(0, MAX_HISTORY_EXAMPLES)
     .map((e) => `- "${e.description}" → ${e.account}`)
     .join('\n');
+  const kind =
+    context.statementKind === 'credit_card'
+      ? 'This is a CREDIT CARD statement. For the amount sign, the account is the card: purchases, charges, fees and interest are money OUT (negative amounts); payments received, refunds and credits are money IN (positive amounts), whatever sign the statement prints.\n\n'
+      : '';
   return (
+    kind +
     (accounts === '' ? '' : `Chart of accounts (choose category from these only):\n${accounts}\n\n`) +
     (examples === '' ? '' : `The company's past decisions (statement description → account). Match these first:\n${examples}\n\n`)
   );
