@@ -39,7 +39,8 @@ test('invite → join link creates the account and claims it → change role →
   const link = (await invitationRow.getByTestId('invite-link').textContent()) ?? '';
 
   // The invitee opens the link in a fresh browser, creates the account, and claims.
-  const other = await browser.newContext();
+  // A truly signed-out browser: newContext() would otherwise inherit this spec's storage state.
+  const other = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
     const theirs = await other.newPage();
     await theirs.goto(staleLink);
