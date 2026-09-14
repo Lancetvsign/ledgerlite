@@ -152,8 +152,9 @@ describe('join links (LL-090): the secret is the authorization, the email is a l
     expect(row).toMatchObject({ status: 'ACCEPTED', accepted: someoneElse.id });
     expect(await describeInvitation(token)).toBeNull(); // spent
     expect((await errOf(claimInvitation(someoneElse.id, token))).code).toBe('INVITATION_INVALID');
-    const acts = (await audits(companyId)).map((a) => a.action);
-    expect(acts).toEqual(['MEMBER_INVITED', 'INVITATION_CLAIMED', 'MEMBER_ADDED']);
+    // Two rows written in one transaction share a timestamp; compare as a set.
+    const acts = (await audits(companyId)).map((a) => a.action).sort();
+    expect(acts).toEqual(['INVITATION_CLAIMED', 'MEMBER_ADDED', 'MEMBER_INVITED']);
     expect((await audits(companyId)).find((a) => a.action === 'MEMBER_ADDED')!.actor).toBe(owner.id); // the inviter is the actor of record
   });
 
