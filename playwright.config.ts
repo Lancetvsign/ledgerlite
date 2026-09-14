@@ -34,6 +34,9 @@ export default defineConfig({
     {
       name: 'setup',
       testMatch: /.*\.setup\.ts/,
+      // Each setup deletes the companies earlier runs left on its user (tests/e2e/company-cleanup.ts);
+      // a backlog of dozens takes longer than the default 30s test timeout.
+      timeout: 180_000,
     },
     {
       name: 'chromium',

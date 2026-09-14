@@ -13,7 +13,7 @@ test.describe('delete a company', () => {
     for (const name of [keep, doomed]) {
       await page.getByPlaceholder('New company legal name').fill(name);
       await page.getByRole('button', { name: 'Create' }).click();
-      await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+      await expect(page.getByTestId('company-list')).toContainText(name);
     }
 
     const row = page.locator('li', { hasText: doomed });
@@ -33,7 +33,7 @@ test.describe('delete a company', () => {
     await page.goto('/account');
     await page.getByPlaceholder('New company legal name').fill(name);
     await page.getByRole('button', { name: 'Create' }).click();
-    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+    await expect(page.getByTestId('company-list')).toContainText(name);
 
     const row = page.locator('li', { hasText: name });
     await row.locator('summary', { hasText: 'Delete' }).click();
@@ -41,6 +41,6 @@ test.describe('delete a company', () => {
     await row.getByTestId('delete-company-confirm').click();
 
     await expect(page.getByTestId('notice')).toContainText('does not match');
-    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+    await expect(page.getByTestId('company-list')).toContainText(name);
   });
 });
