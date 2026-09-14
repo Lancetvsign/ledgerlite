@@ -38,7 +38,7 @@ enforced only by application code.
 | 5 | Independent accounting review | ✓ §5b — **2 HIGH, 2 MEDIUM, 5 LOW, 5 NOTE** |
 | 6 | Independent data-integrity review | ✓ §5c — **1 HIGH, 2 MEDIUM, 6 LOW, 7 NOTE** |
 | 7 | Findings consolidated, deduplicated and re-verified by the author | ✓ §6 |
-| 8 | Human sign-off | **PENDING** §7 |
+| 8 | Human sign-off | ✓ §7 (2026-09-14) |
 
 ## 2. What was reviewed and how
 
@@ -210,4 +210,4 @@ Decisions requested of the product owner:
 
 | Reviewer | Decision | Date |
 |---|---|---|
-| Lance (Lancetvsign) | | |
+| Lance (Lancetvsign) | **Approved.** Sign-up made invitation-only (item 1); dispositions in §6 accepted (item 2); H1–H3 and M2/M3 fixed and deployed via LL-090/091/092 (PRs #97, #96, #95) before this sign-off; L3 kept as documented; manual acceptance (§4) remains owed. | 2026-09-14 |
