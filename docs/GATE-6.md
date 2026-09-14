@@ -179,12 +179,12 @@ Dispositions are proposals for §7; nothing has been changed.
 
 | # | Sev | Finding | Proposed disposition |
 |---|---|---|---|
-| H1 | HIGH | Invitation claimable by whoever registers the invited email (open, unverified sign-up) | **[LL-090](tickets/LL-090.md)** — token-based invitations (no mail provider needed): a random secret handed over out of band, claimed by presenting it; until then refuse OWNER/ADMIN claims. Decide separately whether production sign-up stays open (§7 item 1). |
-| H2 | HIGH | System control account can be made a statement account and moved by imports | **[LL-091](tickets/LL-091.md)** — `isStatementAccount` excludes system roles; `updateAccount` refuses subtype/cash-flow edits on system accounts; extend the control-account trigger to `BANK_IMPORT`; exclude `RETAINED_EARNINGS` from pickable categories; GL regression. |
-| H3 | HIGH | `postEntryCore` reads the company row unlocked → template / settings / archive races | **[LL-092](tickets/LL-092.md)** — `FOR KEY SHARE` on the company row in `postEntryCore`; concurrency test. Also closes §5b LOW-5 and §5c LOW-6. |
+| H1 | HIGH | Invitation claimable by whoever registers the invited email (open, unverified sign-up) | **FIXED — [LL-090](tickets/LL-090.md)** (token join links; production sign-up invitation-only) — token-based invitations (no mail provider needed): a random secret handed over out of band, claimed by presenting it; until then refuse OWNER/ADMIN claims. Decide separately whether production sign-up stays open (§7 item 1). |
+| H2 | HIGH | System control account can be made a statement account and moved by imports | **FIXED — [LL-091](tickets/LL-091.md)** (PR #96) — `isStatementAccount` excludes system roles; `updateAccount` refuses subtype/cash-flow edits on system accounts; extend the control-account trigger to `BANK_IMPORT`; exclude `RETAINED_EARNINGS` from pickable categories; GL regression. |
+| H3 | HIGH | `postEntryCore` reads the company row unlocked → template / settings / archive races | **FIXED — [LL-092](tickets/LL-092.md)** (PR #95, merged) — `FOR KEY SHARE` on the company row in `postEntryCore`; concurrency test. Also closes §5b LOW-5 and §5c LOW-6. |
 | M1 | MEDIUM (reviewer: HIGH) | Transfers between two statement accounts double-post | Ticket — transfer detection at staging (same date, opposite amount, other statement account) with a "match" decision that posts once. Interim guidance in ADR-034: post the transfer from ONE side and ignore the mirror line. |
-| M2 | MEDIUM | Template slot claimable by any self-registered user | Depends on §7 item 1. If sign-up stays open: operator allow-list for `setCompanyTemplate`. |
-| M3 | MEDIUM | Stale PENDING invitation overwrites a role on claim; direct add does not resolve it | Fold into LL-090: resolve pending invitations on direct add; conditional upsert (only INACTIVE reactivates); company lock in the claim. |
+| M2 | MEDIUM | Template slot claimable by any self-registered user | **FIXED — LL-090** (no self-registration in production). If sign-up stays open: operator allow-list for `setCompanyTemplate`. |
+| M3 | MEDIUM | Stale PENDING invitation overwrites a role on claim; direct add does not resolve it | **FIXED — LL-090**: resolve pending invitations on direct add; conditional upsert (only INACTIVE reactivates); company lock in the claim. |
 | M4 | MEDIUM | Reconciliation update form rewrites 4-dp amount as 2-dp | Fix now (one line): default the input to the raw stored string. |
 | M5 | MEDIUM | Card sign depends on the prompt; no Charge/Payment label or flip control | Ticket — derived Charge/Payment column on card batches, "flip all signs", staging warning when a card statement is mostly positive. |
 | M6 | MEDIUM→LOW (author) | `ON DELETE CASCADE` on the two statement line tables | Follows the existing line-table convention (invoice lines, journal lines, applications); no app path deletes a parent with posted children. Ticket to switch these two to RESTRICT (expand-safe migration) with the next schema change. |
@@ -201,10 +201,8 @@ Dispositions are proposals for §7; nothing has been changed.
 
 Decisions requested of the product owner:
 
-1. **Open sign-up on the production URL.** Today anyone can register an account and create companies in the
-   production database, which is the root of H1 and M2. Options: (a) keep it open and rely on token
-   invitations + an operator allow-list for the template; (b) make sign-up invitation-only (Better Auth
-   `disableSignUp`, accounts created only by claiming a token). (b) is the smaller attack surface.
+1. **Open sign-up on the production URL.** DECIDED (2026-09-14): invitation-only; links copied and sent by
+   the owner. Implemented in LL-090.
 2. **Accept the proposed dispositions in §6**, or adjust severities/order. H1–H3 are proposed as
    blocking: the gate passes when LL-090/091/092 are merged and the "fix now" items (M4, L1, L2) ship.
 3. **L3** — keep the add-vs-invite behaviour (documented in ADR-041) or require acceptance for every invite.
