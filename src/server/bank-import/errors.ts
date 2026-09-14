@@ -27,6 +27,10 @@ export type BankImportErrorCode =
   | 'WRONG_DIRECTION'
   /** A credit-card statement line can only be posted to an account, not applied to a document (LL-088). */
   | 'CARD_CANNOT_APPLY'
+  /** match_transfer named a counterpart that is not this line's posted mirror on another statement account (LL-094). */
+  | 'TRANSFER_MISMATCH'
+  /** The transfer's other side already posted this movement; posting it again would double-count (LL-094). */
+  | 'TRANSFER_ALREADY_POSTED'
   /** The document is not an OPEN invoice / bill of this company (missing, closed, or foreign — one message). */
   | 'DOCUMENT_NOT_OPEN'
   /** The line's amount (cumulatively, within one submit) exceeds the document's open balance. */

@@ -277,6 +277,55 @@ export async function stageImport(
 export interface ImportLineView extends BankImportLine {
   /** Another POSTED bank-import line in this company has the same dedup hash. */
   readonly isDuplicate: boolean;
+  /** The likely other side of a transfer on another statement account, if any (LL-094). */
+  readonly transferCandidate: TransferCandidate | null;
+}
+
+export interface TransferCandidate {
+  readonly lineId: string;
+  readonly status: 'POSTED' | 'STAGED';
+  readonly journalEntryId: string | null;
+  /** The OTHER statement account — the category this line would post to. */
+  readonly accountId: string;
+  readonly txnDate: string;
+  readonly batchId: string;
+}
+
+const TRANSFER_WINDOW_DAYS = 3;
+
+/**
+ * For each staged line, the best candidate mirror on another statement account: same
+ * company, opposite amount, within a few days. POSTED candidates first (they can be
+ * matched), then the nearest date. One query for the whole set (LL-094).
+ */
+async function findTransferCandidates(
+  companyId: string,
+  bankAccountId: string,
+  lineIds: readonly string[],
+): Promise<Map<string, TransferCandidate>> {
+  const out = new Map<string, TransferCandidate>();
+  if (lineIds.length === 0) return out;
+  const rows = await getDb().execute<{
+    line_id: string; cand_id: string; status: 'POSTED' | 'STAGED'; journal_entry_id: string | null;
+    account_id: string; txn_date: string; batch_id: string;
+  }>(sql`
+    select l.id::text as line_id, c.id::text as cand_id, c.status::text as status,
+           c.journal_entry_id::text as journal_entry_id, b.bank_account_id::text as account_id,
+           c.txn_date::text as txn_date, c.batch_id::text as batch_id
+    from bank_import_lines l
+    join bank_import_lines c
+      on c.company_id = l.company_id and c.id <> l.id and c.amount = -l.amount
+     and c.status in ('POSTED', 'STAGED') and abs(c.txn_date - l.txn_date) <= ${TRANSFER_WINDOW_DAYS}
+    join bank_import_batches b
+      on b.company_id = c.company_id and b.id = c.batch_id and b.bank_account_id <> ${bankAccountId}
+    where l.company_id = ${companyId} and l.id in (${sql.join(lineIds.map((id) => sql`${id}`), sql`, `)})
+    order by l.id, (c.status = 'POSTED') desc, abs(c.txn_date - l.txn_date), c.txn_date, c.id`);
+  for (const r of rows.rows) {
+    if (!out.has(r.line_id)) {
+      out.set(r.line_id, { lineId: r.cand_id, status: r.status, journalEntryId: r.journal_entry_id, accountId: r.account_id, txnDate: r.txn_date, batchId: r.batch_id });
+    }
+  }
+  return out;
 }
 
 export interface ImportBatchView {
@@ -328,10 +377,13 @@ export async function getImportBatch(
     postedByHash.set(r.hash, set);
   }
 
+  const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
+
   return {
     batch,
     lines: lines.map((l) => ({
       ...l,
+      transferCandidate: candidates.get(l.id) ?? null,
       isDuplicate: [...(postedByHash.get(l.dedupHash) ?? [])].some((id) => id !== l.id),
     })),
   };
@@ -351,6 +403,8 @@ export async function listImportBatches(actorUserId: string, companyId: string):
 export interface PostImportResult {
   /** Lines that reached the ledger (categorised AND applied). */
   readonly posted: number;
+  /** Lines marked posted against an entry the other side of a transfer already created (LL-094). */
+  readonly matched: number;
   readonly ignored: number;
   /** The subset of `posted` settled against an open invoice / bill (LL-077). */
   readonly applied: number;
@@ -361,6 +415,7 @@ type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
 /** What one validated decision will do. Built for EVERY decision before ANY line is written. */
 type LinePlan =
   | { readonly kind: 'post'; readonly line: BankImportLine; readonly accountId: string }
+  | { readonly kind: 'match'; readonly line: BankImportLine; readonly counterpart: BankImportLine; readonly journalEntryId: string; readonly accountId: string }
   | { readonly kind: 'apply_invoice'; readonly line: BankImportLine; readonly invoice: OpenInvoice; readonly amount: string }
   | { readonly kind: 'apply_bill'; readonly line: BankImportLine; readonly bill: OpenBill; readonly amount: string };
 
@@ -446,6 +501,12 @@ export async function postImportLines(
       )[0]?.accountType === 'LIABILITY'
     : false;
 
+  const transferCandidates = await findTransferCandidates(
+    companyId,
+    batch.bankAccountId,
+    input.decisions.filter((d) => d.action === 'post').map((d) => d.lineId),
+  );
+
   const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
@@ -468,9 +529,44 @@ export async function postImportLines(
     const n = String(line.lineNumber);
 
     let plan: LinePlan;
-    if (d.action === 'post') {
+    if (d.action === 'match_transfer') {
+      // LL-094: this line is the mirror of a POSTED line on another statement account.
+      if (d.counterpartLineId === undefined) {
+        throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: choose the posted transfer to match.`);
+      }
+      const cpRows = await db
+        .select({ line: schema.bankImportLines, bankAccountId: schema.bankImportBatches.bankAccountId })
+        .from(schema.bankImportLines)
+        .innerJoin(schema.bankImportBatches, and(eq(schema.bankImportBatches.companyId, schema.bankImportLines.companyId), eq(schema.bankImportBatches.id, schema.bankImportLines.batchId)))
+        .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, d.counterpartLineId)))
+        .limit(1);
+      const cp = cpRows[0];
+      const mirror = cp !== undefined && cp.line.status === 'POSTED' && cp.line.journalEntryId !== null
+        && cp.bankAccountId !== batch.bankAccountId
+        && toMoney(cp.line.amount).plus(toMoney(line.amount)).isZero()
+        && Math.abs(Date.parse(cp.line.txnDate) - Date.parse(line.txnDate)) <= TRANSFER_WINDOW_DAYS * 86_400_000;
+      if (!mirror || cp === undefined || cp.line.journalEntryId === null) {
+        throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: that is not the posted mirror of this transfer.`);
+      }
+      // The entry must really carry this account's side of the movement.
+      const abs = toMoney(line.amount).abs().toFixed(4);
+      const side = toMoney(line.amount).isPositive() ? sql`l.debit = ${abs}::numeric` : sql`l.credit = ${abs}::numeric`;
+      const proof = await db.execute<{ ok: string }>(sql`
+        select count(*)::text as ok from journal_lines l
+        where l.company_id = ${companyId} and l.journal_entry_id = ${cp.line.journalEntryId} and l.account_id = ${batch.bankAccountId} and ${side}`);
+      if (proof.rows[0]?.ok !== '1') {
+        throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: the posted entry does not move this account by this amount.`);
+      }
+      plan = { kind: 'match', line, counterpart: cp.line, journalEntryId: cp.line.journalEntryId, accountId: cp.bankAccountId };
+    } else if (d.action === 'post') {
       if (d.accountId === undefined) {
         throw new BankImportError('ACCOUNT_REQUIRED', `Line ${n} needs an account to post to.`);
+      }
+      // LL-094: posting the exact mirror of a transfer the other statement already posted
+      // would double-count it — match it instead (or ignore it).
+      const cand = transferCandidates.get(line.id);
+      if (cand !== undefined && cand.status === 'POSTED' && cand.accountId === d.accountId) {
+        throw new BankImportError('TRANSFER_ALREADY_POSTED', `Line ${n}: the other side of this transfer already posted — use "Match transfer".`);
       }
       if (!allowedIds.has(d.accountId)) {
         // Either not this company's active account, or an excluded one (A/R, A/P, OBE, the bank).
@@ -539,9 +635,55 @@ export async function postImportLines(
 
   let posted = 0;
   let applied = 0;
+  let matched = 0;
   for (const plan of plans) {
     const { line } = plan;
     const lineIs = and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.status, 'STAGED'));
+
+    if (plan.kind === 'match') {
+      // LL-094: no new entry. The line is marked posted against the counterpart's entry so
+      // both statements reconcile to the one movement. Exactly one mirror per entry.
+      const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
+        if (!(await lockStagedLine(tx, companyId, line.id))) return false;
+        const cpNow = await tx
+          .select({ status: schema.bankImportLines.status, journalEntryId: schema.bankImportLines.journalEntryId })
+          .from(schema.bankImportLines)
+          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, plan.counterpart.id)))
+          .for('update');
+        if (cpNow[0]?.status !== 'POSTED' || cpNow[0].journalEntryId !== plan.journalEntryId) {
+          throw new BankImportError('TRANSFER_MISMATCH', 'The transfer\'s other side changed; reload and review again.');
+        }
+        const already = await tx
+          .select({ id: schema.bankImportLines.id })
+          .from(schema.bankImportLines)
+          .where(and(
+            eq(schema.bankImportLines.companyId, companyId),
+            eq(schema.bankImportLines.journalEntryId, plan.journalEntryId),
+            ne(schema.bankImportLines.id, plan.counterpart.id),
+            eq(schema.bankImportLines.status, 'POSTED'),
+          ))
+          .limit(1);
+        if (already.length > 0) {
+          throw new BankImportError('TRANSFER_ALREADY_POSTED', 'That transfer already has its other side matched.');
+        }
+        await tx
+          .update(schema.bankImportLines)
+          .set({ status: 'POSTED', chosenAccountId: plan.accountId, journalEntryId: plan.journalEntryId, updatedAt: sql`now()` })
+          .where(lineIs);
+        await recordAuditEvent({
+          tx,
+          companyId,
+          actorUserId,
+          action: 'BANK_IMPORT_POSTED',
+          entityType: 'bank_import_line',
+          entityId: line.id,
+          after: { batchId, accountId: plan.accountId, amount: line.amount, journalEntryId: plan.journalEntryId, matchedTransfer: plan.counterpart.id },
+        });
+        return true;
+      });
+      if (done) matched += 1;
+      continue;
+    }
 
     if (plan.kind === 'post') {
       try {
@@ -665,7 +807,7 @@ export async function postImportLines(
     }
   }
 
-  return { posted, ignored: toIgnore.length, applied };
+  return { posted, matched, ignored: toIgnore.length, applied };
 }
 
 export { BankImportError } from './errors';

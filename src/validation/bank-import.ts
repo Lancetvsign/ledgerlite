@@ -43,11 +43,17 @@ const decisionSchema = z.object({
    * customer payment / bill payment. Direction is enforced by the service: money in may
    * only apply to an invoice, money out only to a bill.
    */
-  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill']),
+  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill', 'match_transfer']),
   /** Required when action is 'post' (enforced by the service). */
   accountId: z.uuid().optional(),
   /** The open invoice / bill id; required for apply_* (enforced by the service). */
   documentId: z.uuid().optional(),
+  /**
+   * match_transfer (LL-094): the already-POSTED import line on the OTHER statement account
+   * that is the mirror of this one; this line is marked posted against that entry and no
+   * second entry is created. Required for match_transfer (enforced by the service).
+   */
+  counterpartLineId: z.uuid().optional(),
 });
 
 export const postImportLinesInput = z.object({

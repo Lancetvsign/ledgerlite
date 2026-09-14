@@ -85,17 +85,19 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const actions = formData.getAll('action');
   const accountIds = formData.getAll('accountId');
   const documentIds = formData.getAll('documentId');
+  const counterpartIds = formData.getAll('counterpartLineId');
   const decisions = lineIds.map((lineId, i) => ({
     lineId: typeof lineId === 'string' ? lineId : '',
     action: typeof actions[i] === 'string' ? actions[i] : 'post',
     accountId: opt(accountIds[i] ?? null),
     documentId: opt(documentIds[i] ?? null),
+    counterpartLineId: opt(counterpartIds[i] ?? null),
   }));
 
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
 
-  let result: { posted: number; ignored: number; applied: number };
+  let result: { posted: number; ignored: number; applied: number; matched: number };
   try {
     result = await postImportLines(userId, companyId, batchId, parsed.data);
   } catch (error) {
@@ -111,7 +113,7 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}`,
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}`,
   );
 }
 
