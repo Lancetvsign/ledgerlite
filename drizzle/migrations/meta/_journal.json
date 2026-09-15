@@ -274,6 +274,13 @@
       "when": 1789413268199,
       "tag": "0038_invitation_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789430913984,
+      "tag": "0039_gate6_housekeeping",
+      "breakpoints": true
     }
   ]
 }

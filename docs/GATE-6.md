@@ -187,15 +187,15 @@ Dispositions are proposals for §7; nothing has been changed.
 | M3 | MEDIUM | Stale PENDING invitation overwrites a role on claim; direct add does not resolve it | **FIXED — LL-090**: resolve pending invitations on direct add; conditional upsert (only INACTIVE reactivates); company lock in the claim. |
 | M4 | MEDIUM | Reconciliation update form rewrites 4-dp amount as 2-dp | **FIXED — [LL-093](tickets/LL-093.md)**: only changed fields are sent. |
 | M5 | MEDIUM | Card sign depends on the prompt; no Charge/Payment label or flip control | Ticket — derived Charge/Payment column on card batches, "flip all signs", staging warning when a card statement is mostly positive. |
-| M6 | MEDIUM→LOW (author) | `ON DELETE CASCADE` on the two statement line tables | Follows the existing line-table convention (invoice lines, journal lines, applications); no app path deletes a parent with posted children. Ticket to switch these two to RESTRICT (expand-safe migration) with the next schema change. |
+| M6 | MEDIUM→LOW (author) | `ON DELETE CASCADE` on the two statement line tables | **FIXED — [LL-095](tickets/LL-095.md)** (RESTRICT, migration 0039). |
 | L1 | LOW | `postImportLinesAction` batch id unvalidated | **FIXED — LL-093**. |
 | L2 | LOW | Card guard inside the decision loop | **FIXED — LL-093**. |
 | L3 | LOW | Add-vs-invite oracle and forced membership of existing users | Decide in §7: keep (documented) or make invitations always require acceptance. |
-| L4 | LOW | `startReconciliation` sequence check outside the tx | Ticket (move inside the tx under an account-level lock). |
-| L5 | LOW | Duplicate detection ignores STAGED lines in other batches | Ticket. |
-| L6 | LOW | `normalizeDate` assumes US month/day | Ticket (accept ISO only from the model). |
-| L7 | LOW | `PURGE_ORDER` order untested; `journal_entries_immutable` returns NEW on DRAFT delete | Tickets (topological-order test; trigger `COALESCE(NEW, OLD)`). |
-| N1–N9 | NOTE | Gateway-error log allow-list; broad `isIdempotencyViolation`; UI money string compare; stale comments; `-0.00`; missing CHECKs on `bank_import_lines`/`is_template`; CI branch parent pin; concurrency test gaps; actor proven outside tx | Housekeeping ticket. |
+| L4 | LOW | `startReconciliation` sequence check outside the tx | **FIXED — LL-095** (under the account row lock; completion takes it too). |
+| L5 | LOW | Duplicate detection ignores STAGED lines in other batches | **FIXED — LL-095** ("also staged in another import"). |
+| L6 | LOW | `normalizeDate` assumes US month/day | **DOCUMENTED — LL-095**: US locale is the product assumption (ADR-034); impossible months are no longer swapped. |
+| L7 | LOW | `PURGE_ORDER` order untested; `journal_entries_immutable` returns NEW on DRAFT delete | **FIXED — LL-095** (topological test; trigger replaced). |
+| N1–N9 | NOTE | Gateway-error log allow-list; broad `isIdempotencyViolation`; UI money string compare; stale comments; `-0.00`; missing CHECKs on `bank_import_lines`/`is_template`; CI branch parent pin; concurrency test gaps; actor proven outside tx | **FIXED — LL-095** except the actor-outside-tx note (accepted: the last-owner rule reads live rows) and the transfer mirror, which is now structural (`mirror_of_line_id` unique). |
 
 ## 7. Human sign-off
 

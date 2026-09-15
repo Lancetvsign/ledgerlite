@@ -3,10 +3,10 @@ import 'server-only';
 import { and, asc, eq, gt, ne, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
+import { errorChainText } from '@/lib/error-chain';
 import { log } from '@/lib/logging';
 import { recordAuditEvent } from '@/server/audit';
 import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
-import { errorChainText } from '@/server/companies';
 import { lockActiveCompany } from '@/server/companies/internal';
 import { roleCovers, type Role } from '@/server/rbac';
 

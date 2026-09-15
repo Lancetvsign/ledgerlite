@@ -211,7 +211,9 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
         error: error instanceof Error ? error.name : typeof error,
         statusCode: status,
         ...(gateway ? { gatewayType: error.type } : {}),
-        ...((gateway || configProblem) && error instanceof Error ? { providerMessage: error.message.slice(0, 400) } : {}),
+        // The provider message is logged only for auth/billing/config statuses (LL-095): a 400
+        // validation body could in principle echo part of the prompt.
+        ...(configProblem && error instanceof Error ? { providerMessage: error.message.slice(0, 400) } : {}),
         ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.name } : {}),
       });
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');

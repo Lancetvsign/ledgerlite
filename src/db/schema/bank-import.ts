@@ -83,6 +83,8 @@ export const bankImportLines = pgTable(
     dedupHash: text('dedup_hash').notNull(),
     /** The posted entry, once this line is confirmed. Composite-FK'd, nullable. */
     journalEntryId: uuid('journal_entry_id'),
+    /** The POSTED line on the OTHER statement account this line is the mirror of (LL-094/095). */
+    mirrorOfLineId: uuid('mirror_of_line_id'),
     /**
      * LL-077 (ADR-035): a line applied to an open invoice creates a real customer payment
      * (this is it) instead of a categorised entry; `journalEntryId` is that payment's entry.
@@ -94,11 +96,25 @@ export const bankImportLines = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    // RESTRICT (LL-095): a batch with lines can only go through deleteImportBatch /
+    // the company purge, which delete the lines first. A raw parent delete can no
+    // longer take POSTED lines (and the dedup/reconciliation links they carry) with it.
     foreignKey({
       columns: [table.companyId, table.batchId],
       foreignColumns: [bankImportBatches.companyId, bankImportBatches.id],
       name: 'bank_import_lines_batch_same_company_fk',
-    }).onDelete('cascade'),
+    }).onDelete('restrict'),
+    // One mirror per posted transfer line, structurally (LL-094 follow-up).
+    foreignKey({
+      columns: [table.companyId, table.mirrorOfLineId],
+      foreignColumns: [table.companyId, table.id],
+      name: 'bank_import_lines_mirror_same_company_fk',
+    }).onDelete('restrict'),
+    unique('bank_import_lines_mirror_of_line_id_unique').on(table.mirrorOfLineId),
+    // Shape invariants the service always wrote; now the database holds them too (LL-095).
+    check('bank_import_lines_posted_has_entry', sql`(${table.status} = 'POSTED') = (${table.journalEntryId} is not null)`),
+    check('bank_import_lines_targets_only_when_posted', sql`${table.status} = 'POSTED' or num_nonnulls(${table.chosenAccountId}, ${table.paymentId}, ${table.billPaymentId}, ${table.mirrorOfLineId}) = 0`),
+    check('bank_import_lines_amount_nonzero', sql`${table.amount} <> 0`),
     // Nullable composite FKs (MATCH SIMPLE: unchecked while the account id is null).
     foreignKey({
       columns: [table.companyId, table.suggestedAccountId],

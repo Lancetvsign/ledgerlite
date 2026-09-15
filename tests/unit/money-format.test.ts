@@ -8,6 +8,12 @@ import { Decimal } from '@/lib/decimal';
 import { formatMoney, toInputAmount } from '@/lib/money-format';
 
 describe('formatMoney', () => {
+  it('never renders negative zero (LL-095)', () => {
+    expect(formatMoney('-0.0040')).toBe('0.00');
+    expect(formatMoney('-0.0050')).toBe('0.00'); // half-even: -0.005 → -0.00 → 0.00
+    expect(formatMoney('-0.0060')).toBe('-0.01');
+  });
+
   it.each([
     ['1379.5000', '1,379.50'],
     ['1500.0000', '1,500.00'],
@@ -27,7 +33,7 @@ describe('formatMoney', () => {
     expect(formatMoney('0.0150')).toBe('0.02');
     expect(formatMoney('2.6750')).toBe('2.68');
     expect(formatMoney('2.6650')).toBe('2.66');
-    expect(formatMoney('-0.0050')).toBe('-0.00'.replace('-0.00', '-0.00')); // sign is preserved as given
+    expect(formatMoney('-0.0050')).toBe('0.00'); // a rounded-away sign is dropped (LL-095)
   });
 
   it('accepts a Decimal as well as a money string', () => {
