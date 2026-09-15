@@ -125,12 +125,13 @@ describe('structural rules (migration 0039)', () => {
 
   it('PURGE_ORDER is a topological order of the tenant FK graph (children before the tables they reference)', async () => {
     const db = await getTestDb();
+    const purgeArray = `{${PURGE_ORDER.join(',')}}`; // one text[] literal, not a spread row
     const rows = await db.execute<{ child: string; parent: string }>(sql`
       select c.conrelid::regclass::text as child, c.confrelid::regclass::text as parent
       from pg_constraint c
       where c.contype = 'f' and c.conrelid <> c.confrelid
-        and c.conrelid::regclass::text = any(${PURGE_ORDER}::text[])
-        and c.confrelid::regclass::text = any(${PURGE_ORDER}::text[])`);
+        and c.conrelid::regclass::text = any(${purgeArray}::text[])
+        and c.confrelid::regclass::text = any(${purgeArray}::text[])`);
     const pos = new Map<string, number>(PURGE_ORDER.map((t, i) => [t, i]));
     const violations = rows.rows.filter((r) => (pos.get(r.child) ?? -1) > (pos.get(r.parent) ?? -1)).map((r) => `${r.child} references ${r.parent} but is purged after it`);
     expect(violations).toEqual([]);
@@ -210,9 +211,10 @@ describe('concurrency (Gate 6 N9)', () => {
 });
 
 describe('isIdempotencyViolation (LL-095 N2)', () => {
-  it('recognises only the two once-only indexes, through the cause chain', () => {
+  it('recognises only the once-only journal_entries indexes, through the cause chain', () => {
     const wrap = (msg: string) => new Error('Failed query', { cause: new Error(msg) });
     expect(isIdempotencyViolation(wrap('duplicate key value violates unique constraint "journal_entries_source_posted_once"'))).toBe(true);
+    expect(isIdempotencyViolation(wrap('duplicate key value violates unique constraint "journal_entries_one_opening_balance"'))).toBe(true);
     expect(isIdempotencyViolation(wrap('duplicate key value violates unique constraint "journal_entries_idempotency_unique"'))).toBe(true);
     expect(isIdempotencyViolation(wrap('duplicate key value violates unique constraint "accounts_company_number_unique"'))).toBe(false);
     expect(isIdempotencyViolation(new Error('connection refused'))).toBe(false);
