@@ -9,6 +9,7 @@ import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
 import { toMoney } from '@/lib/decimal';
+import { errorChainText } from '@/lib/error-chain';
 import { log } from '@/lib/logging';
 import { isStatementAccount } from '@/server/accounts/statement-account';
 import { requirePermission } from '@/server/authorization';
@@ -277,6 +278,8 @@ export async function stageImport(
 export interface ImportLineView extends BankImportLine {
   /** Another POSTED bank-import line in this company has the same dedup hash. */
   readonly isDuplicate: boolean;
+  /** 'posted' when a POSTED twin exists, 'staged' when only a twin in another (unposted) batch exists (LL-095). */
+  readonly duplicateOf: 'posted' | 'staged' | null;
   /** The likely other side of a transfer on another statement account, if any (LL-094). */
   readonly transferCandidate: TransferCandidate | null;
 }
@@ -361,31 +364,36 @@ export async function getImportBatch(
   const dupRows = hashes.length === 0
     ? []
     : await db
-        .select({ hash: schema.bankImportLines.dedupHash, id: schema.bankImportLines.id })
+        .select({ hash: schema.bankImportLines.dedupHash, id: schema.bankImportLines.id, status: schema.bankImportLines.status, batchId: schema.bankImportLines.batchId })
         .from(schema.bankImportLines)
         .where(
           and(
             eq(schema.bankImportLines.companyId, companyId),
-            eq(schema.bankImportLines.status, 'POSTED'),
+            inArray(schema.bankImportLines.status, ['POSTED', 'STAGED']),
             inArray(schema.bankImportLines.dedupHash, hashes),
           ),
         );
   const postedByHash = new Map<string, Set<string>>();
+  // A STAGED twin counts only from ANOTHER batch: the same statement uploaded twice before
+  // either posted (LL-095). Twins inside this batch are two genuine identical transactions.
+  const stagedElsewhereByHash = new Map<string, Set<string>>();
   for (const r of dupRows) {
-    const set = postedByHash.get(r.hash) ?? new Set<string>();
+    const target = r.status === 'POSTED' ? postedByHash : r.batchId !== batchId ? stagedElsewhereByHash : null;
+    if (target === null) continue;
+    const set = target.get(r.hash) ?? new Set<string>();
     set.add(r.id);
-    postedByHash.set(r.hash, set);
+    target.set(r.hash, set);
   }
 
   const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
 
   return {
     batch,
-    lines: lines.map((l) => ({
-      ...l,
-      transferCandidate: candidates.get(l.id) ?? null,
-      isDuplicate: [...(postedByHash.get(l.dedupHash) ?? [])].some((id) => id !== l.id),
-    })),
+    lines: lines.map((l) => {
+      const postedTwin = [...(postedByHash.get(l.dedupHash) ?? [])].some((id) => id !== l.id);
+      const duplicateOf = postedTwin ? 'posted' : stagedElsewhereByHash.has(l.dedupHash) ? 'staged' : null;
+      return { ...l, transferCandidate: candidates.get(l.id) ?? null, isDuplicate: postedTwin, duplicateOf };
+    }),
   };
 }
 
@@ -668,7 +676,7 @@ export async function postImportLines(
         }
         await tx
           .update(schema.bankImportLines)
-          .set({ status: 'POSTED', chosenAccountId: plan.accountId, journalEntryId: plan.journalEntryId, updatedAt: sql`now()` })
+          .set({ status: 'POSTED', chosenAccountId: plan.accountId, journalEntryId: plan.journalEntryId, mirrorOfLineId: plan.counterpart.id, updatedAt: sql`now()` })
           .where(lineIs);
         await recordAuditEvent({
           tx,
@@ -680,6 +688,12 @@ export async function postImportLines(
           after: { batchId, accountId: plan.accountId, amount: line.amount, journalEntryId: plan.journalEntryId, matchedTransfer: plan.counterpart.id },
         });
         return true;
+      }).catch((error: unknown) => {
+        // The structural backstop (LL-095): unique(mirror_of_line_id) — one mirror per counterpart.
+        if (/bank_import_lines_mirror_of_line_id_unique/.test(errorChainText(error))) {
+          throw new BankImportError('TRANSFER_ALREADY_POSTED', 'That transfer already has its other side matched.');
+        }
+        throw error;
       });
       if (done) matched += 1;
       continue;

@@ -106,6 +106,8 @@ export const companies = pgTable(
     // At most one template company exists; a second designation is a unique
     // violation, which the service maps to TEMPLATE_EXISTS.
     uniqueIndex('companies_one_template').on(table.isTemplate).where(sql`${table.isTemplate} = true`),
+    // The template slot is released on archive (LL-083); the database now holds that too (LL-095).
+    check('companies_template_is_active', sql`not ${table.isTemplate} or ${table.status} = 'ACTIVE'`),
   ],
 );
 

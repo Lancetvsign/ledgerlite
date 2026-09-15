@@ -61,8 +61,11 @@ export function normalizeAmount(raw: string): string {
 export function normalizeDate(raw: string): string {
   const s = raw.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // US month/day (the product's locale — ADR-034). An impossible month (13/06/2026) is
+  // NOT silently swapped: it passes through unchanged so the strict validator rejects it (LL-095).
   const us = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(s);
   if (us?.[1] !== undefined && us[2] !== undefined && us[3] !== undefined) {
+    if (Number(us[1]) > 12 || Number(us[1]) < 1 || Number(us[2]) < 1 || Number(us[2]) > 31) return raw;
     return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
   }
   return raw;

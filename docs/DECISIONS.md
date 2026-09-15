@@ -1962,6 +1962,12 @@ line on this account is verified first), so the transfer posts once and both sta
 (`TRANSFER_ALREADY_POSTED`); a wrong, staged or already-mirrored counterpart is `TRANSFER_MISMATCH`; one
 mirror per entry. When both sides are only staged, the flag says so and one side must post first.
 
+**Amendment (LL-095):** `bank_import_lines → bank_import_batches` is `ON DELETE RESTRICT`; the table
+carries CHECKs (POSTED ⇔ journal entry; targets only when POSTED; non-zero amount) and `mirror_of_line_id`
+(unique, same-company FK) makes one-mirror-per-transfer structural. Duplicate detection also flags a twin
+STAGED in another batch. Statement dates are read as US month/day (a locale assumption); an impossible month
+is rejected rather than swapped.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner
@@ -2073,6 +2079,10 @@ update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2
 Reopening a completed reconciliation, auto-matching candidates
 to imported statement lines, a printable reconciliation report, or coupling to period close is wanted.
 
+**Amendment (LL-095):** `bank_reconciliation_lines → bank_reconciliations` is `ON DELETE RESTRICT`;
+`startReconciliation` decides the statement-sequence rule under the bank account's row lock, which
+`completeReconciliation` also takes, so a backdated statement cannot slip past a concurrent completion.
+
 ## ADR-037 — Money is displayed at two decimals with thousands separators; stored and computed at four
 
 **Status** Accepted · **Added by** LL-079 · **Decided by** product owner
@@ -2149,6 +2159,10 @@ while a single `audit_events` row exists for the company.
 
 Reactivating an archived company, purging archived companies under a retention policy (a reviewed
 migration that lifts the audit trigger), or transferring ownership before deletion is wanted.
+
+**Amendment (LL-095):** `journal_entries_immutable` now returns the applicable row for a DRAFT on
+DELETE (it returned NEW, i.e. NULL, which cancelled the delete); the purge path could otherwise stall on a
+DRAFT entry. `companies` carries `CHECK (not is_template or status = 'ACTIVE')`.
 
 ## ADR-039 — A master company is the template every new company is seeded from
 

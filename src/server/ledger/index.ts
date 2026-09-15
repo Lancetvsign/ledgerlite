@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { errorChainText } from '@/lib/error-chain';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
@@ -281,8 +282,11 @@ function validateBalance(input: PostJournalEntryInput): void {
 
 /** True when an error is the idempotency-key partial-unique violation. */
 export function isIdempotencyViolation(error: unknown): boolean {
-  const message = String((error as { cause?: unknown }).cause ?? error);
-  return /journal_entries_idempotency_unique|duplicate key/i.test(message);
+  // Only the once-only partial indexes on journal_entries count (LL-095): idempotency key,
+  // one POSTED entry per source, one POSTED opening balance. Any other duplicate key is a
+  // real defect and must surface, not read as "a concurrent posting won".
+  const text = errorChainText(error) || String(error);
+  return /journal_entries_idempotency_unique|journal_entries_source_posted_once|journal_entries_one_opening_balance/.test(text);
 }
 
 /**

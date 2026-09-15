@@ -102,8 +102,15 @@ jobs:
       - name: Create ephemeral Neon branch
         run: |
           set -euo pipefail
+          # Fork explicitly from the project's DEFAULT branch and refuse if that were ever a
+          # production-named branch (LL-095 / Gate 6 N6): CI must never receive a copy of production.
+          PARENT_JSON=$(npx --yes neonctl@2.15.0 branches list --project-id "$NEON_PROJECT_ID" --output json)
+          PARENT_ID=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .id')
+          PARENT_NAME=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .name')
+          if [ -z "$PARENT_ID" ]; then echo "::error::No default Neon branch found"; exit 1; fi
+          case "$PARENT_NAME" in *prod*|*Prod*|*PROD*) echo "::error::Default Neon branch '$PARENT_NAME' looks like production; refusing to fork it"; exit 1;; esac
           npx --yes neonctl@2.15.0 branches create \
-            --project-id "$NEON_PROJECT_ID" --name "$E2E_BRANCH" --output json > /dev/null
+            --project-id "$NEON_PROJECT_ID" --name "$E2E_BRANCH" --parent "$PARENT_ID" --output json > /dev/null
           POOLED=$(npx --yes neonctl@2.15.0 connection-string "$E2E_BRANCH" \
             --project-id "$NEON_PROJECT_ID" --pooled --output json | tr -d '"')
           DIRECT=$(npx --yes neonctl@2.15.0 connection-string "$E2E_BRANCH" \
@@ -206,9 +213,15 @@ jobs:
       - name: Create ephemeral Neon branch
         id: neon
         run: |
+          PARENT_JSON=$(npx --yes neonctl@2.15.0 branches list --project-id "$NEON_PROJECT_ID" --output json)
+          PARENT_ID=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .id')
+          PARENT_NAME=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .name')
+          if [ -z "$PARENT_ID" ]; then echo "::error::No default Neon branch found"; exit 1; fi
+          case "$PARENT_NAME" in *prod*|*Prod*|*PROD*) echo "::error::Default Neon branch '$PARENT_NAME' looks like production; refusing to fork it"; exit 1;; esac
           npx --yes neonctl@2.15.0 branches create \
             --project-id "$NEON_PROJECT_ID" \
             --name "$BRANCH_NAME" \
+            --parent "$PARENT_ID" \
             --output json > /tmp/branch.json
 
           POOLED=$(npx --yes neonctl@2.15.0 connection-string "$BRANCH_NAME" \
@@ -332,8 +345,13 @@ jobs:
       - name: Create ephemeral Neon branch
         id: neon
         run: |
+          PARENT_JSON=$(npx --yes neonctl@2.15.0 branches list --project-id "$NEON_PROJECT_ID" --output json)
+          PARENT_ID=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .id')
+          PARENT_NAME=$(echo "$PARENT_JSON" | jq -r '.[] | select(.default == true) | .name')
+          if [ -z "$PARENT_ID" ]; then echo "::error::No default Neon branch found"; exit 1; fi
+          case "$PARENT_NAME" in *prod*|*Prod*|*PROD*) echo "::error::Default Neon branch '$PARENT_NAME' looks like production; refusing to fork it"; exit 1;; esac
           npx --yes neonctl@2.15.0 branches create \
-            --project-id "$NEON_PROJECT_ID" --name "$BRANCH_NAME" --output json > /dev/null
+            --project-id "$NEON_PROJECT_ID" --name "$BRANCH_NAME" --parent "$PARENT_ID" --output json > /dev/null
           POOLED=$(npx --yes neonctl@2.15.0 connection-string "$BRANCH_NAME" \
             --project-id "$NEON_PROJECT_ID" --pooled --output json | tr -d '"')
           DIRECT=$(npx --yes neonctl@2.15.0 connection-string "$BRANCH_NAME" \

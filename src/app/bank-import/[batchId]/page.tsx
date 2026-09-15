@@ -177,9 +177,9 @@ export default async function ReviewImportPage({
                   <td className="py-2 pr-2">
                     {l.description}
                     {l.aiCategory !== null && <span className="ml-2 text-xs text-neutral-400">suggested: {l.aiCategory}</span>}
-                    {l.isDuplicate && (
+                    {l.duplicateOf !== null && (
                       <span data-testid="duplicate-flag" className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-                        possible duplicate
+                        {l.duplicateOf === 'posted' ? 'possible duplicate' : 'also staged in another import'}
                       </span>
                     )}
                     {l.transferCandidate !== null && (

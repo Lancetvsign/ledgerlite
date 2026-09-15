@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { errorChainText } from '@/lib/error-chain';
 import { and, count, eq, inArray, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
@@ -307,21 +308,7 @@ export async function hasTemplateCompany(): Promise<boolean> {
   return (await selectTemplateCompany()) !== undefined;
 }
 
-/**
- * Drizzle carries the constraint name in the CAUSE chain, not the top message —
- * walk it (the same lesson accounts/index.ts records).
- */
-export function errorChainText(error: unknown): string {
-  const seen = new Set<unknown>();
-  let cur: unknown = error;
-  let acc = '';
-  while (cur instanceof Error && !seen.has(cur)) {
-    seen.add(cur);
-    acc += ' ' + cur.message;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return acc;
-}
+export { errorChainText };
 
 /**
  * Designates (`on`) or releases (`!on`) the master template — AUTHORIZED

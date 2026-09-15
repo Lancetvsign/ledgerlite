@@ -103,7 +103,7 @@ export const bankReconciliationLines = pgTable(
       columns: [table.companyId, table.reconciliationId, table.bankAccountId],
       foreignColumns: [bankReconciliations.companyId, bankReconciliations.id, bankReconciliations.bankAccountId],
       name: 'bank_reconciliation_lines_reconciliation_same_account_fk',
-    }).onDelete('cascade'),
+    }).onDelete('restrict'), // LL-095: a header with cleared lines cannot be deleted from under them
     foreignKey({
       columns: [table.companyId, table.journalLineId, table.bankAccountId],
       foreignColumns: [journalLines.companyId, journalLines.id, journalLines.accountId],
