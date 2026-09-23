@@ -56,15 +56,17 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                 <th className="py-2 pr-2 text-right">Due from them</th>
                 <th className="py-2 pr-2 text-right">Their “Due to us”</th>
                 <th className="py-2 pr-2 text-right">Difference</th>
+                <th className="py-2 pr-2 text-right">In transit</th>
                 <th className="py-2 pr-2 text-right">Due to them</th>
                 <th className="py-2 pr-2 text-right">Their “Due from us”</th>
                 <th className="py-2 pr-2 text-right">Difference</th>
+                <th className="py-2 pr-2 text-right">In transit</th>
               </tr>
             </thead>
             <tbody>
               {report.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center text-neutral-500" data-testid="intercompany-no-rows">
+                  <td colSpan={9} className="py-6 text-center text-neutral-500" data-testid="intercompany-no-rows">
                     No intercompany activity yet.
                   </td>
                 </tr>
@@ -75,9 +77,11 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                     <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.receivableDifference)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums text-neutral-500" data-testid="intercompany-receivable-in-transit">{formatMoney(r.receivableInTransit)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.payableDifference)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.payableInTransit)}</td>
                   </tr>
                 ))
               )}
@@ -86,16 +90,17 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
               <tr className="border-t-2 border-neutral-300 font-medium dark:border-neutral-700">
                 <td className="py-2 pr-2">Total</td>
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="intercompany-total-due-from">{formatMoney(report.totalDueFrom)}</td>
-                <td colSpan={2} />
+                <td colSpan={3} />
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid="intercompany-total-due-to">{formatMoney(report.totalDueTo)}</td>
-                <td colSpan={2} />
+                <td colSpan={3} />
               </tr>
             </tfoot>
           </table>
           <p className="text-xs text-neutral-400">
             A “Due from” here is the money another company owes this one for card charges it took (LL-097) or
             cash it received; the other company carries the same figure as a “Due to”. The two always agree
-            unless the books have been damaged.
+            unless the books have been damaged — except for cash in transit: a bank transfer one company has
+            already marked from its statement while the other has not yet imported its own (LL-099).
           </p>
         </>
       )}

@@ -2462,4 +2462,7 @@ created with the payer holding the receivable; with both directions present, the
 Balances are signed. Both companies marking independently is harmless (two groups, the same balances),
 so the "Link" step once sketched is not needed: nothing structural depends on the group beyond one side
 per company (`journal_entries_intercompany_group_company_unique`, mapped to `TRANSFER_ALREADY_MATCHED`).
+**Cash in transit:** between a mark and its match the pair legitimately differs by that amount; the
+mirror invariant and the report (LL-098) are therefore stated NET of single-sided INTERCOMPANY groups
+("in transit" is shown per row), and any other gap — or a one-sided entry with no group — is corruption.
 No schema change.

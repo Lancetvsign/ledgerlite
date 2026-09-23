@@ -56,7 +56,7 @@ import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
 
-import { assignSharedLines, getImportBatch, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, postImportLines, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { cannedExtractor } from '@/server/bank-import/extract';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -950,6 +950,23 @@ describe('GL regression suite (release-blocking)', () => {
       expect(report.totalDueFrom).toBe(expectDueFrom);
       expect(report.totalDueTo).toBe(expectDueTo);
     }
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    // Cash in transit (LL-099): A marks a bank transfer to B before B imports its statement — the
+    // pair differs by exactly that amount and is still considered mirrored; after B matches, it is 0.
+    const bankA = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${a} and account_number = '1000'`)).rows[0]!.id;
+    const bankB = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${b} and account_number = '1000'`)).rows[0]!.id;
+    const outA = await stageImport(userId, a, { bankAccountId: bankA, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-07-01', description: 'TFR TO TAKER', amount: '-300.00' }]));
+    const outLine = (await getImportBatch(userId, a, outA.id))!.lines[0]!;
+    await postImportLines(userId, a, outA.id, { decisions: [{ lineId: outLine.id, action: 'intercompany_transfer', counterpartCompanyId: b }] });
+    const pendingRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
+    expect(pendingRow).toMatchObject({ receivableDifference: '300.0000', receivableInTransit: '300.0000', mirrored: true });
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    const inB = await stageImport(userId, b, { bankAccountId: bankB, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-07-02', description: 'FROM CARD CO', amount: '300.00' }]));
+    const inLine = (await getImportBatch(userId, b, inB.id))!.lines[0]!;
+    expect(inLine.intercompanyCandidate?.counterpartCompanyId).toBe(a);
+    await postImportLines(userId, b, inB.id, { decisions: [{ lineId: inLine.id, action: 'match_intercompany', counterpartEntryId: inLine.intercompanyCandidate!.entryId }] });
+    const settledRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
+    expect(settledRow).toMatchObject({ receivableDifference: '0.0000', receivableInTransit: '0.0000', mirrored: true });
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
     await assertLedgerIntegrity();
   });

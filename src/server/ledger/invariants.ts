@@ -113,36 +113,50 @@ export async function findTrialBalanceImbalances(
 
 /**
  * Intercompany pairs whose two sides disagree (LL-098 / GL-T029): a company's "Due from B"
- * balance must equal B's "Due to <company>" balance, and vice versa, at every point in time.
- * Structural in production (both sides post in one transaction; only INTERCOMPANY/REVERSAL
- * may move these accounts), so a mismatch is corruption. NOT part of `assertLedgerIntegrity`:
- * integration fixtures legitimately seed one-sided intercompany rows to test the leave rule.
- * The release gate (GL-T029) and the intercompany report call it explicitly.
+ * balance must equal B's "Due to <company>" balance — NET OF CASH IN TRANSIT (LL-099): a bank
+ * transfer one company has marked from its statement while the other has not yet imported
+ * its own is a single-sided INTERCOMPANY group, and its amount is expected to differ until
+ * the match lands. Everything else is structural in production (both sides post in one
+ * transaction; only INTERCOMPANY/REVERSAL may move these accounts), so any other gap — or a
+ * one-sided entry with no group at all — is corruption. NOT part of `assertLedgerIntegrity`:
+ * integration fixtures legitimately seed one-sided rows to test the leave rule. The release
+ * gate (GL-T029) and the intercompany report call it explicitly.
  */
 export async function findIntercompanyMismatches(exec: Executor, companyId?: string): Promise<string[]> {
+  const scope = companyId === undefined ? sql`true` : sql`(g.x = ${companyId} or g.y = ${companyId})`;
   const rows = await exec.execute<{ pair: string }>(sql`
     with bal as (
-      select a.company_id, a.intercompany_company_id as counterpart_id, a.system_account_type as role,
+      select a.id as account_id, a.company_id, a.intercompany_company_id as counterpart_id, a.system_account_type as role,
              coalesce(sum(case when e.status in ('POSTED','REVERSED') then (case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end) else 0 end), 0) as balance
       from accounts a
       left join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
       left join journal_entries e on e.id = l.journal_entry_id
       where a.intercompany_company_id is not null
       group by a.id, a.company_id, a.intercompany_company_id, a.system_account_type
+    ),
+    single as (
+      select e.id from journal_entries e
+      where e.source_type = 'INTERCOMPANY' and e.status = 'POSTED' and e.intercompany_group_id is not null
+        and not exists (select 1 from journal_entries o where o.intercompany_group_id = e.intercompany_group_id and o.id <> e.id)
+    ),
+    transit as (
+      select a.id as account_id,
+             coalesce(sum(case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end), 0) as amt
+      from accounts a
+      join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+      join single s on s.id = l.journal_entry_id
+      where a.intercompany_company_id is not null
+      group by a.id
+    ),
+    balt as (select b.*, coalesce(t.amt, 0) as transit from bal b left join transit t on t.account_id = b.account_id),
+    g as (
+      select coalesce(r.company_id, p.counterpart_id) as x, coalesce(r.counterpart_id, p.company_id) as y,
+             (coalesce(r.balance, 0) - coalesce(p.balance, 0)) - (coalesce(r.transit, 0) - coalesce(p.transit, 0)) as gap
+      from (select * from balt where role = 'INTERCOMPANY_RECEIVABLE') r
+      full join (select * from balt where role = 'INTERCOMPANY_PAYABLE') p
+        on p.company_id = r.counterpart_id and p.counterpart_id = r.company_id
     )
-    select (r.company_id::text || '->' || r.counterpart_id::text) as pair
-    from bal r
-    full join bal p on p.company_id = r.counterpart_id and p.counterpart_id = r.company_id and p.role = 'INTERCOMPANY_PAYABLE'
-    where r.role = 'INTERCOMPANY_RECEIVABLE'
-      and (${companyId === undefined ? sql`true` : sql`r.company_id = ${companyId} or r.counterpart_id = ${companyId}`})
-      and coalesce(r.balance, 0) <> coalesce(p.balance, 0)
-    union
-    select (p.company_id::text || '->' || p.counterpart_id::text) as pair
-    from bal p
-    left join bal r on r.company_id = p.counterpart_id and r.counterpart_id = p.company_id and r.role = 'INTERCOMPANY_RECEIVABLE'
-    where p.role = 'INTERCOMPANY_PAYABLE' and r.company_id is null
-      and (${companyId === undefined ? sql`true` : sql`p.company_id = ${companyId} or p.counterpart_id = ${companyId}`})
-      and p.balance <> 0`);
+    select (g.x::text || '->' || g.y::text) as pair from g where g.gap <> 0 and ${scope}`);
   return rows.rows.map((r) => r.pair);
 }
 

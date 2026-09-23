@@ -101,6 +101,10 @@ describe('mark, then match from the other company', () => {
     expect(eA.intercompany_group_id).not.toBeNull();
     expect(eA.lines).toEqual([{ account_id: pair.dueFromInA, debit: '5000.0000', credit: '0.0000' }, { account_id: c.bankA, debit: '0.0000', credit: '5000.0000' }]);
 
+    // Between the mark and the match the mirror holds NET OF CASH IN TRANSIT (LL-099).
+    const pending = (await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]!;
+    expect(pending).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '0.0000', receivableDifference: '5000.0000', receivableInTransit: '5000.0000', mirrored: true });
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
     // B's statement two days later: the candidate is offered and the default is to match it.
     const inB = await stageOne(c.owner, c.b, c.bankB, '2026-07-03', 'DEPOSIT FROM ALPHA', '5000.00');
     expect(inB.line.intercompanyCandidate).toMatchObject({ entryId: markedA.journalEntryId, counterpartCompanyId: c.a, counterpartLegalName: 'Alpha Co', txnDate: '2026-07-01' });
@@ -113,7 +117,7 @@ describe('mark, then match from the other company', () => {
 
     // Mirror and reconciliation on both sides.
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
-    expect((await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '5000.0000', mirrored: true });
+    expect((await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '5000.0000', receivableInTransit: '0.0000', mirrored: true });
     for (const [companyId, bankId, ending] of [[c.a, c.bankA, '-5000.00'], [c.b, c.bankB, '5000.00']] as const) {
       const rec = await startReconciliation(c.owner, companyId, { bankAccountId: bankId, statementDate: '2026-07-31', statementEndingAmount: ending });
       const view = (await getReconciliation(c.owner, companyId, rec.id))!;
@@ -218,7 +222,7 @@ describe('validation, visibility and races', () => {
     expect(told).toBe(1);
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
     // A double submit of the winner is a no-op.
-    const winner = settled[0]!.status === 'fulfilled' ? right : twin;
+    const winner = settled[0].status === 'fulfilled' ? right : twin;
     expect((await postImportLines(c.owner, c.b, winner.batch.id, { decisions: [{ lineId: winner.line.id, action: 'match_intercompany', counterpartEntryId: entryA }] })).intercompany).toBe(0);
   });
 
