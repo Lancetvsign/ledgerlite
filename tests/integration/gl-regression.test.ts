@@ -32,14 +32,16 @@ import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import {
+  assertIntercompanyMirror,
   assertLedgerIntegrity,
   getJournalEntry,
   LedgerError,
   postJournalEntry,
   reverseJournalEntry,
 } from '@/server/ledger';
+import { addCompanyToOrganization, createOrganization } from '@/server/organizations';
 import { closePeriod } from '@/server/periods';
-import { getApAging, getArAging, getCustomerStatement, getTrialBalance, getVendorStatement } from '@/server/reports';
+import { getApAging, getArAging, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -54,7 +56,7 @@ import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
 
-import { stageImport } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { cannedExtractor } from '@/server/bank-import/extract';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -912,6 +914,42 @@ describe('GL regression suite (release-blocking)', () => {
     }
     expect(await arNow()).toBe('0.0000');
     expect((await getArAging(userId, company.id, '2026-12-31')).totals.total).toBe('0.0000');
+  });
+
+  it('GL-T029 — every intercompany pair mirrors to the cent across the organization, in each company\'s report and by the invariant (LL-098)', async () => {
+    const userId = await makeUser();
+    const a = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Card Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const b = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Taker Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const c = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Other Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const org = await createOrganization(userId, a, { name: 'GL Group' });
+    await addCompanyToOrganization(userId, b, org.id);
+    await addCompanyToOrganization(userId, c, org.id);
+    const card = await createAccount(userId, a, createAccountInput.parse({ accountNumber: '2150', name: 'Visa', accountType: 'LIABILITY', accountSubtype: 'credit_card', cashFlowCategory: 'FINANCING' }));
+    const db = await getTestDb();
+    const expenseOf = async (companyId: string): Promise<string> =>
+      (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${companyId} and account_type = 'EXPENSE' and status = 'ACTIVE' order by account_number limit 1`)).rows[0]!.id;
+
+    // A shared card statement (−120.50, −45.00, +2000): B takes two lines, C takes the refund-shaped payment; B gives one back.
+    const batch = await stageImport(userId, a, { bankAccountId: card.id, filename: 'visa.pdf', fileBytes: new Uint8Array(), shareWithOrganization: true }, cannedExtractor);
+    const lines = (await getImportBatch(userId, a, batch.id))!.lines;
+    await assignSharedLines(userId, b, batch.id, { decisions: [{ lineId: lines[0]!.id, accountId: await expenseOf(b) }, { lineId: lines[1]!.id, accountId: await expenseOf(b) }] });
+    await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: await expenseOf(c) }] });
+    await unassignSharedLine(userId, b, batch.id, lines[1]!.id);
+
+    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '120.5000', '2000.0000'], [b, '0.0000', '120.5000'], [c, '2000.0000', '0.0000']] as const) {
+      const report = await getIntercompanyReport(userId, companyId, '2026-12-31');
+      expect(report.mirrored, companyId).toBe(true);
+      for (const row of report.rows) {
+        expect(row.receivableDifference).toBe('0.0000');
+        expect(row.payableDifference).toBe('0.0000');
+        expect(toMoney(row.dueFrom).eq(toMoney(row.counterpartDueTo))).toBe(true);
+        expect(toMoney(row.dueTo).eq(toMoney(row.counterpartDueFrom))).toBe(true);
+      }
+      expect(report.totalDueFrom).toBe(expectDueFrom);
+      expect(report.totalDueTo).toBe(expectDueTo);
+    }
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    await assertLedgerIntegrity();
   });
 
   it('GL-T027 — neither manual bypass can move A/P without its subsidiary (LL-066)', async () => {

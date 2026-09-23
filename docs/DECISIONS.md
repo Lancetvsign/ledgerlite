@@ -2442,3 +2442,10 @@ a line posts both sides in one transaction — line FOR UPDATE → companies KEY
 `lockEntryCounters` (id order) → `postEntryCore` ×2 — and giving it back reverses both the same way.
 An INTERCOMPANY posting may never touch A/R or A/P (trigger). Assigning FROM the cardholder's page
 is deliberately not offered: the taking company chooses its own expense account.
+
+**Amendment (LL-098 — intercompany report and GL-T029):** `/reports/intercompany` shows, per counterpart,
+this company's Due from / Due to, the counterpart's mirror figure (a cross-company read by design: the
+other side of postings this company took part in, nothing else) and the difference. `findIntercompanyMismatches`
+/ `assertIntercompanyMirror` (ledger invariants) state the rule; GL-T029 in the release gate proves it over
+a three-company split with a give-back. The mirror check is deliberately NOT in `assertLedgerIntegrity`'s
+per-test teardown: integration fixtures seed one-sided intercompany rows on purpose (the leave rule).

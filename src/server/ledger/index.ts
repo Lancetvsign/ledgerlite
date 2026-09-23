@@ -404,6 +404,8 @@ export type { LedgerErrorCode } from './errors';
 
 // LL-034 integrity assertions — the audit every gate and later ticket leans on.
 export {
+  assertIntercompanyMirror,
+  findIntercompanyMismatches,
   assertLedgerBalanced,
   assertNoOrphanedLines,
   assertAccountOwnership,
