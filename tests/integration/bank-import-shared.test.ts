@@ -145,7 +145,8 @@ describe('structural rules (migration 0041)', () => {
     const { lines } = await stageCard(c);
     const db = await getTestDb();
     const l = lines[0]!;
-    expect(await rejection(db.execute(sql`update bank_import_lines set status = 'PERSONAL' where id = ${l.id}`))).toMatch(/bank_import_lines_posted_has_entry/);
+    // Two CHECKs fail on this row (no entry, no account); Postgres reports whichever it evaluates first.
+    expect(await rejection(db.execute(sql`update bank_import_lines set status = 'PERSONAL' where id = ${l.id}`))).toMatch(/bank_import_lines_posted_has_entry|bank_import_lines_personal_has_account/);
     expect(await rejection(db.execute(sql`update bank_import_lines set status = 'ASSIGNED' where id = ${l.id}`))).toMatch(/bank_import_lines_posted_has_entry|bank_import_lines_assigned_shape/);
     expect(await rejection(db.execute(sql`update bank_import_lines set assigned_company_id = ${c.b} where id = ${l.id}`))).toMatch(/bank_import_lines_assigned_shape/);
     // A real assignment, then the self-references are refused.
@@ -271,6 +272,12 @@ describe('sharing and visibility', () => {
     const still = await getSharedImportBatch(c.owner, c.b, batch.id);
     expect(still?.lines.map((l) => l.status)).toEqual(['ASSIGNED']);
     expect(still?.batch.sharedWithOrganization).toBe(false);
+    expect(still?.batch.stagedCount).toBe(0);
+    expect((await listSharedImports(c.owner, c.b)).map((x) => [x.batchId, x.stagedCount, x.assignedToMeCount])).toEqual([[batch.id, 0, 1]]);
+    // …and no NEW take is possible until it is shared again.
+    expect(await codeOf(assignSharedLines(c.owner, c.b, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: c.suppliesB }] }), BankImportError)).toBe('LINE_NOT_FOUND');
+    await setBatchSharing(c.owner, c.a, batch.id, true);
+    expect((await assignSharedLines(c.owner, c.b, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: c.suppliesB }] })).assigned).toBe(1);
   });
 
   it('the shared view shows STAGED lines and the viewer\'s own; suggestions come from the viewer\'s chart', async () => {

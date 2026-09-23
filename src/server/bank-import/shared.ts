@@ -194,7 +194,7 @@ function toSummary(v: VisibleBatch, counts: { staged: number; mine: number } | u
     filename: v.filename,
     createdAt: v.createdAt,
     sharedWithOrganization: v.sharedWithOrganization,
-    stagedCount: counts?.staged ?? 0,
+    stagedCount: v.sharedWithOrganization ? (counts?.staged ?? 0) : 0,
     assignedToMeCount: counts?.mine ?? 0,
   };
 }
@@ -225,7 +225,10 @@ export async function getSharedImportBatch(
       and(
         eq(schema.bankImportLines.companyId, visible.ownerCompanyId),
         eq(schema.bankImportLines.batchId, batchId),
-        sql`(${schema.bankImportLines.status} = 'STAGED' or (${schema.bankImportLines.status} = 'ASSIGNED' and ${schema.bankImportLines.assignedCompanyId} = ${viewerCompanyId}))`,
+        // Un-shared (LL-097): only what this company already took is shown — no new takes.
+        visible.sharedWithOrganization
+          ? sql`(${schema.bankImportLines.status} = 'STAGED' or (${schema.bankImportLines.status} = 'ASSIGNED' and ${schema.bankImportLines.assignedCompanyId} = ${viewerCompanyId}))`
+          : sql`(${schema.bankImportLines.status} = 'ASSIGNED' and ${schema.bankImportLines.assignedCompanyId} = ${viewerCompanyId})`,
       ),
     )
     .orderBy(schema.bankImportLines.lineNumber);
@@ -334,7 +337,9 @@ export async function assignSharedLines(
   const periodCache = new Map<string, boolean>();
   for (const d of input.decisions) {
     const line = byId.get(d.lineId);
-    if (line === undefined) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
+    // An un-shared batch is visible only through the lines this company already took; its
+    // untaken lines are not on offer (LL-097).
+    if (line === undefined || !visible.sharedWithOrganization) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
     if (line.status !== 'STAGED') continue; // taken, posted or ignored meanwhile — idempotent no-op
     const n = String(line.lineNumber);
     if (!allowedIds.has(d.accountId)) {
