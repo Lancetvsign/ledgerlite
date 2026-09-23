@@ -15,6 +15,8 @@ export function LineActionControls({
   allowApply,
   matchLabel,
   allowPersonal = false,
+  allowIntercompany = false,
+  intercompanyMatchLabel,
 }: {
   index: number;
   moneyIn: boolean;
@@ -24,6 +26,10 @@ export function LineActionControls({
   matchLabel?: string;
   /** LL-097: offer "Mark personal" (an owner equity/asset account exists to post it to). */
   allowPersonal?: boolean;
+  /** LL-099: the company is in an organization with members the reviewer may post in. */
+  allowIntercompany?: boolean;
+  /** LL-099: the other company already posted its side — offer to match it. */
+  intercompanyMatchLabel?: string;
 }) {
   const { actions, defaults, setAction } = useReviewState();
   const key = String(index);
@@ -45,6 +51,8 @@ export function LineActionControls({
         <option value="post">Post to account</option>
         <option value="ignore">Ignore</option>
         {allowPersonal && <option value="personal">Mark personal</option>}
+        {intercompanyMatchLabel !== undefined && <option value="match_intercompany">{intercompanyMatchLabel}</option>}
+        {allowIntercompany && <option value="intercompany_transfer">Transfer with another company…</option>}
         {matchLabel !== undefined && <option value="match_transfer">{matchLabel}</option>}
         {allowApply &&
           (moneyIn ? (

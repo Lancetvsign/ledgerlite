@@ -351,3 +351,61 @@ test('a shared card statement is split: one line posted here, one marked persona
   await expect(page.getByTestId('shared-taken-1')).toHaveCount(0);
   await expect(page.getByTestId('shared-take-1')).toBeVisible();
 });
+
+test('an intercompany bank transfer is marked in one company and matched from the other (LL-099)', async ({ page }) => {
+  test.slow();
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const payee = `Payee Co ${stamp}`;
+  const payer = `Payer Co ${stamp}`;
+  await page.goto('/account');
+  for (const name of [payee, payer]) {
+    await page.getByPlaceholder('New company legal name').fill(name);
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+  }
+  const payeeRow = page.locator('li', { hasText: payee });
+  await payeeRow.getByTestId('organization-menu').click();
+  await payeeRow.getByPlaceholder('Organization name').fill(`Group ${stamp}`);
+  await payeeRow.getByTestId('create-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('Organization created');
+  const payerRow = page.locator('li', { hasText: payer });
+  await payerRow.getByTestId('organization-menu').click();
+  await payerRow.getByTestId('organization-select').selectOption({ label: `Group ${stamp}` });
+  await payerRow.getByTestId('add-to-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('joined the organization');
+
+  // Payer Co (active): the canned bank statement's −2000 "rent" line is really a transfer to Payee Co.
+  await uploadStatement(page);
+  await page.getByTestId('import-action-2').selectOption('intercompany_transfer');
+  await expect(page.getByTestId('import-counterpart-2')).toBeVisible();
+  await page.getByTestId('import-counterpart-2').selectOption({ label: payee });
+  await page.getByTestId('import-action-0').selectOption('ignore');
+  await page.getByTestId('import-action-1').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+  await page.goto('/reports/intercompany');
+  await expect(page.getByTestId('intercompany-row').filter({ hasText: payee })).toContainText('2,000.00');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+
+  // Payee Co: its card statement's +2000 PAYMENT line is the other side; it is flagged and defaults to Match.
+  await page.goto('/account');
+  await page.locator('li', { hasText: payee }).getByRole('button', { name: 'Switch' }).click();
+  await expect(page.locator('li', { hasText: payee }).getByTestId('active-badge')).toBeVisible();
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('intercompany-flag')).toContainText(`transfer posted by ${payer}`);
+  await expect(page.getByTestId('import-action-2')).toHaveValue('match_intercompany');
+  await page.getByTestId('import-action-0').selectOption('ignore');
+  await page.getByTestId('import-action-1').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+
+  await page.goto('/reports/intercompany');
+  const row = page.getByTestId('intercompany-row').filter({ hasText: payer });
+  await expect(row).toContainText('2,000.00');
+  await expect(row).toHaveAttribute('data-mirrored', '1');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+});

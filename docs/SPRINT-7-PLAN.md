@@ -120,7 +120,7 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
 | 1 | **LL-096** — Organizations + intercompany system accounts — **implemented** (ADR-043, migration 0040) | ✅ | ✅ | LL-083 (templates), LL-042 (system roles) |
 | 2 | **LL-097** — Shared card statements: personal in the cardholder, take-from-the-other-company, intercompany posting — **implemented** (migration 0041) | ✅ + ledger | ✅ | LL-088/089/094 |
 | 3 | **LL-098** — Organization reports: intercompany balances by pair, and GL-T029 (A's *Due from B* = B's *Due to A*, every pair, every day) — **implemented** | — | — | LL-064 pattern |
-| 4 | **LL-099** — Intercompany settlement (B pays A: posts both sides; bank-import transfer matching recognises it) | — | ✅ (ledger) | LL-094 |
+| 4 | **LL-099** — Intercompany bank transfers + settlement (mark on one statement, match from the other; the existing pair is moved, so repayment zeroes it) — **implemented** | — | ✅ (ledger) | LL-094 |
 | 5 | **Gate 7** — human review of the intercompany model across two real companies | — | — | Gate 6 |
 
 ### LL-096 — Organizations

@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, type ImportLineView } from '@/server/bank-import';
+import { getImportBatch, transferCounterparts, type ImportLineView } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listOpenBills } from '@/server/bill-payments';
 import { listCustomers } from '@/server/customers';
@@ -21,6 +21,7 @@ import { listVendors } from '@/server/vendors';
 import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction } from '../actions';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
+import { LineCounterpartSelect } from './line-counterpart';
 import { LineActionControls } from './line-action';
 import { ReviewStateProvider, type LineAction } from './review-state';
 
@@ -48,7 +49,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -76,13 +77,14 @@ export default async function ReviewImportPage({
   }
 
   const companyId = membership.companyId;
-  const [accounts, openInvoices, openBills, customers, vendors, orgMembers] = await Promise.all([
+  const [accounts, openInvoices, openBills, customers, vendors, orgMembers, counterparts] = await Promise.all([
     listAccounts(user.id, companyId),
     listOpenInvoices(user.id, companyId),
     listOpenBills(user.id, companyId),
     listCustomers(user.id, companyId),
     listVendors(user.id, companyId),
     listOrganizationCompanies(user.id, companyId),
+    transferCounterparts(user.id, companyId),
   ]);
   const inOrganization = orgMembers.length > 0;
   const label = (a: { accountNumber: string | null; name: string }) =>
@@ -123,6 +125,8 @@ export default async function ReviewImportPage({
     // A POSTED mirror on another statement account (LL-094): default to matching it, so the
     // transfer posts once and both statements reconcile.
     if (l.transferCandidate?.status === 'POSTED') return { moneyIn, options: [], documentId: '', action: 'match_transfer' };
+    // The other company already posted its side of this movement (LL-099): default to matching it.
+    if (l.intercompanyCandidate !== null) return { moneyIn, options: [], documentId: '', action: 'match_intercompany' };
     if (isCard) return { moneyIn, options: [], documentId: '', action: 'post' };
     const options = moneyIn ? invoiceOptions : billOptions;
     const abs = amt.abs();
@@ -213,6 +217,11 @@ export default async function ReviewImportPage({
                         {l.duplicateOf === 'posted' ? 'possible duplicate' : 'also staged in another import'}
                       </span>
                     )}
+                    {l.intercompanyCandidate !== null && (
+                      <span data-testid="intercompany-flag" className="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-900 dark:bg-violet-900 dark:text-violet-100">
+                        {`transfer posted by ${l.intercompanyCandidate.counterpartLegalName} on ${l.intercompanyCandidate.txnDate}`}
+                      </span>
+                    )}
                     {l.transferCandidate !== null && (
                       <span data-testid="transfer-flag" className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-900 dark:bg-sky-900 dark:text-sky-100">
                         {l.transferCandidate.status === 'POSTED'
@@ -229,6 +238,8 @@ export default async function ReviewImportPage({
                       <td className="py-2 pr-2">
                         <input type="hidden" name="lineId" value={l.id} />
                         <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
+                        <input type="hidden" name="counterpartEntryId" value={l.intercompanyCandidate?.entryId ?? ''} />
+                        {counterparts.length > 0 && <LineCounterpartSelect index={i} options={counterparts} />}
                         <LineAccountSelect
                           index={i}
                           options={pickableOptions}
@@ -252,6 +263,8 @@ export default async function ReviewImportPage({
                           moneyIn={s.moneyIn}
                           allowApply={!isCard}
                           allowPersonal={personalDefault !== null}
+                          allowIntercompany={counterparts.length > 0}
+                          {...(l.intercompanyCandidate !== null ? { intercompanyMatchLabel: `Match transfer posted by ${l.intercompanyCandidate.counterpartLegalName}` } : {})}
                           {...(l.transferCandidate?.status === 'POSTED'
                             ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
                             : {})}
@@ -320,17 +333,19 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
     const matched = sp.matched ?? '0';
     const personal = sp.personal ?? '0';
+    const intercompany = sp.intercompany ?? '0';
     return (
       base +
       (applied === '0' ? '' : ` ${applied} applied to open invoices/bills.`) +
       (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`) +
-      (personal === '0' ? '' : ` ${personal} marked personal.`)
+      (personal === '0' ? '' : ` ${personal} marked personal.`) +
+      (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`)
     );
   }
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
@@ -346,6 +361,9 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (error === 'TRANSFER_ALREADY_POSTED') return 'The other side of that transfer already posted from the other account — choose “Match transfer” (or Ignore) instead of posting it again.';
   if (error === 'TRANSFER_MISMATCH') return 'That line is not the posted mirror of the transfer — reload and review again.';
   if (error === 'ACCOUNT_INVALID') return 'A personal charge posts to an owner equity or asset account (Owner Distributions), not to an expense or revenue account.';
+  if (error === 'COUNTERPART_INVALID') return 'Choose a company of your organization you can post in for the intercompany transfer.';
+  if (error === 'TRANSFER_ALREADY_MATCHED') return 'This company already posted its side of that intercompany transfer — reload and review again.';
+  if (error === 'INTERCOMPANY_NOT_ALLOWED') return 'The two companies must be active members of one organization with the same currency.';
   if (error === 'ONLY_CARDS_SHAREABLE') return 'Only a credit-card statement can be shared with the organization.';
   if (error === 'NOT_IN_ORGANIZATION') return 'Put this company in an organization (Account page) before sharing a statement.';
   if (error === 'CARD_CANNOT_APPLY') return 'Credit-card statement lines can only be posted to an account — pay bills from a bank account.';
