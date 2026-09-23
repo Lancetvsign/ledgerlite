@@ -2466,3 +2466,10 @@ per company (`journal_entries_intercompany_group_company_unique`, mapped to `TRA
 mirror invariant and the report (LL-098) are therefore stated NET of single-sided INTERCOMPANY groups
 ("in transit" is shown per row), and any other gap — or a one-sided entry with no group — is corruption.
 No schema change.
+
+**Gate 7 correction (2026-09-23):** the LL-096 statement that the mirror "can only be broken by an
+intercompany posting that fails to post both sides" no longer holds as written: with LL-099 a single-sided
+INTERCOMPANY group is legitimately "in transit", and today ANY such group of ANY amount is netted out
+(Gate 7 H2 — LL-101 tightens the definition and ages it); and `journal_lines` has no BEFORE INSERT guard, so
+raw balanced lines can be appended to a posted entry (Gate 7 M5 — LL-104, owner's decision). Until those
+land, the mirror is conventional and gate-proven, not structural. See `docs/GATE-7.md`.
