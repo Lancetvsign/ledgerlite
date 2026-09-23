@@ -111,6 +111,47 @@ export async function findTrialBalanceImbalances(
   return rows.rows.map((r) => r.company_id);
 }
 
+/**
+ * Intercompany pairs whose two sides disagree (LL-098 / GL-T029): a company's "Due from B"
+ * balance must equal B's "Due to <company>" balance, and vice versa, at every point in time.
+ * Structural in production (both sides post in one transaction; only INTERCOMPANY/REVERSAL
+ * may move these accounts), so a mismatch is corruption. NOT part of `assertLedgerIntegrity`:
+ * integration fixtures legitimately seed one-sided intercompany rows to test the leave rule.
+ * The release gate (GL-T029) and the intercompany report call it explicitly.
+ */
+export async function findIntercompanyMismatches(exec: Executor, companyId?: string): Promise<string[]> {
+  const rows = await exec.execute<{ pair: string }>(sql`
+    with bal as (
+      select a.company_id, a.intercompany_company_id as counterpart_id, a.system_account_type as role,
+             coalesce(sum(case when e.status in ('POSTED','REVERSED') then (case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end) else 0 end), 0) as balance
+      from accounts a
+      left join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+      left join journal_entries e on e.id = l.journal_entry_id
+      where a.intercompany_company_id is not null
+      group by a.id, a.company_id, a.intercompany_company_id, a.system_account_type
+    )
+    select (r.company_id::text || '->' || r.counterpart_id::text) as pair
+    from bal r
+    full join bal p on p.company_id = r.counterpart_id and p.counterpart_id = r.company_id and p.role = 'INTERCOMPANY_PAYABLE'
+    where r.role = 'INTERCOMPANY_RECEIVABLE'
+      and (${companyId === undefined ? sql`true` : sql`r.company_id = ${companyId} or r.counterpart_id = ${companyId}`})
+      and coalesce(r.balance, 0) <> coalesce(p.balance, 0)
+    union
+    select (p.company_id::text || '->' || p.counterpart_id::text) as pair
+    from bal p
+    left join bal r on r.company_id = p.counterpart_id and r.counterpart_id = p.company_id and r.role = 'INTERCOMPANY_RECEIVABLE'
+    where p.role = 'INTERCOMPANY_PAYABLE' and r.company_id is null
+      and (${companyId === undefined ? sql`true` : sql`p.company_id = ${companyId} or p.counterpart_id = ${companyId}`})
+      and p.balance <> 0`);
+  return rows.rows.map((r) => r.pair);
+}
+
+/** Every intercompany pair mirrors — GL-T029. Explicit, not part of assertLedgerIntegrity (see above). */
+export async function assertIntercompanyMirror(companyId?: string, exec: Executor = getDbTx()): Promise<void> {
+  const v = await findIntercompanyMismatches(exec, companyId);
+  if (v.length > 0) throw new LedgerIntegrityError('intercompany-mirror', v);
+}
+
 /** Every POSTED/REVERSED entry's debits equal its credits, individually. */
 export async function assertLedgerBalanced(companyId?: string, exec: Executor = getDbTx()): Promise<void> {
   const v = await findUnbalancedEntries(exec, companyId);

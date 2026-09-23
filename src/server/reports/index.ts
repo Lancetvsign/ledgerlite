@@ -17,3 +17,5 @@ export { getCashFlowStatement } from './cash-flow';
 export type { CashFlowStatement, CashFlowLine, CashFlowSection } from './cash-flow';
 export { getAccountRegister } from './account-register';
 export type { AccountRegister, AccountRegisterLine } from './account-register';
+export { getIntercompanyReport } from './intercompany';
+export type { IntercompanyReport, IntercompanyRow } from './intercompany';
