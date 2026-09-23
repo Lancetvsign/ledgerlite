@@ -2427,3 +2427,18 @@ prerequisite).
 
 Organization-level roles or invitations are wanted; a bank account (as opposed to a card) is
 shared across companies (which company owns the cash?); multi-currency groups appear.
+
+**Amendment (LL-097 — shared card statements):** `bank_import_batches.shared_with_organization`;
+`bank_import_line_status` += `PERSONAL` (posted like `post`, to an owner equity/asset account the
+reviewer picks — Owner Distributions by default — so the card still reconciles and the P&L never
+carries it) and `ASSIGNED` (taken by another member: `assigned_company_id` +
+`assigned_journal_entry_id`, composite-FK'd to that company's entry; this company's side stays in
+`journal_entry_id`). `journal_entries.intercompany_group_id` (unique per company, INTERCOMPANY only,
+immutable once posted) links the two sides. Only a CARD statement can be shared. Visibility from
+another member B is one predicate for every reader and writer: `journal.post` in B, A an ACTIVE member
+of B's organization, the actor a member of A with a `journal.post` role (visible ⇔ assignable), and
+the batch shared OR already carrying a line assigned to B (un-sharing never strands B's undo). Taking
+a line posts both sides in one transaction — line FOR UPDATE → companies KEY SHARE (id order) →
+`lockEntryCounters` (id order) → `postEntryCore` ×2 — and giving it back reverses both the same way.
+An INTERCOMPANY posting may never touch A/R or A/P (trigger). Assigning FROM the cardholder's page
+is deliberately not offered: the taking company chooses its own expense account.

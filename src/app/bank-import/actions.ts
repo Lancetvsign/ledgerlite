@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, deleteImportBatch, postImportLines, stageImport } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport } from '@/server/bank-import';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
@@ -56,6 +56,7 @@ export async function uploadStatementAction(formData: FormData): Promise<void> {
     bankAccountId: formData.get('bankAccountId'),
     filename: file.name,
     fileBytes,
+    shareWithOrganization: formData.get('shareWithOrganization') === '1',
   });
   if (!parsed.success) redirect('/bank-import?error=invalid');
 
@@ -97,7 +98,7 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
 
-  let result: { posted: number; ignored: number; applied: number; matched: number };
+  let result: { posted: number; ignored: number; applied: number; matched: number; personal: number };
   try {
     result = await postImportLines(userId, companyId, batchId, parsed.data);
   } catch (error) {
@@ -113,7 +114,7 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}`,
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}`,
   );
 }
 
@@ -130,4 +131,20 @@ export async function deleteImportBatchAction(formData: FormData): Promise<void>
     throw error;
   }
   redirect('/bank-import?ok=deleted');
+}
+
+/** Shares / un-shares a card statement with the organization — LL-097. */
+export async function setBatchSharingAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  const shared = formData.get('shared') === '1';
+  try {
+    await setBatchSharing(userId, companyId, batchId, shared);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    throw error;
+  }
+  redirect(`/bank-import/${batchId}?ok=${shared ? 'shared' : 'unshared'}`);
 }

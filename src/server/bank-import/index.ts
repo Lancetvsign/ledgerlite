@@ -51,6 +51,12 @@ import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } fro
  *                   inside the line's own transaction — so A/R and A/P move only via their
  *                   documents and the aging⇔control reconciliation holds automatically.
  *
+ *                   LL-097: a line may be marked PERSONAL — posted like `post`, to an owner
+ *                   equity (or asset) account the reviewer picks — and a CARD statement may be
+ *                   SHARED with the organization so another member company takes the lines that
+ *                   are its own (see ./shared.ts: status ASSIGNED, one INTERCOMPANY posting on
+ *                   each side).
+ *
  * Nothing reaches the ledger un-reviewed: staging never posts, and posting requires an
  * explicit per-line decision. `journal.post` (LEDGER_WRITERS) gates every operation;
  * applying additionally requires `payment.create` / `bill_payment.create`.
@@ -71,7 +77,7 @@ function dedupHash(bankAccountId: string, t: ExtractedTransaction): string {
     .digest('hex');
 }
 
-type PickableAccount = {
+export type PickableAccount = {
   id: string;
   accountNumber: string | null;
   name: string;
@@ -145,7 +151,7 @@ async function historyExamples(companyId: string, limit = 60): Promise<{ descrip
 }
 
 /** The ACTIVE accounts a line may be categorised to: not control, not OBE, not the bank account. */
-async function pickableAccounts(companyId: string, bankAccountId: string): Promise<PickableAccount[]> {
+export async function pickableAccounts(companyId: string, bankAccountId: string): Promise<PickableAccount[]> {
   const rows = await getDb()
     .select({
       id: schema.accounts.id,
@@ -163,6 +169,27 @@ async function pickableAccounts(companyId: string, bankAccountId: string): Promi
     .filter((a) => a.id !== bankAccountId)
     .filter((a) => isCategoryPostable(a.systemAccountType))
     .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name, accountType: a.accountType }));
+}
+
+/**
+ * A category suggestion per description from THIS company's precedent and the extractor's
+ * category, over this company's pickable accounts (LL-097: the shared view suggests from the
+ * taking company's chart, not the cardholder's). Unauthorized; callers authorize.
+ */
+export async function suggestForCompany(
+  companyId: string,
+  statementAccountId: string,
+  rows: readonly { description: string; aiCategory: string | null }[],
+): Promise<{ pickable: PickableAccount[]; suggestions: Map<string, string | null> }> {
+  const pickable = await pickableAccounts(companyId, statementAccountId);
+  const allowedIds = new Set(pickable.map((a) => a.id));
+  const history = await suggestFromHistory(companyId, rows.map((r) => r.description), allowedIds);
+  const suggestions = new Map<string, string | null>();
+  for (const r of rows) {
+    const fromHistory = history.exact.get(normalizeDescription(r.description)) ?? history.payee.get(payeeKey(r.description)) ?? null;
+    suggestions.set(r.description, fromHistory ?? mapCategoryToAccount(r.aiCategory ?? undefined, pickable));
+  }
+  return { pickable, suggestions };
 }
 
 export async function stageImport(
@@ -194,6 +221,8 @@ export async function stageImport(
     throw new BankImportError('INVALID_BANK_ACCOUNT', 'Choose an active bank account or credit card to import into.');
   }
   const statementKind = bank.accountType === 'LIABILITY' ? 'credit_card' : 'bank';
+  const share = input.shareWithOrganization === true;
+  if (share) await assertShareable(companyId, statementKind);
 
   // The model gets the company's chart and its recent decisions (LL-080), so it proposes one
   // of THIS company's accounts and follows the company's precedent.
@@ -261,7 +290,7 @@ export async function stageImport(
   return await getDbTx().transaction(async (tx) => {
     const batchRows = await tx
       .insert(schema.bankImportBatches)
-      .values({ companyId, bankAccountId: input.bankAccountId, filename: input.filename, createdBy: actorUserId })
+      .values({ companyId, bankAccountId: input.bankAccountId, filename: input.filename, createdBy: actorUserId, sharedWithOrganization: share })
       .returning();
     const batch = batchRows[0];
     if (batch === undefined) throw new Error('bank import batch insert returned no row');
@@ -280,6 +309,8 @@ export interface ImportLineView extends BankImportLine {
   readonly duplicateOf: 'posted' | 'staged' | null;
   /** The likely other side of a transfer on another statement account, if any (LL-094). */
   readonly transferCandidate: TransferCandidate | null;
+  /** When ASSIGNED (LL-097): the legal name of the organization member that took the line. */
+  readonly assignedCompanyName: string | null;
 }
 
 export interface TransferCandidate {
@@ -367,7 +398,7 @@ export async function getImportBatch(
         .where(
           and(
             eq(schema.bankImportLines.companyId, companyId),
-            inArray(schema.bankImportLines.status, ['POSTED', 'STAGED']),
+            inArray(schema.bankImportLines.status, ['POSTED', 'PERSONAL', 'ASSIGNED', 'STAGED']),
             inArray(schema.bankImportLines.dedupHash, hashes),
           ),
         );
@@ -376,7 +407,7 @@ export async function getImportBatch(
   // either posted (LL-095). Twins inside this batch are two genuine identical transactions.
   const stagedElsewhereByHash = new Map<string, Set<string>>();
   for (const r of dupRows) {
-    const target = r.status === 'POSTED' ? postedByHash : r.batchId !== batchId ? stagedElsewhereByHash : null;
+    const target = r.status !== 'STAGED' ? postedByHash : r.batchId !== batchId ? stagedElsewhereByHash : null;
     if (target === null) continue;
     const set = target.get(r.hash) ?? new Set<string>();
     set.add(r.id);
@@ -384,13 +415,25 @@ export async function getImportBatch(
   }
 
   const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
+  const assignedIds = [...new Set(lines.map((l) => l.assignedCompanyId).filter((id): id is string => id !== null))];
+  const assignedNames = new Map(
+    assignedIds.length === 0
+      ? []
+      : (await db.select({ id: schema.companies.id, legalName: schema.companies.legalName }).from(schema.companies).where(inArray(schema.companies.id, assignedIds))).map((c) => [c.id, c.legalName] as const),
+  );
 
   return {
     batch,
     lines: lines.map((l) => {
       const postedTwin = [...(postedByHash.get(l.dedupHash) ?? [])].some((id) => id !== l.id);
       const duplicateOf = postedTwin ? 'posted' : stagedElsewhereByHash.has(l.dedupHash) ? 'staged' : null;
-      return { ...l, transferCandidate: candidates.get(l.id) ?? null, isDuplicate: postedTwin, duplicateOf };
+      return {
+        ...l,
+        transferCandidate: candidates.get(l.id) ?? null,
+        isDuplicate: postedTwin,
+        duplicateOf,
+        assignedCompanyName: l.assignedCompanyId === null ? null : (assignedNames.get(l.assignedCompanyId) ?? null),
+      };
     }),
   };
 }
@@ -414,13 +457,15 @@ export interface PostImportResult {
   readonly ignored: number;
   /** The subset of `posted` settled against an open invoice / bill (LL-077). */
   readonly applied: number;
+  /** Lines marked PERSONAL — posted to an owner equity/asset account (LL-097). */
+  readonly personal: number;
 }
 
 type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
 
 /** What one validated decision will do. Built for EVERY decision before ANY line is written. */
 type LinePlan =
-  | { readonly kind: 'post'; readonly line: BankImportLine; readonly accountId: string }
+  | { readonly kind: 'post'; readonly line: BankImportLine; readonly accountId: string; readonly personal: boolean }
   | { readonly kind: 'match'; readonly line: BankImportLine; readonly counterpart: BankImportLine; readonly journalEntryId: string; readonly accountId: string }
   | { readonly kind: 'apply_invoice'; readonly line: BankImportLine; readonly invoice: OpenInvoice; readonly amount: string }
   | { readonly kind: 'apply_bill'; readonly line: BankImportLine; readonly bill: OpenBill; readonly amount: string };
@@ -430,7 +475,7 @@ type LinePlan =
  * serialise here; the loser sees POSTED/IGNORED and creates nothing. Lock order is always
  * line → document (no other path locks a bank-import line), so no cycle is possible.
  */
-async function lockStagedLine(tx: Tx, companyId: string, lineId: string): Promise<boolean> {
+export async function lockStagedLine(tx: Tx, companyId: string, lineId: string): Promise<boolean> {
   const rows = await tx
     .select({ status: schema.bankImportLines.status })
     .from(schema.bankImportLines)
@@ -581,7 +626,22 @@ export async function postImportLines(
           `Line ${n}: choose an active account that is not Accounts Receivable, Accounts Payable, Opening Balance Equity, or the bank account itself.`,
         );
       }
-      plan = { kind: 'post', line, accountId: d.accountId };
+      plan = { kind: 'post', line, accountId: d.accountId, personal: false };
+    } else if (d.action === 'personal') {
+      // LL-097: not this company's charge — the owner's. Posted like `post`, but only to an
+      // equity or asset account (Owner Distributions, or a "due from owner" asset), never an
+      // expense, so the P&L never carries it.
+      if (d.accountId === undefined) {
+        throw new BankImportError('ACCOUNT_REQUIRED', `Line ${n} needs an equity or asset account to mark it personal against.`);
+      }
+      const target = pickable.find((a) => a.id === d.accountId);
+      if (target === undefined) {
+        throw new BankImportError('CONTROL_ACCOUNT_NOT_ALLOWED', `Line ${n}: choose an active account that is not a control account or the card itself.`);
+      }
+      if (target.accountType !== 'EQUITY' && target.accountType !== 'ASSET') {
+        throw new BankImportError('ACCOUNT_INVALID', `Line ${n}: a personal charge posts to an owner equity or asset account, not to ${target.name}.`);
+      }
+      plan = { kind: 'post', line, accountId: d.accountId, personal: true };
     } else {
       // apply_invoice / apply_bill — the whole line settles ONE open document (ADR-035).
       const amt = toMoney(line.amount);
@@ -642,6 +702,7 @@ export async function postImportLines(
   let posted = 0;
   let applied = 0;
   let matched = 0;
+  let personal = 0;
   for (const plan of plans) {
     const { line } = plan;
     const lineIs = and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.status, 'STAGED'));
@@ -727,7 +788,7 @@ export async function postImportLines(
 
           await tx
             .update(schema.bankImportLines)
-            .set({ status: 'POSTED', chosenAccountId: plan.accountId, journalEntryId: entry.entry.id, updatedAt: sql`now()` })
+            .set({ status: plan.personal ? 'PERSONAL' : 'POSTED', chosenAccountId: plan.accountId, journalEntryId: entry.entry.id, updatedAt: sql`now()` })
             .where(lineIs);
 
           await recordAuditEvent({
@@ -737,11 +798,15 @@ export async function postImportLines(
             action: 'BANK_IMPORT_POSTED',
             entityType: 'bank_import_line',
             entityId: line.id,
-            after: { batchId, accountId: plan.accountId, amount: line.amount, journalEntryId: entry.entry.id },
+            after: { batchId, accountId: plan.accountId, amount: line.amount, journalEntryId: entry.entry.id, personal: plan.personal },
           });
           return true;
         });
-        if (done) posted += 1; // counted only once the transaction has COMMITTED
+        if (done) {
+          // counted only once the transaction has COMMITTED
+          if (plan.personal) personal += 1;
+          else posted += 1;
+        }
       } catch (error) {
         // A concurrent submit already posted this line (source-once index) — treat as done.
         if (!isIdempotencyViolation(error)) throw error;
@@ -819,7 +884,7 @@ export async function postImportLines(
     }
   }
 
-  return { posted, matched, ignored: toIgnore.length, applied };
+  return { posted, matched, ignored: toIgnore.length, applied, personal };
 }
 
 export { BankImportError } from './errors';
@@ -835,7 +900,8 @@ export type { TransactionExtractor } from './extract';
  * removing a mistaken upload (wrong file, wrong company) is the honest outcome; the
  * ADR-006 "status, never delete" rule is about records, and this is not one yet.
  *
- * Race-safe without relying on locks: lines are deleted only where status <> 'POSTED',
+ * Race-safe without relying on locks: lines are deleted only while STAGED or IGNORED (a
+ * POSTED, PERSONAL or ASSIGNED line is ledger history — LL-097),
  * and if any line remains the transaction rolls back — a posting that lands between the
  * check and the delete wins.
  */
@@ -862,7 +928,7 @@ export async function deleteImportBatch(
         and(
           eq(schema.bankImportLines.companyId, companyId),
           eq(schema.bankImportLines.batchId, batchId),
-          ne(schema.bankImportLines.status, 'POSTED'),
+          inArray(schema.bankImportLines.status, ['STAGED', 'IGNORED']),
         ),
       )
       .returning({ id: schema.bankImportLines.id });
@@ -884,3 +950,66 @@ export async function deleteImportBatch(
     return { lines: removed.length };
   });
 }
+
+/** Sharing needs an organization and a CARD statement (a shared bank account has no single owner of the cash). */
+async function assertShareable(companyId: string, statementKind: 'credit_card' | 'bank'): Promise<void> {
+  if (statementKind !== 'credit_card') {
+    throw new BankImportError('ONLY_CARDS_SHAREABLE', 'Only a credit-card statement can be shared with the organization.');
+  }
+  const rows = await getDb()
+    .select({ organizationId: schema.companies.organizationId })
+    .from(schema.companies)
+    .where(eq(schema.companies.id, companyId))
+    .limit(1);
+  if ((rows[0]?.organizationId ?? null) === null) {
+    throw new BankImportError('NOT_IN_ORGANIZATION', 'Put this company in an organization before sharing a statement.');
+  }
+}
+
+/**
+ * Shares (or stops sharing) a card statement with the organization — AUTHORIZED
+ * (journal.post) — LL-097. Un-sharing hides the remaining STAGED lines from the other
+ * companies; a company that already took lines keeps seeing THOSE (see ./shared.ts), so it
+ * can always undo them.
+ */
+export async function setBatchSharing(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+  shared: boolean,
+): Promise<BankImportBatch> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  return await getDbTx().transaction(async (tx) => {
+    const rows = await tx
+      .select({ batch: schema.bankImportBatches, accountType: schema.accounts.accountType })
+      .from(schema.bankImportBatches)
+      .innerJoin(schema.accounts, and(eq(schema.accounts.companyId, schema.bankImportBatches.companyId), eq(schema.accounts.id, schema.bankImportBatches.bankAccountId)))
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+      .for('update', { of: schema.bankImportBatches });
+    const found = rows[0];
+    if (found === undefined) throw new BankImportError('BATCH_NOT_FOUND', 'Import batch not found.');
+    if (found.batch.sharedWithOrganization === shared) return found.batch;
+    if (shared) await assertShareable(companyId, found.accountType === 'LIABILITY' ? 'credit_card' : 'bank');
+
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'BANK_IMPORT_SHARING_CHANGED',
+      entityType: 'bank_import_batch',
+      entityId: batchId,
+      before: { sharedWithOrganization: found.batch.sharedWithOrganization },
+      after: { sharedWithOrganization: shared },
+    });
+    const updated = await tx
+      .update(schema.bankImportBatches)
+      .set({ sharedWithOrganization: shared })
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+      .returning();
+    const batch = updated[0];
+    if (batch === undefined) throw new Error('batch update returned no row');
+    return batch;
+  });
+}
+
+export * from './shared';

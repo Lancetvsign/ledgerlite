@@ -6,7 +6,8 @@ import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { isStatementAccount } from '@/server/accounts/statement-account';
-import { isExtractionConfigured, listImportBatches } from '@/server/bank-import';
+import { isExtractionConfigured, listImportBatches, listSharedImports } from '@/server/bank-import';
+import { listOrganizationCompanies } from '@/server/organizations';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
@@ -42,6 +43,11 @@ export default async function BankImportPage({
   // Bank accounts and credit cards (LL-088) — the same predicate Reconciliation uses.
   const bankAccounts = accounts.filter(isStatementAccount);
   const batches = await listImportBatches(user.id, membership.companyId);
+  const [orgMembers, shared] = await Promise.all([
+    listOrganizationCompanies(user.id, membership.companyId),
+    listSharedImports(user.id, membership.companyId),
+  ]);
+  const inOrganization = orgMembers.length > 0;
   const nameById = new Map(accounts.map((a) => [a.id, a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name]));
 
   return (
@@ -88,8 +94,34 @@ export default async function BankImportPage({
             <span>Statement PDF</span>
             <input type="file" name="file" accept="application/pdf,.pdf" required data-testid="upload-file" className="text-sm" />
           </label>
+          {inOrganization && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="shareWithOrganization" value="1" data-testid="upload-share" />
+              Share with my organization (credit-card statements only) — the other companies can take the charges that are theirs
+            </label>
+          )}
           <UploadSubmitButton />
         </form>
+      )}
+
+      {inOrganization && (
+        <section className="flex flex-col gap-2" data-testid="shared-imports">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">Shared with you</h2>
+          {shared.length === 0 ? (
+            <p className="text-sm text-neutral-500" data-testid="no-shared-imports">No card statements shared by the other companies of your organization.</p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-sm" data-testid="shared-list">
+              {shared.map((b) => (
+                <li key={b.batchId}>
+                  <Link href={`/bank-import/shared/${b.batchId}`} data-testid="shared-link" className="underline">
+                    {b.ownerLegalName} — {b.accountName} — {b.filename ?? 'statement'}
+                  </Link>{' '}
+                  <span className="text-neutral-500">· {String(b.stagedCount)} untaken · {String(b.assignedToMeCount)} yours</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       <section className="flex flex-col gap-2">
@@ -120,6 +152,8 @@ function noticeFrom(error: string | undefined): string | null {
   if (error === 'EXTRACTION_FAILED') return 'No usable transactions could be extracted from that statement.';
   if (error === 'SCANNED_PDF') return 'That PDF appears to be a scanned image; a text-based statement is needed.';
   if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active bank account or credit card.';
+  if (error === 'ONLY_CARDS_SHAREABLE') return 'Only a credit-card statement can be shared with the organization — upload it without sharing, or choose the card account.';
+  if (error === 'NOT_IN_ORGANIZATION') return 'Put this company in an organization (Account page) before sharing a statement.';
   if (error === 'BATCH_NOT_FOUND') return 'That import batch does not exist.';
   if (error === 'denied') return 'You do not have permission to import statements.';
   return 'The statement could not be imported.';

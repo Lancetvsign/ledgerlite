@@ -10,6 +10,7 @@ import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { getImportBatch, type ImportLineView } from '@/server/bank-import';
+import { listOrganizationCompanies } from '@/server/organizations';
 import { listOpenBills } from '@/server/bill-payments';
 import { listCustomers } from '@/server/customers';
 import { listOpenInvoices } from '@/server/payments';
@@ -17,8 +18,9 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { deleteImportBatchAction, postImportLinesAction } from '../actions';
+import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction } from '../actions';
 import { BulkControls } from './bulk-controls';
+import { LineAccountSelect } from './line-account';
 import { LineActionControls } from './line-action';
 import { ReviewStateProvider, type LineAction } from './review-state';
 
@@ -46,7 +48,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -74,13 +76,15 @@ export default async function ReviewImportPage({
   }
 
   const companyId = membership.companyId;
-  const [accounts, openInvoices, openBills, customers, vendors] = await Promise.all([
+  const [accounts, openInvoices, openBills, customers, vendors, orgMembers] = await Promise.all([
     listAccounts(user.id, companyId),
     listOpenInvoices(user.id, companyId),
     listOpenBills(user.id, companyId),
     listCustomers(user.id, companyId),
     listVendors(user.id, companyId),
+    listOrganizationCompanies(user.id, companyId),
   ]);
+  const inOrganization = orgMembers.length > 0;
   const label = (a: { accountNumber: string | null; name: string }) =>
     a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name;
   const nameById = new Map(accounts.map((a) => [a.id, label(a)]));
@@ -89,6 +93,15 @@ export default async function ReviewImportPage({
   const pickable = accounts
     .filter((a) => a.status === 'ACTIVE' && a.id !== view.batch.bankAccountId)
     .filter((a) => isCategoryPostable(a.systemAccountType));
+  const pickableOptions = pickable.map((a) => ({ id: a.id, label: label(a) }));
+  // LL-097: the owner's personal account — Owner Distributions by subtype and name, else any
+  // owner-equity account, else the first equity account. None → no "Mark personal" offered.
+  const equity = pickable.filter((a) => a.accountType === 'EQUITY');
+  const personalDefault =
+    equity.find((a) => a.accountSubtype === 'owner_equity' && /distribution/i.test(a.name)) ??
+    equity.find((a) => a.accountSubtype === 'owner_equity') ??
+    equity[0] ??
+    null;
 
   const customerName = new Map(customers.map((c) => [c.id, c.name]));
   const vendorName = new Map(vendors.map((v) => [v.id, v.name]));
@@ -129,7 +142,10 @@ export default async function ReviewImportPage({
   );
   const staged = view.lines.filter((l) => l.status === 'STAGED').length;
   const posted = view.lines.filter((l) => l.status === 'POSTED').length;
+  const personal = view.lines.filter((l) => l.status === 'PERSONAL').length;
+  const assigned = view.lines.filter((l) => l.status === 'ASSIGNED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
+  const decided = posted + personal + assigned;
 
   const selectClass = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
@@ -143,8 +159,23 @@ export default async function ReviewImportPage({
       <p className="text-sm text-neutral-500" data-testid="batch-summary">
         {view.batch.filename ?? 'statement'} into <strong>{nameById.get(view.batch.bankAccountId)}</strong>
         {isCard && <span data-testid="card-statement"> (credit card: charges increase what you owe, payments reduce it)</span>} ·{' '}
-        {String(staged)} to review, {String(posted)} posted, {String(ignored)} ignored.
+        {String(staged)} to review, {String(posted)} posted, {String(personal)} personal, {String(assigned)} taken by another company, {String(ignored)} ignored.
       </p>
+
+      {isCard && inOrganization && (
+        // LL-097: share this card statement so the other companies of the organization can take
+        // the lines that are theirs (from their own "Shared with you" page).
+        <form action={setBatchSharingAction} className="flex items-center gap-2 text-sm">
+          <input type="hidden" name="batchId" value={view.batch.id} />
+          <input type="hidden" name="shared" value={view.batch.sharedWithOrganization ? '0' : '1'} />
+          <span data-testid="sharing-status" className="text-neutral-600 dark:text-neutral-400">
+            {view.batch.sharedWithOrganization ? 'Shared with your organization: other companies can take the lines that are theirs.' : 'Not shared with your organization.'}
+          </span>
+          <button type="submit" data-testid={view.batch.sharedWithOrganization ? 'unshare-batch' : 'share-batch'} className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700">
+            {view.batch.sharedWithOrganization ? 'Stop sharing' : 'Share with organization'}
+          </button>
+        </form>
+      )}
 
       {notice !== null && (
         <p role="status" data-testid="notice" className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-900">
@@ -198,12 +229,12 @@ export default async function ReviewImportPage({
                       <td className="py-2 pr-2">
                         <input type="hidden" name="lineId" value={l.id} />
                         <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
-                        <select name="accountId" defaultValue={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.accountId : (l.suggestedAccountId ?? '')} data-testid={`import-account-${String(i)}`} className={selectClass}>
-                          <option value="">Choose account…</option>
-                          {pickable.map((a) => (
-                            <option key={a.id} value={a.id}>{label(a)}</option>
-                          ))}
-                        </select>
+                        <LineAccountSelect
+                          index={i}
+                          options={pickableOptions}
+                          suggestedId={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.accountId : (l.suggestedAccountId ?? '')}
+                          personalDefaultId={personalDefault?.id ?? null}
+                        />
                       </td>
                       <td className="py-2 pr-2">
                         {!isCard && (
@@ -220,6 +251,7 @@ export default async function ReviewImportPage({
                           index={i}
                           moneyIn={s.moneyIn}
                           allowApply={!isCard}
+                          allowPersonal={personalDefault !== null}
                           {...(l.transferCandidate?.status === 'POSTED'
                             ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
                             : {})}
@@ -240,7 +272,9 @@ export default async function ReviewImportPage({
                           '—'
                         )}
                       </td>
-                      <td className="py-2 pr-2 text-neutral-500" data-testid={`import-status-${String(i)}`}>{l.status}</td>
+                      <td className="py-2 pr-2 text-neutral-500" data-testid={`import-status-${String(i)}`}>
+                        {l.status === 'ASSIGNED' ? `taken by ${l.assignedCompanyName ?? 'another company'}` : l.status}
+                      </td>
                     </>
                   )}
                 </tr>
@@ -263,7 +297,7 @@ export default async function ReviewImportPage({
         )}
       </form>
 
-      {posted === 0 && (
+      {decided === 0 && (
         // Nothing from this upload has posted, so it is still a staging artifact and can be
         // removed outright (LL-087 / ADR-042). Once any line posts, the service refuses.
         <details className="self-start">
@@ -286,27 +320,34 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
     const matched = sp.matched ?? '0';
+    const personal = sp.personal ?? '0';
     return (
       base +
       (applied === '0' ? '' : ` ${applied} applied to open invoices/bills.`) +
-      (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`)
+      (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`) +
+      (personal === '0' ? '' : ` ${personal} marked personal.`)
     );
   }
+  if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
+  if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';
   const error = sp.error;
   if (error === undefined) return null;
   if (error === 'invalid') return 'Please check the lines and try again.';
-  if (error === 'BATCH_HAS_POSTINGS') return 'Lines from this import have already posted, so it cannot be deleted.';
+  if (error === 'BATCH_HAS_POSTINGS') return 'Lines from this import have already posted (or been taken by another company), so it cannot be deleted.';
   if (error === 'ACCOUNT_REQUIRED') return 'Choose an account for every line you are posting.';
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Accounts Receivable, Accounts Payable, Opening Balance Equity, and the bank account itself cannot be used — pick another account.';
   if (error === 'DOCUMENT_REQUIRED') return 'Choose an open invoice or bill for every line you are applying.';
   if (error === 'WRONG_DIRECTION') return 'Money in can only be applied to an invoice; money out only to a bill.';
   if (error === 'TRANSFER_ALREADY_POSTED') return 'The other side of that transfer already posted from the other account — choose “Match transfer” (or Ignore) instead of posting it again.';
   if (error === 'TRANSFER_MISMATCH') return 'That line is not the posted mirror of the transfer — reload and review again.';
+  if (error === 'ACCOUNT_INVALID') return 'A personal charge posts to an owner equity or asset account (Owner Distributions), not to an expense or revenue account.';
+  if (error === 'ONLY_CARDS_SHAREABLE') return 'Only a credit-card statement can be shared with the organization.';
+  if (error === 'NOT_IN_ORGANIZATION') return 'Put this company in an organization (Account page) before sharing a statement.';
   if (error === 'CARD_CANNOT_APPLY') return 'Credit-card statement lines can only be posted to an account — pay bills from a bank account.';
   if (error === 'DOCUMENT_NOT_OPEN' || error === 'INVOICE_NOT_OPEN' || error === 'BILL_NOT_OPEN' || error === 'INVOICE_NOT_FOUND' || error === 'BILL_NOT_FOUND') {
     return 'That invoice or bill is no longer open — reload and choose again.';

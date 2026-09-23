@@ -118,7 +118,7 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
 | # | Ticket | Schema? | Plan mode? | Builds on |
 |---|---|---|---|---|
 | 1 | **LL-096** — Organizations + intercompany system accounts — **implemented** (ADR-043, migration 0040) | ✅ | ✅ | LL-083 (templates), LL-042 (system roles) |
-| 2 | **LL-097** — Shared card statements: assign / personal, intercompany posting, cross-company review | ✅ + ledger | ✅ | LL-088/089/094 |
+| 2 | **LL-097** — Shared card statements: personal in the cardholder, take-from-the-other-company, intercompany posting — **implemented** (migration 0041) | ✅ + ledger | ✅ | LL-088/089/094 |
 | 3 | **LL-098** — Organization reports: intercompany balances by pair, and GL-T029 (A's *Due from B* = B's *Due to A*, every pair, every day) | — | — | LL-064 pattern |
 | 4 | **LL-099** — Intercompany settlement (B pays A: posts both sides; bank-import transfer matching recognises it) | — | ✅ (ledger) | LL-094 |
 | 5 | **Gate 7** — human review of the intercompany model across two real companies | — | — | Gate 6 |
@@ -135,9 +135,9 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
 
 ### LL-097 — Shared card statements
 - Upload: a card statement in A can be marked **"Share with organization"** (only if A is in
-  one). Review in A gains **Assign to…** (a company picker: the other members) and
-  **Personal**; a shared batch also appears under **Bank Import → Shared with you** in every
-  other member company, listing only STAGED lines and lines assigned to that company.
+  one). Review in A gains **Personal** (and a share/unshare toggle); a shared batch appears under
+  **Bank Import → Shared with you** in every other member company, listing only STAGED lines and
+  lines assigned to that company. *Assign from A's page was dropped: B picks B's account from B.*
 - From B the reviewer chooses B's expense account (AI suggestion via B's chart — the existing
   `mapCategoryToAccount`) and posts; the A-side entry is generated. Bulk controls (LL-089)
   extend naturally: "Assign all remaining to B".
@@ -171,8 +171,7 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
 ## 7. Open questions for the owner
 1. Accept the intercompany model in §1 (yes/no)? It is the only one under which the card
    still reconciles.
-2. Should **Personal** default to *Owner Distributions* (3200), or a dedicated *Due from
-   owner* asset when the owner intends to repay? (Default proposed: 3200; changeable per
-   company in Settings.)
+2. **Resolved (LL-097):** Personal posts to the equity or asset account the reviewer picks per line;
+   the review page defaults to Owner Distributions (3200). No settings column.
 3. May a user assign a line to a company they are **not** a member of? (Proposed: no — the
    B-side expense account must be chosen by someone with `journal.post` in B.)

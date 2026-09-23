@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -755,6 +755,56 @@ const REGISTRY: IsolationDescriptor[] = [
             rawSql`select bank_account_id as id from bank_import_batches where company_id = ${victim.companyId} limit 1`);
           return await stageImport(attacker, victim.companyId, { bankAccountId: bank.rows[0]?.id ?? victim.companyId, fileBytes: new Uint8Array() },
             () => Promise.resolve([{ date: '2026-06-01', description: 'X', amount: '1.00' }]));
+        },
+      },
+      // LL-097: sharing and the shared view. The attacker's own company is no member of the
+      // victim's organization (nor is the attacker a member of the victim), so every shared
+      // read is EMPTY / null and every write the uniform denial.
+      {
+        operation: 'share the batch with an organization',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => setBatchSharing(attacker, victim.companyId, recordId, true),
+      },
+      {
+        operation: 'list it as "shared with you" from the attacker company',
+        expect: 'empty',
+        run: async (attacker) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return await listSharedImports(attacker, own.rows[0]?.company_id ?? attacker);
+        },
+      },
+      {
+        operation: 'open it as a shared statement from the attacker company',
+        expect: 'empty',
+        run: async (attacker, _victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return await getSharedImportBatch(attacker, own.rows[0]?.company_id ?? attacker, recordId);
+        },
+      },
+      {
+        operation: 'take a line of it into the attacker company',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
+          return await assignSharedLines(attacker, own.rows[0]?.company_id ?? attacker, recordId, { decisions: [{ lineId: line.rows[0]?.id ?? recordId, accountId: recordId }] });
+        },
+      },
+      {
+        operation: 'give a line of it back from the attacker company',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
+          return await unassignSharedLine(attacker, own.rows[0]?.company_id ?? attacker, recordId, line.rows[0]?.id ?? recordId);
         },
       },
     ],

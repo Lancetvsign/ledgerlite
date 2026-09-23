@@ -51,6 +51,7 @@ function sourceHref(l: AccountRegisterLine): string {
     case 'BILL_PAYMENT':
       return id !== null ? `/bill-payments/${id}` : `/journal/${l.entryId}`;
     case 'BANK_IMPORT':
+    case 'INTERCOMPANY':
       return l.bankImportBatchId !== null ? `/bank-import/${l.bankImportBatchId}` : `/journal/${l.entryId}`;
     case 'REVERSAL':
       return l.reversalOfId !== null ? `/journal/${l.reversalOfId}` : `/journal/${l.entryId}`;

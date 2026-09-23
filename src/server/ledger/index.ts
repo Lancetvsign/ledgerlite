@@ -40,7 +40,7 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
   // post a control-account line under a non-`JOURNAL_ENTRY` source and dodge the 0023
   // guard, moving A/R or A/P without its subsidiary (LL-066 / ADR-025). Documents are
   // unaffected: they never call this function.
-  if (input.sourceType !== 'JOURNAL_ENTRY') {
+  if (input.sourceType !== 'JOURNAL_ENTRY' || input.intercompanyGroupId !== undefined) {
     throw new LedgerError(
       'MANUAL_SOURCE_TYPE_REQUIRED',
       'A manual journal entry must have source type JOURNAL_ENTRY; documents post through their own service.',
@@ -202,6 +202,7 @@ export async function postEntryCore(
       sourceId: input.sourceId,
       idempotencyKey: input.idempotencyKey,
       idempotencyFingerprint: fingerprint,
+      intercompanyGroupId: input.intercompanyGroupId,
       createdBy: input.actorUserId,
       postedAt: sql`now()`,
     })
@@ -378,6 +379,26 @@ export { fingerprintRequest } from './fingerprint';
 export { getJournalEntry, listRecentEntries } from './queries';
 export type { JournalEntryView, JournalEntryLineView, RecentEntry } from './queries';
 export type { PostedEntry } from './internal';
+export { toLedgerDomainError } from './internal';
+
+/**
+ * Locks the entry-number counter rows of several companies FOR UPDATE, in id order —
+ * the prologue of every posting that spans two companies (LL-097 / ADR-043). One
+ * statement per company so acquisition order never depends on the planner. A later
+ * `postEntryCore` / `reverseEntryCore` in the same transaction then finds its counter
+ * already held and cannot deadlock against another two-company posting taking the
+ * same rows in the opposite order.
+ */
+export async function lockEntryCounters(tx: Tx, companyIds: readonly string[]): Promise<void> {
+  for (const id of [...new Set(companyIds)].sort()) {
+    const rows = await tx
+      .select({ companyId: schema.companyCounters.companyId })
+      .from(schema.companyCounters)
+      .where(eq(schema.companyCounters.companyId, id))
+      .for('update');
+    if (rows[0] === undefined) throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
+}
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';
 
