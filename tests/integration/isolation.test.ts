@@ -41,6 +41,7 @@ import { createCompanyInput } from '@/validation/company';
 
 import { insertMembership } from '@/server/companies/internal';
 import { changeMemberRole, inviteMember, issueInvitationLink, listInvitations, removeMember, revokeInvitation } from '@/server/members';
+import { addCompanyToOrganization, createOrganization, listOrganizationCompanies, removeCompanyFromOrganization } from '@/server/organizations';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { attack, type IsolationContext, type IsolationDescriptor } from '../helpers/isolation';
@@ -95,6 +96,31 @@ const REGISTRY: IsolationDescriptor[] = [
           const mine = await listCompaniesForUser(attacker);
           return mine.filter((entry) => entry.company.id === victim.companyId);
         },
+      },
+      // Organizations (LL-096): every move is authorized in the victim company.
+      {
+        operation: 'create an organization around it',
+        expect: 'denied',
+        run: (attacker, victim) => createOrganization(attacker, victim.companyId, { name: 'Hostile Group' }),
+      },
+      {
+        operation: "add it to the attacker's own organization",
+        expect: 'denied',
+        run: async (attacker, victim) => {
+          const own = await createCompanyWithOwner(attacker, createCompanyInput.parse({ legalName: 'Attacker Org Co', timezone: 'UTC' }), 'system-only');
+          const org = await createOrganization(attacker, own.company.id, { name: 'Attacker Group' });
+          return await addCompanyToOrganization(attacker, victim.companyId, org.id);
+        },
+      },
+      {
+        operation: 'remove it from its organization',
+        expect: 'denied',
+        run: (attacker, victim) => removeCompanyFromOrganization(attacker, victim.companyId),
+      },
+      {
+        operation: 'list its organization members',
+        expect: 'denied',
+        run: (attacker, victim) => listOrganizationCompanies(attacker, victim.companyId),
       },
     ],
   },

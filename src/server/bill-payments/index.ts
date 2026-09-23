@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDbTx, schema } from '@/db';
+import { isCashUsable } from '@/server/accounts/system-roles';
 import { todayInTimeZone } from '@/lib/dates';
 import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
@@ -180,8 +181,8 @@ export async function payBillCore(
   // self-canceling; crediting A/R (an ASSET, so it WOULD pass the ASSET check) would
   // reduce the A/R control through an A/P document, breaking the A/R aging⇔control
   // tie. Both are refused. The cash line (Cr) is client-supplied (AGENTS §6).
-  if (cash.systemAccountType === 'ACCOUNTS_RECEIVABLE' || cash.systemAccountType === 'ACCOUNTS_PAYABLE') {
-    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment cannot pay from a control account (Accounts Receivable / Payable).');
+  if (!isCashUsable(cash.systemAccountType)) {
+    throw new BillPaymentError('CASH_ACCOUNT_INVALID', 'A bill payment cannot pay from a control account (Accounts Receivable / Payable) or an intercompany account.');
   }
 
   // Lock and validate each applied bill; collect those this payment fully pays. Lock

@@ -8,7 +8,11 @@ export type CompanyErrorCode =
   /** Creation from the template was requested while no template exists. */
   | 'NO_TEMPLATE'
   /** Settings cannot change once the company has posted history. */
-  | 'SETTINGS_LOCKED';
+  | 'SETTINGS_LOCKED'
+  /** The master template cannot be a member of an organization, nor a member become the template (LL-096). */
+  | 'TEMPLATE_IN_ORGANIZATION'
+  /** A company must leave its organization (and be nobody's counterpart) before it can be archived or purged. */
+  | 'COMPANY_IN_ORGANIZATION';
 
 export class CompanyError extends Error {
   public override readonly name = 'CompanyError';

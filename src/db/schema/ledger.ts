@@ -54,6 +54,8 @@ export const journalSourceType = pgEnum('journal_source_type', [
   'VENDOR_CREDIT',
   'CLOSING',
   'BANK_IMPORT',
+  /** One side of an intercompany movement (LL-096 / ADR-043); the only source, with REVERSAL, allowed on the Due accounts. */
+  'INTERCOMPANY',
 ]);
 
 /**

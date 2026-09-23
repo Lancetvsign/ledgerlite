@@ -2359,3 +2359,71 @@ staging data (after ADR-038's untouched company). No schema change.
 ### Revisit if
 
 An import should be archivable with its content retained, or per-line un-staging is wanted.
+
+---
+
+## ADR-043 — Organizations and the intercompany model
+
+**Status** Accepted · **Added by** LL-096 · **Decided by** product owner ("I want to create a hierarchy that allows multiple companies in an organization … split up a credit card bill to the appropriate company"; "make sure this will work for intercompany bank transfers … reconcile it in another company based on their bank statements and timing")
+
+### Context
+
+One owner runs several companies, pays for all of them with one card, and moves cash between
+their bank accounts. Each company is an island today: a charge or a transfer that belongs to
+another company can only be ignored (LL-089), which leaves the cardholder company's card — or the
+sending company's bank — short of its statement and unable to reconcile. Giving each company "its
+share" of the card as its own liability was rejected: no company's card account could then ever
+be reconciled to the bank's statement.
+
+### Decision
+
+- **Organization** — a grouping of companies (`organizations`; `companies.organization_id`, at
+  most one). It holds no money and no ledger, so it is cross-tenant by design: no `company_id`,
+  no `(company_id, id)` unique. Rows are never deleted (ADR-006); an organization with no members
+  is unreachable. **Company membership stays the unit of authorization** (AGENTS.md §6); the new
+  capability `company.organization` (OWNER) creates, joins and leaves. Joining needs it in the
+  joining company AND in at least one ACTIVE member of the target — an organization the actor
+  cannot prove a stake in is, to them, one that does not exist (uniform denial). Members share one
+  currency; the master template cannot be a member; a member must be ACTIVE (both CHECKs).
+- **Intercompany model** — the company whose statement shows a movement always posts it against
+  its OWN statement account, so every company still reconciles to its own statements. The other
+  side lands in a per-pair system account: *Due from <B>* (ASSET, `INTERCOMPANY_RECEIVABLE`) in A
+  and *Due to <A>* (LIABILITY, `INTERCOMPANY_PAYABLE`) in B, both carrying
+  `accounts.intercompany_company_id` (a by-design cross-company reference; invariant 4 concerns
+  journal lines and is untouched). One pair per direction per company pair (partial unique);
+  created on first use by `ensureIntercompanyPair` inside the posting transaction (idempotent,
+  race-safe, KEY SHARE on both company rows); deactivated — never deleted — when a company leaves
+  at zero balance, and reactivated on rejoin.
+- **The mirror is structural.** Only a posting of source `INTERCOMPANY`, or its `REVERSAL`, may
+  move an intercompany account — the control-account triggers (0018/0023/0025/0037) now carry an
+  allow-list for the two roles. No manual journal, bank-import category, deposit, bill payment,
+  write-off or memo can touch them (the services refuse too, via `system-roles.ts`), so
+  Σ Due-from-B in A = Σ Due-to-A in B can only be broken by an intercompany posting that fails
+  to post both sides, which invariant 7 forbids.
+- **Leaving** an organization is refused while any pair the company is in carries a non-zero
+  balance in either direction; a member cannot be archived or purged until it leaves.
+
+**How the later tickets post on this foundation** (LL-097 card charges, LL-099 bank transfers and
+settlement): a two-company posting locks both `company_counters` rows FOR UPDATE in id order
+before the first `postEntryCore`, posts A's and B's entries in one transaction with one
+`intercompany_group_id` (column + `UNIQUE (intercompany_group_id, company_id)` arrive with
+LL-097), source `INTERCOMPANY`, `source_id` = the statement line. A bank transfer is symmetric:
+whichever company imports first marks its line (`Dr Due from B / Cr Bank A`, or
+`Dr Bank B / Cr Due to A`); the other company's review offers the unmatched group as a candidate
+by amount and date window and posts its own side against its own statement. Enum values added in
+a migration are compared as `::text` in that migration's CHECKs and triggers (the migrator runs
+all pending files in one transaction).
+
+### Consequences
+
+Migration 0040: `organizations`; `companies.organization_id` + two CHECKs; `accounts.
+intercompany_company_id` + pairing/self CHECKs; the single-role partial unique now excludes pair
+rows and a per-pair unique joins it; `INTERCOMPANY` source; three audit actions; both trigger
+functions replaced. Expand-only. Existing companies start with no organization. Consolidated
+statements are a later sprint (they require eliminating these balances; GL-T029 in LL-098 is the
+prerequisite).
+
+### Revisit if
+
+Organization-level roles or invitations are wanted; a bank account (as opposed to a card) is
+shared across companies (which company owns the cash?); multi-currency groups appear.

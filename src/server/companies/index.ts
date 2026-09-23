@@ -123,11 +123,12 @@ export async function companyToday(actorUserId: string, companyId: string): Prom
 
 export async function listCompaniesForUser(
   userId: string,
-): Promise<{ company: CompanyView; role: CompanyMembership['role'] }[]> {
+): Promise<{ company: CompanyView; role: CompanyMembership['role']; organizationName: string | null }[]> {
   const rows = await getDbTx()
-    .select({ company: schema.companies, role: schema.companyMemberships.role })
+    .select({ company: schema.companies, role: schema.companyMemberships.role, organizationName: schema.organizations.name })
     .from(schema.companyMemberships)
     .innerJoin(schema.companies, eq(schema.companyMemberships.companyId, schema.companies.id))
+    .leftJoin(schema.organizations, eq(schema.companies.organizationId, schema.organizations.id))
     .where(
       and(
         eq(schema.companyMemberships.userId, userId),
@@ -135,7 +136,7 @@ export async function listCompaniesForUser(
         eq(schema.companies.status, 'ACTIVE'),
       ),
     );
-  return rows.map((r) => ({ company: toView(r.company), role: r.role }));
+  return rows.map((r) => ({ company: toView(r.company), role: r.role, organizationName: r.organizationName }));
 }
 
 /**
@@ -264,6 +265,11 @@ export async function deleteCompany(
     if (input.confirmLegalName.trim() !== company.legalName) {
       throw new CompanyError('NAME_MISMATCH', 'The typed name does not match the company legal name.');
     }
+    // LL-096: a member leaves its organization first — an archived member could never
+    // leave, nor could its counterparts while a balance stood against it.
+    if (company.organizationId !== null) {
+      throw new CompanyError('COMPANY_IN_ORGANIZATION', 'Remove the company from its organization before deleting it.');
+    }
 
     const postedEntries = await countPostedEntriesLocked(tx, companyId);
     const [audited] = await tx
@@ -291,6 +297,17 @@ export async function deleteCompany(
         .set({ status: 'INACTIVE', isTemplate: false, updatedAt: sql`now()` })
         .where(eq(schema.companies.id, companyId));
       return { mode: 'archived' };
+    }
+
+    // A purge would trip the RESTRICT FK from another company's "Due from/to <this>"
+    // account (LL-096). Unreachable through the services (any join leaves audit rows,
+    // so the company archives), but never let it surface as a raw error.
+    const [counterpart] = await tx
+      .select({ n: count() })
+      .from(schema.accounts)
+      .where(eq(schema.accounts.intercompanyCompanyId, companyId));
+    if ((counterpart?.n ?? 0) > 0) {
+      throw new CompanyError('COMPANY_IN_ORGANIZATION', 'Another company still carries an intercompany account for this one; it can only be archived.');
     }
 
     for (const table of PURGE_ORDER) {
@@ -334,6 +351,9 @@ export async function setCompanyTemplate(
       if (company.isTemplate === on) return toView(company);
 
       if (on) {
+        if (company.organizationId !== null) {
+          throw new CompanyError('TEMPLATE_IN_ORGANIZATION', 'A company in an organization cannot be the template.');
+        }
         const posted = await countPostedEntriesLocked(tx, companyId);
         if (posted > 0) {
           throw new CompanyError('TEMPLATE_HAS_POSTINGS', 'A company with posted history cannot be the template.');
@@ -386,6 +406,10 @@ export async function updateCompanySettings(
     const posted = await countPostedEntriesLocked(tx, companyId);
     if (posted > 0) {
       throw new CompanyError('SETTINGS_LOCKED', 'Settings cannot change once the company has posted entries.');
+    }
+    // LL-096: intercompany balances mirror in one currency across the organization.
+    if (company.organizationId !== null && input.currencyCode !== company.currencyCode) {
+      throw new CompanyError('SETTINGS_LOCKED', 'The currency cannot change while the company is in an organization.');
     }
 
     const before = {

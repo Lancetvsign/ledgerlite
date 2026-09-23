@@ -193,8 +193,13 @@ end.
 
 Accounts are never deleted — see [ADR-006](DECISIONS.md#adr-006). Deactivation removes an
 account from selection for *new* postings, never from *history*. System accounts
-(Accounts Receivable, Retained Earnings, Opening Balance Equity) cannot be deleted or
-have their `system_account_type` reassigned.
+(Accounts Receivable, Accounts Payable, Retained Earnings, Opening Balance Equity, Sales Tax
+Payable, and the intercompany *Due from <B>* / *Due to <A>* pairs — ADR-043) cannot be deleted
+or have their `system_account_type` reassigned. `src/server/accounts/system-roles.ts` is the one
+place that answers "may a user pick this system account as a category / as cash": never a
+control account, never a plug, never an intercompany account. An intercompany account moves
+only through an `INTERCOMPANY` posting or its reversal — enforced by the control-account
+triggers, not only by the services — so the two sides of a pair always mirror.
 
 ---
 
