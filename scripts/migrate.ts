@@ -17,6 +17,7 @@ import { drizzle } from 'drizzle-orm/neon-serverless';
 import { migrate } from 'drizzle-orm/neon-serverless/migrator';
 
 import { describeConnection, getDirectDatabaseUrl } from '../src/db/env';
+import { describeMigrationFailure } from '../src/lib/migration-failure';
 
 config({ path: '.env.local', quiet: true });
 
@@ -74,7 +75,8 @@ void main().catch((error: unknown) => {
   // A failed migration must fail the process loudly. Never catch and continue —
   // a deployment that proceeds past a migration error runs new code against an
   // old schema. See AGENTS.md section 5.
-  console.error('\nMIGRATION FAILED\n');
-  console.error(error instanceof Error ? error.message : error);
+  // The database's own verdict (SQLSTATE, constraint, detail) travels on the cause chain;
+  // parameter values are never echoed — see describeMigrationFailure.
+  console.error(`\n${describeMigrationFailure(error)}\n`);
   process.exit(1);
 });
