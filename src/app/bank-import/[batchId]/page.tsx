@@ -18,7 +18,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction } from '../actions';
+import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
 import { LineCounterpartSelect } from './line-counterpart';
@@ -287,6 +287,14 @@ export default async function ReviewImportPage({
                       </td>
                       <td className="py-2 pr-2 text-neutral-500" data-testid={`import-status-${String(i)}`}>
                         {l.status === 'ASSIGNED' ? `taken by ${l.assignedCompanyName ?? 'another company'}` : l.status}
+                        {l.status === 'POSTED' && l.postedSource === 'INTERCOMPANY' && (
+                          // LL-100: a transfer marked/matched by mistake is reversed (both sides if
+                          // matched). The button belongs to a form rendered OUTSIDE the review form —
+                          // a nested form is dropped by the browser.
+                          <button type="submit" form={`unmark-${l.id}`} data-testid={`unmark-transfer-${String(i)}`} className="ml-2 rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
+                            Undo transfer
+                          </button>
+                        )}
                       </td>
                     </>
                   )}
@@ -309,6 +317,15 @@ export default async function ReviewImportPage({
           </div>
         )}
       </form>
+
+      {view.lines
+        .filter((l) => l.status === 'POSTED' && l.postedSource === 'INTERCOMPANY')
+        .map((l) => (
+          <form key={l.id} id={`unmark-${l.id}`} action={unmarkIntercompanyTransferAction}>
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            <input type="hidden" name="lineId" value={l.id} />
+          </form>
+        ))}
 
       {decided === 0 && (
         // Nothing from this upload has posted, so it is still a staging artifact and can be
@@ -348,6 +365,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
       (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`)
     );
   }
+  if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
   if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';
   const error = sp.error;
