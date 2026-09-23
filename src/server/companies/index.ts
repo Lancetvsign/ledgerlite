@@ -306,7 +306,11 @@ export async function deleteCompany(
       .select({ n: count() })
       .from(schema.accounts)
       .where(eq(schema.accounts.intercompanyCompanyId, companyId));
-    if ((counterpart?.n ?? 0) > 0) {
+    const [assigned] = await tx
+      .select({ n: count() })
+      .from(schema.bankImportLines)
+      .where(eq(schema.bankImportLines.assignedCompanyId, companyId));
+    if ((counterpart?.n ?? 0) > 0 || (assigned?.n ?? 0) > 0) {
       throw new CompanyError('COMPANY_IN_ORGANIZATION', 'Another company still carries an intercompany account for this one; it can only be archived.');
     }
 

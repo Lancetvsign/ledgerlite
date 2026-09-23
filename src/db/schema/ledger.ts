@@ -108,6 +108,12 @@ export const journalEntries = pgTable(
     reversalOfId: uuid('reversal_of_id'),
     /** If this entry has been reversed, the reversing entry's id. */
     reversedById: uuid('reversed_by_id'),
+    /**
+     * LL-097 / ADR-043: the two sides of one intercompany movement share a group id — one
+     * entry per company per group (unique below), only on INTERCOMPANY entries (check), and
+     * immutable once posted (the journal_entries_immutable trigger lists it).
+     */
+    intercompanyGroupId: uuid('intercompany_group_id'),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
@@ -134,6 +140,8 @@ export const journalEntries = pgTable(
     uniqueIndex('journal_entries_one_opening_balance')
       .on(table.companyId)
       .where(sql`source_type = 'OPENING_BALANCE' and status = 'POSTED'`),
+    unique('journal_entries_intercompany_group_company_unique').on(table.intercompanyGroupId, table.companyId),
+    check('journal_entries_group_only_intercompany', sql`${table.intercompanyGroupId} is null or ${table.sourceType}::text = 'INTERCOMPANY'`),
     // Reporting indexes (trial balance, GL).
     index('journal_entries_company_txn_date_idx').on(table.companyId, table.transactionDate),
     index('journal_entries_company_status_idx').on(table.companyId, table.status),

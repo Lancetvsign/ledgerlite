@@ -14,6 +14,7 @@ export function LineActionControls({
   moneyIn,
   allowApply,
   matchLabel,
+  allowPersonal = false,
 }: {
   index: number;
   moneyIn: boolean;
@@ -21,6 +22,8 @@ export function LineActionControls({
   allowApply: boolean;
   /** Present when a POSTED mirror exists on another statement account (LL-094). */
   matchLabel?: string;
+  /** LL-097: offer "Mark personal" (an owner equity/asset account exists to post it to). */
+  allowPersonal?: boolean;
 }) {
   const { actions, defaults, setAction } = useReviewState();
   const key = String(index);
@@ -41,6 +44,7 @@ export function LineActionControls({
       >
         <option value="post">Post to account</option>
         <option value="ignore">Ignore</option>
+        {allowPersonal && <option value="personal">Mark personal</option>}
         {matchLabel !== undefined && <option value="match_transfer">{matchLabel}</option>}
         {allowApply &&
           (moneyIn ? (

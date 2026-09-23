@@ -340,6 +340,18 @@ company and owner membership, so the system accounts the ledger needs exist from
 moment. Company creation with no chart argument installs nothing; a setup screen can
 install later via the authorized `installDefaultChartFor` (`account.manage`).
 
+### Shared card statements (LL-097 / ADR-043)
+
+A card statement is a liability of one company. When the owner's other companies buy on it, the
+cardholder company still posts every line against the card: its own purchases to expense (`post`),
+the owner's private purchases to Owner Distributions (`personal` — never an expense), and the lines
+another company takes as *Due from <that company>* while that company posts *its* expense against
+*Due to <cardholder>* — one `INTERCOMPANY` posting on each side, one group id, in one transaction.
+The card therefore always reconciles to the statement, every company's P&L carries only its own
+expenses, and Σ Due-from in the cardholder equals Σ Due-to across the takers to the cent. Giving a
+line back reverses both sides. An ignored line is one that is genuinely not a charge (dispute,
+duplicate) — it leaves a difference on the reconciliation, which is the correct signal.
+
 ## LedgerService (LL-031)
 
 `postJournalEntry` is the ONLY approved way to create a posted entry. No feature module

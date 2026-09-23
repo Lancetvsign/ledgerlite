@@ -34,7 +34,11 @@ export type BankImportErrorCode =
   /** The document is not an OPEN invoice / bill of this company (missing, closed, or foreign — one message). */
   | 'DOCUMENT_NOT_OPEN'
   /** The line's amount (cumulatively, within one submit) exceeds the document's open balance. */
-  | 'OVERAPPLIED';
+  | 'OVERAPPLIED'
+  /** Sharing needs the company to be in an organization (LL-097). */
+  | 'NOT_IN_ORGANIZATION'
+  /** Only a credit-card statement can be shared with the organization (LL-097). */
+  | 'ONLY_CARDS_SHAREABLE';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';
