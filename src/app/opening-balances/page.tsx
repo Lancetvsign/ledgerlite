@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isOpeningBalanceTarget } from '@/server/accounts/system-roles';
 import { formatMoney } from '@/lib/money-format';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
@@ -24,8 +25,6 @@ import { OpeningBalanceForm } from './opening-balance-form';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** System accounts that may not carry an opening balance directly (control + the plug). */
-const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY']);
 
 export default async function OpeningBalancesPage({
   searchParams,
@@ -111,7 +110,7 @@ export default async function OpeningBalancesPage({
 
   const pickable = accounts
     .filter((a) => a.status === 'ACTIVE')
-    .filter((a) => a.systemAccountType === null || !EXCLUDED_SYSTEM_TYPES.has(a.systemAccountType))
+    .filter((a) => isOpeningBalanceTarget(a.systemAccountType))
     .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name }));
 
   const today = await companyToday(user.id, membership.companyId); // the COMPANY's today (ADR-007)

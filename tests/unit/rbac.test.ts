@@ -23,6 +23,7 @@ const EXPECTED: Record<(typeof ROLES)[number], readonly Capability[]> = {
     'company.manage',
     'company.delete',
     'company.template',
+    'company.organization',
     'user.manage',
     'account.view',
     'account.manage',

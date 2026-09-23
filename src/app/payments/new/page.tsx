@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isCashUsable } from '@/server/accounts/system-roles';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { companyToday } from '@/server/companies';
@@ -47,7 +48,7 @@ export default async function NewPaymentPage({
     .map((c) => ({ id: c.id, label: c.name }));
   const depositAccounts = accounts
     .filter(
-      (a) => a.status === 'ACTIVE' && a.accountType === 'ASSET' && a.systemAccountType !== 'ACCOUNTS_RECEIVABLE',
+      (a) => a.status === 'ACTIVE' && a.accountType === 'ASSET' && isCashUsable(a.systemAccountType),
     )
     .map((a) => ({ id: a.id, label: a.name }));
   const openInvoiceOptions = openInvoices.map((i) => ({

@@ -13,8 +13,15 @@ import {
   setCompanyTemplate,
   updateCompanySettings,
 } from '@/server/companies';
+import {
+  addCompanyToOrganization,
+  createOrganization,
+  OrganizationError,
+  removeCompanyFromOrganization,
+} from '@/server/organizations';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput, updateCompanySettingsInput } from '@/validation/company';
+import { createOrganizationInput } from '@/validation/organization';
 
 /** Session first, always; these run with whatever the browser sent. */
 async function requireAppUserId(): Promise<string> {
@@ -120,4 +127,56 @@ export async function deleteCompanyAction(formData: FormData): Promise<void> {
   }
   await clearActiveCompanyIf(companyId);
   redirect(`/account?ok=company-${mode}`);
+}
+
+function companyIdFrom(formData: FormData): string {
+  const raw = formData.get('companyId');
+  return typeof raw === 'string' ? raw : '';
+}
+
+/** Redirects with the typed code for any domain/authorization failure; rethrows the rest. */
+function redirectOnOrganizationFailure(error: unknown): never {
+  if (error instanceof OrganizationError || error instanceof CompanyError) redirect(`/account?error=${error.code}`);
+  if (error instanceof AuthorizationDenied) redirect('/account?error=denied');
+  throw error;
+}
+
+/** Creates an organization with this company as its first member — LL-096 (OWNER only, in the service). */
+export async function createOrganizationAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const companyId = companyIdFrom(formData);
+  const parsed = createOrganizationInput.safeParse({ name: formData.get('name') });
+  if (!parsed.success) redirect('/account?error=invalid-organization');
+  try {
+    await createOrganization(userId, companyId, parsed.data);
+  } catch (error) {
+    redirectOnOrganizationFailure(error);
+  }
+  redirect('/account?ok=organization-created');
+}
+
+/** Adds this company to an organization the owner already has a stake in — LL-096. */
+export async function addToOrganizationAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const companyId = companyIdFrom(formData);
+  const rawOrg = formData.get('organizationId');
+  const organizationId = typeof rawOrg === 'string' ? rawOrg : '';
+  try {
+    await addCompanyToOrganization(userId, companyId, organizationId);
+  } catch (error) {
+    redirectOnOrganizationFailure(error);
+  }
+  redirect('/account?ok=joined-organization');
+}
+
+/** Removes this company from its organization (refused while any Due balance is open) — LL-096. */
+export async function leaveOrganizationAction(formData: FormData): Promise<void> {
+  const userId = await requireAppUserId();
+  const companyId = companyIdFrom(formData);
+  try {
+    await removeCompanyFromOrganization(userId, companyId);
+  } catch (error) {
+    redirectOnOrganizationFailure(error);
+  }
+  redirect('/account?ok=left-organization');
 }

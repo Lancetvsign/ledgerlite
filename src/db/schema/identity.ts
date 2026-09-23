@@ -1,8 +1,8 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
-  check,
   char,
+  check,
   index,
   integer,
   jsonb,
@@ -68,6 +68,28 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * An organization groups companies that belong to one owner (LL-096 / ADR-043) so a
+ * shared card statement or a bank transfer between them can be posted intercompany.
+ * CROSS-TENANT BY DESIGN: it holds no money and no ledger, so it carries no
+ * company_id and no (company_id, id) unique; a company points at it from
+ * `companies.organization_id`. Rows are never deleted (ADR-006) — an organization
+ * with no members is simply unreachable.
+ */
+export const organizations = pgTable(
+  'organizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check('organizations_name_nonempty', sql`length(trim(${table.name})) > 0`)],
+);
+
 export const companies = pgTable(
   'companies',
   {
@@ -95,6 +117,8 @@ export const companies = pgTable(
      * partial unique index below is the arbiter, not a service check.
      */
     isTemplate: boolean('is_template').notNull().default(false),
+    /** The organization this company belongs to, if any (LL-096). At most one. */
+    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'restrict' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -108,6 +132,12 @@ export const companies = pgTable(
     uniqueIndex('companies_one_template').on(table.isTemplate).where(sql`${table.isTemplate} = true`),
     // The template slot is released on archive (LL-083); the database now holds that too (LL-095).
     check('companies_template_is_active', sql`not ${table.isTemplate} or ${table.status} = 'ACTIVE'`),
+    // LL-096: the template seeds new companies and must never carry intercompany
+    // accounts, so it cannot be an organization member; and a member must be
+    // ACTIVE — an archived member could never leave, nor could its counterparts.
+    index('companies_organization_idx').on(table.organizationId),
+    check('companies_template_not_in_organization', sql`not ${table.isTemplate} or ${table.organizationId} is null`),
+    check('companies_organization_member_is_active', sql`${table.organizationId} is null or ${table.status} = 'ACTIVE'`),
   ],
 );
 

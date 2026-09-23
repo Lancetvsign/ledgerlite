@@ -1,8 +1,11 @@
 import { roleHasCapability } from '@/server/rbac';
 
 import {
+  addToOrganizationAction,
   createCompanyAction,
+  createOrganizationAction,
   deleteCompanyAction,
+  leaveOrganizationAction,
   setCompanyTemplateAction,
   switchCompanyAction,
   updateCompanySettingsAction,
@@ -10,6 +13,7 @@ import {
 
 import type { CompanyMembership } from '@/db/schema';
 import type { CompanyView } from '@/server/companies';
+import type { OrganizationView } from '@/server/organizations';
 
 /**
  * Minimal company switcher (LL-013). Lists ONLY companies where this user
@@ -27,11 +31,14 @@ export function CompanyPanel({
   companies,
   active,
   templateExists,
+  joinableOrganizations,
 }: {
-  companies: { company: CompanyView; role: CompanyMembership['role'] }[];
+  companies: { company: CompanyView; role: CompanyMembership['role']; organizationName: string | null }[];
   active: CompanyMembership | null;
   /** Whether a master template company exists anywhere (LL-083) — a boolean, never its identity. */
   templateExists: boolean;
+  /** Organizations this user may add a company to (LL-096) — derived from their own memberships. */
+  joinableOrganizations: readonly OrganizationView[];
 }) {
   return (
     <section className="flex flex-col gap-3">
@@ -41,8 +48,9 @@ export function CompanyPanel({
         <p className="text-sm text-neutral-500">No companies yet — create one below.</p>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="company-list">
-          {companies.map(({ company, role }) => {
+          {companies.map(({ company, role, organizationName }) => {
             const isActive = active?.companyId === company.id;
+            const canOrganize = roleHasCapability(role, 'company.organization');
             return (
               <li key={company.id} className="flex items-center justify-between gap-2 text-sm">
                 <span>
@@ -56,6 +64,11 @@ export function CompanyPanel({
                   {company.isTemplate && (
                     <span data-testid="template-badge" className="ml-2 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-900 dark:text-amber-100">
                       template
+                    </span>
+                  )}
+                  {organizationName !== null && (
+                    <span data-testid="organization-badge" className="ml-2 rounded bg-sky-100 px-2 py-0.5 text-xs text-sky-900 dark:bg-sky-900 dark:text-sky-100">
+                      org: {organizationName}
                     </span>
                   )}
                 </span>
@@ -112,6 +125,47 @@ export function CompanyPanel({
                         </button>
                       </form>
                     </details>
+                  )}
+                  {canOrganize && organizationName === null && !company.isTemplate && (
+                    // Organizations (LL-096): create one here, or add this company to one the
+                    // owner already has a stake in. The service re-proves OWNER in both places.
+                    <details className="relative">
+                      <summary className={`cursor-pointer list-none ${SMALL_BUTTON}`} data-testid="organization-menu">Organization…</summary>
+                      <div className={POPOVER}>
+                        {joinableOrganizations.length > 0 && (
+                          <form action={addToOrganizationAction} className="flex flex-col gap-1">
+                            <input type="hidden" name="companyId" value={company.id} />
+                            <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                              Add to an existing organization
+                              <select name="organizationId" className={SMALL_INPUT} data-testid="organization-select">
+                                {joinableOrganizations.map((o) => (
+                                  <option key={o.id} value={o.id}>{o.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <button type="submit" data-testid="add-to-organization" className={SMALL_BUTTON}>Add</button>
+                          </form>
+                        )}
+                        <form action={createOrganizationAction} className="flex flex-col gap-1">
+                          <input type="hidden" name="companyId" value={company.id} />
+                          <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                            {joinableOrganizations.length > 0 ? 'Or create a new organization' : 'Create an organization'}
+                            <input name="name" placeholder="Organization name" required maxLength={200} className={SMALL_INPUT} />
+                          </label>
+                          <button type="submit" data-testid="create-organization" className="rounded bg-neutral-900 px-2 py-1 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
+                            Create organization
+                          </button>
+                        </form>
+                      </div>
+                    </details>
+                  )}
+                  {canOrganize && organizationName !== null && (
+                    <form action={leaveOrganizationAction}>
+                      <input type="hidden" name="companyId" value={company.id} />
+                      <button type="submit" data-testid="leave-organization" className={SMALL_BUTTON}>
+                        Remove from organization
+                      </button>
+                    </form>
                   )}
                   {roleHasCapability(role, 'company.delete') && (
                     // Progressive disclosure without client JS: the confirmation form is

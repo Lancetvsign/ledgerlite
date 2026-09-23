@@ -8,6 +8,7 @@ import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
+import { isCategoryPostable } from '@/server/accounts/system-roles';
 import { toMoney } from '@/lib/decimal';
 import { errorChainText } from '@/lib/error-chain';
 import { log } from '@/lib/logging';
@@ -55,9 +56,6 @@ import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } fro
  * applying additionally requires `payment.create` / `bill_payment.create`.
  */
 
-/** Accounts a bank-import line may never be categorised to. */
-// A bank line is never a closing entry either: Retained Earnings moves only through year-end close (LL-091).
-const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY', 'RETAINED_EARNINGS']);
 
 function normalizeDescription(d: string): string {
   return d.trim().toLowerCase();
@@ -163,7 +161,7 @@ async function pickableAccounts(companyId: string, bankAccountId: string): Promi
     .orderBy(schema.accounts.accountNumber, schema.accounts.name, schema.accounts.id);
   return rows
     .filter((a) => a.id !== bankAccountId)
-    .filter((a) => a.systemAccountType === null || !EXCLUDED_SYSTEM_TYPES.has(a.systemAccountType))
+    .filter((a) => isCategoryPostable(a.systemAccountType))
     .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name, accountType: a.accountType }));
 }
 

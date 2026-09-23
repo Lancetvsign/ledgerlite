@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { isCategoryPostable } from '@/server/accounts/system-roles';
 import { formatMoney } from '@/lib/money-format';
 import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
@@ -33,7 +34,6 @@ import { ReviewStateProvider, type LineAction } from './review-state';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const EXCLUDED_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE', 'OPENING_BALANCE_EQUITY', 'RETAINED_EARNINGS']);
 
 interface DocumentOption {
   readonly id: string;
@@ -88,7 +88,7 @@ export default async function ReviewImportPage({
   const isCard = accounts.find((a) => a.id === view.batch.bankAccountId)?.accountType === 'LIABILITY';
   const pickable = accounts
     .filter((a) => a.status === 'ACTIVE' && a.id !== view.batch.bankAccountId)
-    .filter((a) => a.systemAccountType === null || !EXCLUDED_SYSTEM_TYPES.has(a.systemAccountType));
+    .filter((a) => isCategoryPostable(a.systemAccountType));
 
   const customerName = new Map(customers.map((c) => [c.id, c.name]));
   const vendorName = new Map(vendors.map((v) => [v.id, v.name]));

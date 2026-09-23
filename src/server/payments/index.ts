@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDbTx, schema } from '@/db';
+import { isCashUsable } from '@/server/accounts/system-roles';
 import { todayInTimeZone } from '@/lib/dates';
 import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
@@ -169,7 +170,7 @@ export async function receivePaymentCore(
 
   // The deposit account must be in-company, ACTIVE, and an asset (money lands there).
   const dep = await tx
-    .select({ status: schema.accounts.status, accountType: schema.accounts.accountType })
+    .select({ status: schema.accounts.status, accountType: schema.accounts.accountType, systemAccountType: schema.accounts.systemAccountType })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.depositAccountId)))
     .limit(1);
@@ -186,8 +187,8 @@ export async function receivePaymentCore(
   // A/R is an asset, but depositing there would post Dr A/R / Cr A/R — a
   // self-canceling entry that marks the invoice PAID without reducing the
   // receivable. The money must land somewhere other than A/R.
-  if (input.depositAccountId === arAccountId) {
-    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment cannot deposit into Accounts Receivable.');
+  if (input.depositAccountId === arAccountId || !isCashUsable(deposit.systemAccountType)) {
+    throw new PaymentError('DEPOSIT_ACCOUNT_INVALID', 'A payment cannot deposit into Accounts Receivable or an intercompany account.');
   }
 
   // Lock and validate each applied invoice; collect those this payment fully pays. Lock

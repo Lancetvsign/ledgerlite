@@ -76,6 +76,12 @@ export const accounts = pgTable(
     // documents intent — the real guarantee is the raw FK in the migration.
     parentAccountId: uuid('parent_account_id'),
     systemAccountType: text('system_account_type'),
+    /**
+     * LL-096: for an INTERCOMPANY_RECEIVABLE / INTERCOMPANY_PAYABLE account, the OTHER
+     * company of the pair ("Due from B" in A points at B). A by-design cross-company
+     * reference — invariant 4 concerns journal lines, which stay same-company.
+     */
+    intercompanyCompanyId: uuid('intercompany_company_id').references(() => companies.id, { onDelete: 'restrict' }),
     // Cash-flow section (LL-074). Nullable; set on balance-sheet accounts, null on
     // income-statement accounts (their effect is net income).
     cashFlowCategory: cashFlowCategory('cash_flow_category'),
@@ -105,9 +111,21 @@ export const accounts = pgTable(
     // decide where an invoice's A/R debit and tax credit land; that resolution
     // must be unambiguous, so it is guaranteed structurally, not just by the
     // service. Partial: only rows that actually carry a role are constrained.
+    // LL-096: the intercompany roles repeat per counterpart, so they leave this
+    // index and get their own below, keyed by the counterpart company.
     uniqueIndex('accounts_company_system_account_type_key')
       .on(table.companyId, table.systemAccountType)
-      .where(sql`system_account_type is not null`),
+      .where(sql`system_account_type is not null and intercompany_company_id is null`),
+    uniqueIndex('accounts_company_intercompany_pair_key')
+      .on(table.companyId, table.systemAccountType, table.intercompanyCompanyId)
+      .where(sql`intercompany_company_id is not null`),
+    // A counterpart is set exactly on the two intercompany roles (coalesce closes the
+    // NULL role case), and never points at the account's own company.
+    check(
+      'accounts_intercompany_role_pairing',
+      sql`(${table.intercompanyCompanyId} is not null) = coalesce(${table.systemAccountType} in ('INTERCOMPANY_RECEIVABLE', 'INTERCOMPANY_PAYABLE'), false)`,
+    ),
+    check('accounts_intercompany_not_self', sql`${table.intercompanyCompanyId} is distinct from ${table.companyId}`),
     // GL/reporting access patterns.
     index('accounts_company_type_idx').on(table.companyId, table.accountType),
     index('accounts_company_parent_idx').on(table.companyId, table.parentAccountId),

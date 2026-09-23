@@ -7,6 +7,7 @@ import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 
 import { AccountError } from './errors';
+import { isIntercompanyType } from './system-roles';
 
 import type { PoolDatabase } from '@/db';
 import type { Account } from '@/db/schema';
@@ -264,6 +265,11 @@ export async function resolveSystemAccount(
   companyId: string,
   systemAccountType: string,
 ): Promise<string | null> {
+  // The intercompany roles repeat per counterpart (LL-096); "the single account with this
+  // role" is meaningless for them. Use ensureIntercompanyPair.
+  if (isIntercompanyType(systemAccountType)) {
+    throw new Error(`resolveSystemAccount cannot resolve ${systemAccountType}; use ensureIntercompanyPair`);
+  }
   const rows = await executor
     .select({ id: schema.accounts.id })
     .from(schema.accounts)
