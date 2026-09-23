@@ -936,7 +936,9 @@ describe('GL regression suite (release-blocking)', () => {
     await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: await expenseOf(c) }] });
     await unassignSharedLine(userId, b, batch.id, lines[1]!.id);
 
-    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '120.5000', '2000.0000'], [b, '0.0000', '120.5000'], [c, '2000.0000', '0.0000']] as const) {
+    // C took the +2000 payment-shaped line, so A's "Due from C" is a NEGATIVE receivable (A owes C) and
+    // C's "Due to A" a negative payable: totals net to −1879.50 in A, and the mirror holds sign for sign.
+    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '-1879.5000', '0.0000'], [b, '0.0000', '120.5000'], [c, '0.0000', '-2000.0000']] as const) {
       const report = await getIntercompanyReport(userId, companyId, '2026-12-31');
       expect(report.mirrored, companyId).toBe(true);
       for (const row of report.rows) {
