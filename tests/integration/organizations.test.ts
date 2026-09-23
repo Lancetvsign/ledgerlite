@@ -404,7 +404,8 @@ describe('ensureIntercompanyPair', () => {
     await setCompanyTemplate(owner, t, true);
     const db = await getTestDb();
     await db.execute(sql`insert into accounts (company_id, name, account_type, system_account_type, intercompany_company_id, status) values (${t}, 'Due from X', 'ASSET', 'INTERCOMPANY_RECEIVABLE', ${b}, 'ACTIVE')`);
-    const fresh = await makeCompany(owner, 'Fresh Co', 'system-only');
+    // No chart at all: the template copy brings the numbered accounts (a system-only chart would collide on 1100).
+    const fresh = (await createCompanyWithOwner(owner, createCompanyInput.parse({ legalName: 'Fresh Co', timezone: 'America/Chicago' }))).company.id;
     await getDbTx().transaction(async (tx) => { await installChartFromTemplate(fresh, t, tx); });
     const copied = await listAccounts(owner, fresh);
     expect(copied.filter((x) => x.intercompanyCompanyId !== null)).toEqual([]);
@@ -426,12 +427,12 @@ describe('consumers refuse a pair account', () => {
     const rev = await createAccount(owner, a, createAccountInput.parse({ name: 'Rev', accountType: 'REVENUE' }));
     const inv = await createInvoice(owner, a, createInvoiceInput.parse({ customerId: customer.id, invoiceDate: '2026-03-01', dueDate: '2026-03-31', lines: [{ description: 'x', quantity: '1', unitPrice: '10.00', accountId: rev.id }] }));
     await finalizeInvoice(owner, a, inv.invoice.id);
-    expect(await codeOf(receivePayment(owner, a, receivePaymentInput.parse({ customerId: customer.id, paymentDate: '2026-03-02', amount: '10.00', depositAccountId: dueFrom.id, applications: [{ invoiceId: inv.invoice.id, amount: '10.00' }] })), PaymentError)).toBe('DEPOSIT_ACCOUNT_INVALID');
+    expect(await codeOf(receivePayment(owner, a, receivePaymentInput.parse({ customerId: customer.id, paymentDate: '2026-03-02', amount: '10.00', depositAccountId: dueFrom.id, applications: [{ invoiceId: inv.invoice.id, amountApplied: '10.00' }] })), PaymentError)).toBe('DEPOSIT_ACCOUNT_INVALID');
 
     const vendor = await createVendor(owner, a, createVendorInput.parse({ name: 'Vend' }));
     const exp = await anyExpense(owner, a);
     const bill = await createBill(owner, a, createBillInput.parse({ vendorId: vendor.id, billDate: '2026-03-01', dueDate: '2026-03-31', lines: [{ description: 'y', quantity: '1', unitPrice: '10.00', accountId: exp }] }));
     await finalizeBill(owner, a, bill.bill.id);
-    expect(await codeOf(payBill(owner, a, payBillInput.parse({ vendorId: vendor.id, paymentDate: '2026-03-02', amount: '10.00', cashAccountId: dueFrom.id, applications: [{ billId: bill.bill.id, amount: '10.00' }] })), BillPaymentError)).toBe('CASH_ACCOUNT_INVALID');
+    expect(await codeOf(payBill(owner, a, payBillInput.parse({ vendorId: vendor.id, paymentDate: '2026-03-02', amount: '10.00', cashAccountId: dueFrom.id, applications: [{ billId: bill.bill.id, amountApplied: '10.00' }] })), BillPaymentError)).toBe('CASH_ACCOUNT_INVALID');
   });
 });
