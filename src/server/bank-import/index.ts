@@ -22,6 +22,7 @@ import { getAccountingPeriod } from '@/server/periods';
 import { extractedTransactionsSchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
+import { auditIntercompanyLine, findIntercompanyCandidates, markIntercompanyTransfer, matchIntercompanyTransfer, transferCounterparts, type IntercompanyCandidate } from './intercompany';
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
 
@@ -311,6 +312,8 @@ export interface ImportLineView extends BankImportLine {
   readonly transferCandidate: TransferCandidate | null;
   /** When ASSIGNED (LL-097): the legal name of the organization member that took the line. */
   readonly assignedCompanyName: string | null;
+  /** The other company's posted side of an intercompany bank transfer this line mirrors (LL-099). */
+  readonly intercompanyCandidate: IntercompanyCandidate | null;
 }
 
 export interface TransferCandidate {
@@ -415,6 +418,7 @@ export async function getImportBatch(
   }
 
   const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
+  const icCandidates = await findIntercompanyCandidates(actorUserId, companyId, lines);
   const assignedIds = [...new Set(lines.map((l) => l.assignedCompanyId).filter((id): id is string => id !== null))];
   const assignedNames = new Map(
     assignedIds.length === 0
@@ -433,6 +437,7 @@ export async function getImportBatch(
         isDuplicate: postedTwin,
         duplicateOf,
         assignedCompanyName: l.assignedCompanyId === null ? null : (assignedNames.get(l.assignedCompanyId) ?? null),
+        intercompanyCandidate: icCandidates.get(l.id) ?? null,
       };
     }),
   };
@@ -459,6 +464,8 @@ export interface PostImportResult {
   readonly applied: number;
   /** Lines marked PERSONAL — posted to an owner equity/asset account (LL-097). */
   readonly personal: number;
+  /** Lines posted as this company's side of an intercompany bank transfer — marked or matched (LL-099). */
+  readonly intercompany: number;
 }
 
 type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
@@ -468,7 +475,9 @@ type LinePlan =
   | { readonly kind: 'post'; readonly line: BankImportLine; readonly accountId: string; readonly personal: boolean }
   | { readonly kind: 'match'; readonly line: BankImportLine; readonly counterpart: BankImportLine; readonly journalEntryId: string; readonly accountId: string }
   | { readonly kind: 'apply_invoice'; readonly line: BankImportLine; readonly invoice: OpenInvoice; readonly amount: string }
-  | { readonly kind: 'apply_bill'; readonly line: BankImportLine; readonly bill: OpenBill; readonly amount: string };
+  | { readonly kind: 'apply_bill'; readonly line: BankImportLine; readonly bill: OpenBill; readonly amount: string }
+  | { readonly kind: 'ic_mark'; readonly line: BankImportLine; readonly counterpartCompanyId: string }
+  | { readonly kind: 'ic_match'; readonly line: BankImportLine; readonly counterpartEntryId: string; readonly counterpartCompanyId: string };
 
 /**
  * Lock the line and report whether it is still STAGED. Concurrent submits of the same line
@@ -558,6 +567,12 @@ export async function postImportLines(
     input.decisions.filter((d) => d.action === 'post').map((d) => d.lineId),
   );
 
+  // LL-099: the organization members the actor may move money with, and the other side's
+  // posted entries offered to this batch's lines — loaded only when a decision needs them.
+  const needsIc = input.decisions.some((d) => d.action === 'intercompany_transfer' || d.action === 'match_intercompany');
+  const counterparts = needsIc ? await transferCounterparts(actorUserId, companyId) : [];
+  const icCandidates = needsIc ? await findIntercompanyCandidates(actorUserId, companyId, lineRows) : new Map<string, IntercompanyCandidate>();
+
   const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
@@ -642,6 +657,19 @@ export async function postImportLines(
         throw new BankImportError('ACCOUNT_INVALID', `Line ${n}: a personal charge posts to an owner equity or asset account, not to ${target.name}.`);
       }
       plan = { kind: 'post', line, accountId: d.accountId, personal: true };
+    } else if (d.action === 'intercompany_transfer') {
+      // LL-099: this company's side of money moved to/from another member company.
+      const cp = counterparts.find((c) => c.id === d.counterpartCompanyId);
+      if (cp === undefined) {
+        throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: choose a company of your organization you can post in.`);
+      }
+      plan = { kind: 'ic_mark', line, counterpartCompanyId: cp.id };
+    } else if (d.action === 'match_intercompany') {
+      const cand = icCandidates.get(line.id);
+      if (cand === undefined || cand.entryId !== d.counterpartEntryId) {
+        throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: that is not the other company's side of this transfer.`);
+      }
+      plan = { kind: 'ic_match', line, counterpartEntryId: cand.entryId, counterpartCompanyId: cand.counterpartCompanyId };
     } else {
       // apply_invoice / apply_bill — the whole line settles ONE open document (ADR-035).
       const amt = toMoney(line.amount);
@@ -703,6 +731,7 @@ export async function postImportLines(
   let applied = 0;
   let matched = 0;
   let personal = 0;
+  let intercompany = 0;
   for (const plan of plans) {
     const { line } = plan;
     const lineIs = and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.status, 'STAGED'));
@@ -755,6 +784,32 @@ export async function postImportLines(
         throw error;
       });
       if (done) matched += 1;
+      continue;
+    }
+
+    if (plan.kind === 'ic_mark' || plan.kind === 'ic_match') {
+      // LL-099: one INTERCOMPANY posting on this company's pair account against its own bank.
+      try {
+        const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
+          if (!(await lockStagedLine(tx, companyId, line.id))) return false;
+          const r = plan.kind === 'ic_mark'
+            ? await markIntercompanyTransfer(tx, actorUserId, companyId, batch.bankAccountId, line, plan.counterpartCompanyId)
+            : await matchIntercompanyTransfer(tx, actorUserId, companyId, batch.bankAccountId, line, plan.counterpartEntryId);
+          await tx
+            .update(schema.bankImportLines)
+            .set({ status: 'POSTED', chosenAccountId: r.accountId, journalEntryId: r.entryId, updatedAt: sql`now()` })
+            .where(lineIs);
+          await auditIntercompanyLine(tx, companyId, actorUserId, batchId, line, r, plan.kind === 'ic_mark' ? 'marked' : 'matched', plan.counterpartCompanyId);
+          return true;
+        });
+        if (done) intercompany += 1;
+      } catch (error) {
+        // Our side of this group already exists (a concurrent match) — the group unique says so.
+        if (/journal_entries_intercompany_group_company_unique/.test(errorChainText(error))) {
+          throw new BankImportError('TRANSFER_ALREADY_MATCHED', 'This company already posted its side of that transfer.');
+        }
+        if (!isIdempotencyViolation(error)) throw error;
+      }
       continue;
     }
 
@@ -884,7 +939,7 @@ export async function postImportLines(
     }
   }
 
-  return { posted, matched, ignored: toIgnore.length, applied, personal };
+  return { posted, matched, ignored: toIgnore.length, applied, personal, intercompany };
 }
 
 export { BankImportError } from './errors';
@@ -1013,3 +1068,5 @@ export async function setBatchSharing(
 }
 
 export * from './shared';
+export { transferCounterparts } from './intercompany';
+export type { IntercompanyCandidate, MemberCompany as TransferCounterpart } from './intercompany';

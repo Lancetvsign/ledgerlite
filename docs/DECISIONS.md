@@ -2449,3 +2449,20 @@ other side of postings this company took part in, nothing else) and the differen
 / `assertIntercompanyMirror` (ledger invariants) state the rule; GL-T029 in the release gate proves it over
 a three-company split with a give-back. The mirror check is deliberately NOT in `assertLedgerIntegrity`'s
 per-test teardown: integration fixtures seed one-sided intercompany rows on purpose (the leave rule).
+**Amendment (LL-099 — intercompany bank transfers and settlement):** a transfer between two members
+appears on both bank statements. Whichever company reviews first marks its line
+(`intercompany_transfer` + the counterpart) and posts its own side — `Dr its pair account / Cr Bank` for
+money out, the reverse for money in — source `INTERCOMPANY` with a fresh group id; the other company's
+review offers that entry as a candidate (opposite side of |amount| on the pair account facing it, within
+3 days, no entry of its own in the group, in a company the actor holds a `journal.post` role in) and
+matches it, posting its own side into the same group. **One relationship per company pair:** a transfer
+moves the pair that already exists between the two (so repaying card charges taken under LL-097 drives
+both Due accounts back to zero — settlement IS this flow, there is no separate one); with none, a pair is
+created with the payer holding the receivable; with both directions present, the payer's receivable.
+Balances are signed. Both companies marking independently is harmless (two groups, the same balances),
+so the "Link" step once sketched is not needed: nothing structural depends on the group beyond one side
+per company (`journal_entries_intercompany_group_company_unique`, mapped to `TRANSFER_ALREADY_MATCHED`).
+**Cash in transit:** between a mark and its match the pair legitimately differs by that amount; the
+mirror invariant and the report (LL-098) are therefore stated NET of single-sided INTERCOMPANY groups
+("in transit" is shown per row), and any other gap — or a one-sided entry with no group — is corruption.
+No schema change.

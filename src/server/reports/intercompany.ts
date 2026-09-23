@@ -33,13 +33,16 @@ export interface IntercompanyRow {
   readonly counterpartDueTo: string;
   /** dueFrom − counterpartDueTo. */
   readonly receivableDifference: string;
+  /** The part of that difference explained by transfers one side has posted and the other not yet matched (LL-099). */
+  readonly receivableInTransit: string;
   /** This company's "Due to <counterpart>" balance (payable, credit-natural). */
   readonly dueTo: string;
   /** The counterpart's "Due from <this company>" balance. */
   readonly counterpartDueFrom: string;
   /** dueTo − counterpartDueFrom. */
   readonly payableDifference: string;
-  /** Both differences are exactly zero. */
+  readonly payableInTransit: string;
+  /** Both differences are exactly explained by cash in transit (usually: exactly zero). */
   readonly mirrored: boolean;
 }
 
@@ -49,7 +52,7 @@ export interface IntercompanyReport {
   readonly rows: readonly IntercompanyRow[];
   readonly totalDueFrom: string;
   readonly totalDueTo: string;
-  /** Every row mirrors — the organization-wide statement GL-T029 makes at the gate. */
+  /** Every row mirrors (net of cash in transit) — the organization-wide statement GL-T029 makes at the gate. */
   readonly mirrored: boolean;
 }
 
@@ -72,6 +75,10 @@ export async function getIntercompanyReport(
   const rows = await db.execute<{
     counterpart_id: string;
     counterpart_legal_name: string;
+    due_from_id: string | null;
+    counterpart_due_to_id: string | null;
+    due_to_id: string | null;
+    counterpart_due_from_id: string | null;
     due_from: string;
     counterpart_due_to: string;
     due_to: string;
@@ -96,6 +103,10 @@ export async function getIntercompanyReport(
     )
     select p.counterpart_id::text as counterpart_id,
            c.legal_name as counterpart_legal_name,
+           (select a.id::text from accounts a where a.company_id = ${companyId} and a.intercompany_company_id = p.counterpart_id and a.system_account_type = 'INTERCOMPANY_RECEIVABLE') as due_from_id,
+           (select a.id::text from accounts a where a.company_id = p.counterpart_id and a.intercompany_company_id = ${companyId} and a.system_account_type = 'INTERCOMPANY_PAYABLE') as counterpart_due_to_id,
+           (select a.id::text from accounts a where a.company_id = ${companyId} and a.intercompany_company_id = p.counterpart_id and a.system_account_type = 'INTERCOMPANY_PAYABLE') as due_to_id,
+           (select a.id::text from accounts a where a.company_id = p.counterpart_id and a.intercompany_company_id = ${companyId} and a.system_account_type = 'INTERCOMPANY_RECEIVABLE') as counterpart_due_from_id,
            coalesce((select b.balance from accounts a join bal b on b.account_id = a.id
                      where a.company_id = ${companyId} and a.intercompany_company_id = p.counterpart_id and a.system_account_type = 'INTERCOMPANY_RECEIVABLE'), 0)::numeric(19,4)::text as due_from,
            coalesce((select b.balance from accounts a join bal b on b.account_id = a.id
@@ -118,20 +129,41 @@ export async function getIntercompanyReport(
     join journal_entries e on e.id = l.journal_entry_id and e.status in ('POSTED', 'REVERSED') and e.posting_date <= ${asOfDate}
     where a.company_id = ${companyId} and a.intercompany_company_id is not null`);
 
-  // The two differences are the one computation here: Decimal, exact at 4 dp (ADR-004).
+  // Cash in transit (LL-099): single-sided INTERCOMPANY groups — one company marked a bank
+  // transfer from its statement, the other has not matched its own line yet. Per account,
+  // natural direction, as of the date.
+  const transit = new Map<string, string>();
+  const transitRows = await db.execute<{ account_id: string; amt: string }>(sql`
+    select a.id::text as account_id,
+           coalesce(sum(case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end), 0)::numeric(19,4)::text as amt
+    from accounts a
+    join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+    join journal_entries e on e.id = l.journal_entry_id and e.source_type = 'INTERCOMPANY' and e.status = 'POSTED'
+     and e.intercompany_group_id is not null and e.posting_date <= ${asOfDate}
+     and not exists (select 1 from journal_entries o where o.intercompany_group_id = e.intercompany_group_id and o.id <> e.id)
+    where a.intercompany_company_id is not null and (a.company_id = ${companyId} or a.intercompany_company_id = ${companyId})
+    group by a.id`);
+  for (const t of transitRows.rows) transit.set(t.account_id, t.amt);
+  const tr = (id: string | null) => toMoney(id === null ? '0' : (transit.get(id) ?? '0'));
+
+  // The differences are the one computation here: Decimal, exact at 4 dp (ADR-004).
   const out: IntercompanyRow[] = rows.rows.map((r) => {
     const receivableDifference = toMoney(r.due_from).minus(toMoney(r.counterpart_due_to)).toFixed(4);
     const payableDifference = toMoney(r.due_to).minus(toMoney(r.counterpart_due_from)).toFixed(4);
+    const receivableInTransit = tr(r.due_from_id).minus(tr(r.counterpart_due_to_id)).toFixed(4);
+    const payableInTransit = tr(r.due_to_id).minus(tr(r.counterpart_due_from_id)).toFixed(4);
     return {
       counterpartId: r.counterpart_id,
       counterpartLegalName: r.counterpart_legal_name,
       dueFrom: r.due_from,
       counterpartDueTo: r.counterpart_due_to,
       receivableDifference,
+      receivableInTransit,
       dueTo: r.due_to,
       counterpartDueFrom: r.counterpart_due_from,
       payableDifference,
-      mirrored: toMoney(receivableDifference).isZero() && toMoney(payableDifference).isZero(),
+      payableInTransit,
+      mirrored: toMoney(receivableDifference).eq(toMoney(receivableInTransit)) && toMoney(payableDifference).eq(toMoney(payableInTransit)),
     };
   });
   return {

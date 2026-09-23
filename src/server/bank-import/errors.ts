@@ -38,7 +38,11 @@ export type BankImportErrorCode =
   /** Sharing needs the company to be in an organization (LL-097). */
   | 'NOT_IN_ORGANIZATION'
   /** Only a credit-card statement can be shared with the organization (LL-097). */
-  | 'ONLY_CARDS_SHAREABLE';
+  | 'ONLY_CARDS_SHAREABLE'
+  /** The named counterpart is not an organization member the actor may act in (LL-099). */
+  | 'COUNTERPART_INVALID'
+  /** This company already posted its side of that intercompany movement (LL-099). */
+  | 'TRANSFER_ALREADY_MATCHED';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';

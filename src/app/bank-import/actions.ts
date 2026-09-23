@@ -7,6 +7,7 @@ import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport } from '@/server/bank-import';
+import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
@@ -87,18 +88,22 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const accountIds = formData.getAll('accountId');
   const documentIds = formData.getAll('documentId');
   const counterpartIds = formData.getAll('counterpartLineId');
+  const counterpartEntryIds = formData.getAll('counterpartEntryId');
+  const counterpartCompanyIds = formData.getAll('counterpartCompanyId');
   const decisions = lineIds.map((lineId, i) => ({
     lineId: typeof lineId === 'string' ? lineId : '',
     action: typeof actions[i] === 'string' ? actions[i] : 'post',
     accountId: opt(accountIds[i] ?? null),
     documentId: opt(documentIds[i] ?? null),
     counterpartLineId: opt(counterpartIds[i] ?? null),
+    counterpartEntryId: opt(counterpartEntryIds[i] ?? null),
+    counterpartCompanyId: opt(counterpartCompanyIds[i] ?? null),
   }));
 
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
 
-  let result: { posted: number; ignored: number; applied: number; matched: number; personal: number };
+  let result: { posted: number; ignored: number; applied: number; matched: number; personal: number; intercompany: number };
   try {
     result = await postImportLines(userId, companyId, batchId, parsed.data);
   } catch (error) {
@@ -107,14 +112,15 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
       error instanceof BankImportError ||
       error instanceof LedgerError ||
       error instanceof PaymentError ||
-      error instanceof BillPaymentError
+      error instanceof BillPaymentError ||
+      error instanceof AccountError
     ) {
       redirect(`/bank-import/${batchId}?error=${error.code}`);
     }
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}`,
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}`,
   );
 }
 

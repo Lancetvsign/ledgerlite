@@ -11,10 +11,10 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
  * remaining line, and the reviewer sees how many lines will post before submitting.
  * The server-computed suggestion is the default each line resets to.
  */
-export type LineAction = 'post' | 'ignore' | 'apply_invoice' | 'apply_bill' | 'match_transfer' | 'personal';
+export type LineAction = 'post' | 'ignore' | 'apply_invoice' | 'apply_bill' | 'match_transfer' | 'personal' | 'intercompany_transfer' | 'match_intercompany';
 
 export function toLineAction(value: string): LineAction {
-  return value === 'ignore' || value === 'apply_invoice' || value === 'apply_bill' || value === 'match_transfer' || value === 'personal' ? value : 'post';
+  return value === 'ignore' || value === 'apply_invoice' || value === 'apply_bill' || value === 'match_transfer' || value === 'personal' || value === 'intercompany_transfer' || value === 'match_intercompany' ? value : 'post';
 }
 
 interface ReviewState {

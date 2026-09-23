@@ -45,7 +45,7 @@ const decisionSchema = z.object({
    * customer payment / bill payment. Direction is enforced by the service: money in may
    * only apply to an invoice, money out only to a bill.
    */
-  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill', 'match_transfer', 'personal']),
+  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill', 'match_transfer', 'personal', 'intercompany_transfer', 'match_intercompany']),
   /**
    * Required when action is 'post' or 'personal' (enforced by the service). For 'personal'
    * (LL-097) it is the owner-equity (or asset) account the charge is NOT this company's
@@ -60,6 +60,10 @@ const decisionSchema = z.object({
    * second entry is created. Required for match_transfer (enforced by the service).
    */
   counterpartLineId: z.uuid().optional(),
+  /** intercompany_transfer (LL-099): the other company of the organization this money moved to/from. */
+  counterpartCompanyId: z.uuid().optional(),
+  /** match_intercompany (LL-099): the other company's already-posted INTERCOMPANY entry for this movement. */
+  counterpartEntryId: z.uuid().optional(),
 });
 
 export const postImportLinesInput = z.object({

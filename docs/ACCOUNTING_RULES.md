@@ -352,6 +352,11 @@ expenses, and Σ Due-from in the cardholder equals Σ Due-to across the takers t
 line back reverses both sides. An ignored line is one that is genuinely not a charge (dispute,
 duplicate) — it leaves a difference on the reconciliation, which is the correct signal.
 
+Cash moving between two member companies (LL-099) is the same discipline on bank statements: each
+company posts its own side against its own bank — the payer's pair account is debited, the payee's
+credited — and the two sides share a group. A transfer always moves the ONE pair the two companies
+already keep, so repaying what was owed returns both Due accounts to zero; balances are signed.
+
 ## LedgerService (LL-031)
 
 `postJournalEntry` is the ONLY approved way to create a posted entry. No feature module
