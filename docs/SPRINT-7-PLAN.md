@@ -60,7 +60,7 @@ rejected: no company's card account could ever be reconciled to the bank's state
   organization is new). Leaving mirrors joining. A company with open intercompany balances
   cannot leave (`ORG_HAS_INTERCOMPANY_BALANCE`).
 - A shared statement's lines are visible from company B to a user who holds `journal.post`
-  **in B** and is a member of A (any role). The line data is A's; B's reviewer sees only the
+  **in B** and holds a `journal.post` ROLE in A (as built: visible ⇔ assignable — Gate 7 5a N1). The line data is A's; B's reviewer sees only the
   lines that are still **unassigned** (`STAGED`) plus those already assigned **to B**. Lines
   posted in A, assigned to a third company C, marked personal, or ignored are not shown in B
   — no existence leak beyond what membership in A already grants.
@@ -74,8 +74,9 @@ Intercompany accounts are ordinary accounts with a new system role each:
 `INTERCOMPANY_RECEIVABLE` / `INTERCOMPANY_PAYABLE` plus `intercompany_company_id` on
 `accounts` (nullable; FK to `companies.id`; `UNIQUE (company_id, system_account_type,
 intercompany_company_id)`), auto-created on first use as *Due from <B legal name>* (ASSET,
-1300-series) and *Due to <A legal name>* (LIABILITY, 2300-series). They are statement-excluded
-and protected like the other system accounts.
+1300-series) and *Due to <A legal name>* (LIABILITY, 2300-series). They are excluded from statement
+import/reconciliation pickers (they appear on the balance sheet as ordinary asset/liability rows) and
+are protected like the other system accounts.
 
 **LL-097** — `bank_import_batches.shared_with_organization boolean not null default false`;
 `bank_import_line_status` gains `ASSIGNED` and `PERSONAL`;
@@ -97,7 +98,8 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
   entries in other member companies whose Due line equals `-amount` within the 3-day window and whose
   group has no entry in B yet. B's line defaults to *Match intercompany transfer from A* and posts in B
   `Dr Bank B / Cr Due to A` with the same group id. If B imports first, B marks and A matches. If both
-  marked independently, *Link* joins the two entries into one group without posting (LL-094's shape).
+  marked independently, both balances still mirror; no *Link* step was built (LL-099 amendment) — Gate 7
+  H2 proposes auto-linking on mark instead.
 - `UNIQUE (intercompany_group_id, company_id)`: one side per company per group. A card-charge
   settlement (B repays A) is exactly such a transfer.
 
@@ -107,8 +109,8 @@ Symmetric, either side first. A's bank shows −5,000 "TFR TO B"; B's shows +5,0
   source `INTERCOMPANY`, source_id = line id) and B's entry (same source, same source_id
   suffixed `:b`), with **both** companies' `company_counters` rows locked FOR UPDATE in id order
   before the first post (deadlock-free), and updates the line. Either both post or neither (invariant 7).
-- Un-assign (before settlement) = reverse both entries via `reverseEntryCore` and return the
-  line to `STAGED`. After a settlement entry references the pair, un-assign is refused.
+- Un-assign = reverse both entries via `reverseEntryCore` and return the line to `STAGED`. (The
+  "refused after settlement" rule was not built; balances are signed instead — Gate 7 5b N4.)
 - Periods: A's entry is dated on the card date; B's too. A closed period in **either** company
   blocks the assignment (invariant 5) with a clear message naming the company.
 - Money: strings and Decimal throughout; the two entries are the same `NUMERIC(19,4)` amount.

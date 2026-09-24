@@ -2466,3 +2466,20 @@ per company (`journal_entries_intercompany_group_company_unique`, mapped to `TRA
 mirror invariant and the report (LL-098) are therefore stated NET of single-sided INTERCOMPANY groups
 ("in transit" is shown per row), and any other gap — or a one-sided entry with no group — is corruption.
 No schema change.
+
+**Gate 7 correction (2026-09-23):** the LL-096 statement that the mirror "can only be broken by an
+intercompany posting that fails to post both sides" no longer holds as written: with LL-099 a single-sided
+INTERCOMPANY group is legitimately "in transit", and today ANY such group of ANY amount is netted out
+(Gate 7 H2 — LL-101 tightens the definition and ages it); and `journal_lines` has no BEFORE INSERT guard, so
+raw balanced lines can be appended to a posted entry (Gate 7 M5 — LL-104, owner's decision). Until those
+land, the mirror is conventional and gate-proven, not structural. See `docs/GATE-7.md`.
+
+**Amendment (LL-101 — cash in transit done right, Gate 7 H2/M2/L7/L8):** "in transit" is defined narrowly —
+a single-sided INTERCOMPANY group whose entry is the posting of a POSTED bank-import line of that company
+onto its pair account (a MARK) and whose group has no other side AS OF the date. The report shows three
+states per pair — mirrored / in transit (amber, with the amount and the age of the oldest open mark) /
+MISMATCH — and never "Mirrored" while anything is in transit; `findIntercompanyMismatches` also reports a
+mark older than `DEFAULT_MAX_TRANSIT_DAYS` (33: the 3-day window plus a 30-day statement lag) as
+`stale:…`, so GL-T029 fails on transfers that never matched. A mark auto-joins the counterpart's open
+mark of the same |amount| in the window instead of opening a second group; candidates are allocated one
+entry per line per batch, and a submit that aims two lines at one entry is refused before anything posts.

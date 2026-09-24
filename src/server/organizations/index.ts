@@ -200,9 +200,10 @@ export async function removeCompanyFromOrganization(actorUserId: string, company
     const counterpartRows = await tx
       .select({ a: schema.accounts.companyId, b: schema.accounts.intercompanyCompanyId })
       .from(schema.accounts)
+      // Every pair the company is in, ACTIVE or not (Gate 7 5c M1): a balance on a
+      // deactivated pair account is still a balance, and its counterpart must be locked too.
       .where(
         and(
-          eq(schema.accounts.status, 'ACTIVE'),
           isNotNull(schema.accounts.intercompanyCompanyId),
           sql`(${schema.accounts.companyId} = ${companyId} or ${schema.accounts.intercompanyCompanyId} = ${companyId})`,
         ),
@@ -213,7 +214,11 @@ export async function removeCompanyFromOrganization(actorUserId: string, company
       if (r.b !== null) toLock.add(r.b);
     }
     let company: Awaited<ReturnType<typeof lockActiveCompany>> | undefined;
+    const activeIds = new Set(
+      (await tx.select({ id: schema.companies.id }).from(schema.companies).where(and(inArray(schema.companies.id, [...toLock]), eq(schema.companies.status, 'ACTIVE')))).map((r) => r.id),
+    );
     for (const id of [...toLock].sort()) {
+      if (id !== companyId && !activeIds.has(id)) continue; // an archived counterpart cannot post; its balance is still counted below
       const locked = await lockActiveCompany(tx, id);
       if (id === companyId) company = locked;
     }
@@ -230,7 +235,6 @@ export async function removeCompanyFromOrganization(actorUserId: string, company
           join accounts a on a.company_id = l.company_id and a.id = l.account_id
           join journal_entries e on e.company_id = l.company_id and e.id = l.journal_entry_id
          where e.status in ('POSTED', 'REVERSED')
-           and a.status = 'ACTIVE'
            and a.intercompany_company_id is not null
            and (a.company_id = ${companyId} or a.intercompany_company_id = ${companyId})
          group by l.account_id

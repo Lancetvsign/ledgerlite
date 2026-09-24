@@ -385,7 +385,7 @@ test('an intercompany bank transfer is marked in one company and matched from th
   await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
   await page.goto('/reports/intercompany');
   await expect(page.getByTestId('intercompany-row').filter({ hasText: payee })).toContainText('2,000.00');
-  await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('In transit'); // LL-101: never "Mirrored" while a mark awaits its match
 
   // Payee Co: its card statement's +2000 PAYMENT line is the other side; it is flagged and defaults to Match.
   await page.goto('/account');
@@ -402,10 +402,19 @@ test('an intercompany bank transfer is marked in one company and matched from th
   await page.getByTestId('import-action-1').selectOption('ignore');
   await page.getByTestId('post-import-lines').click();
   await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+  const payeeReviewUrl = page.url().split('?')[0] ?? page.url();
 
   await page.goto('/reports/intercompany');
   const row = page.getByTestId('intercompany-row').filter({ hasText: payer });
   await expect(row).toContainText('2,000.00');
   await expect(row).toHaveAttribute('data-mirrored', '1');
   await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+
+  // Undo from the payee (LL-100): both sides reversed, the line is back for review here.
+  await page.goto(payeeReviewUrl);
+  await page.getByTestId('unmark-transfer-2').click();
+  await expect(page.getByTestId('notice')).toContainText('Transfer un-marked', { timeout: 15_000 });
+  await expect(page.getByTestId('import-action-2')).toBeVisible();
+  await page.goto('/reports/intercompany');
+  await expect(page.getByTestId('intercompany-row').filter({ hasText: payer })).toContainText('0.00');
 });

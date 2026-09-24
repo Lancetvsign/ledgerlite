@@ -314,6 +314,8 @@ export interface ImportLineView extends BankImportLine {
   readonly assignedCompanyName: string | null;
   /** The other company's posted side of an intercompany bank transfer this line mirrors (LL-099). */
   readonly intercompanyCandidate: IntercompanyCandidate | null;
+  /** For a POSTED line: the source of its entry — 'INTERCOMPANY' means it can be un-marked (LL-100). */
+  readonly postedSource: string | null;
 }
 
 export interface TransferCandidate {
@@ -419,6 +421,12 @@ export async function getImportBatch(
 
   const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
   const icCandidates = await findIntercompanyCandidates(actorUserId, companyId, lines);
+  const entryIds = lines.map((l) => l.journalEntryId).filter((id): id is string => id !== null);
+  const sourceByEntry = new Map(
+    entryIds.length === 0
+      ? []
+      : (await db.select({ id: schema.journalEntries.id, sourceType: schema.journalEntries.sourceType }).from(schema.journalEntries).where(and(eq(schema.journalEntries.companyId, companyId), inArray(schema.journalEntries.id, entryIds)))).map((e) => [e.id, e.sourceType as string] as const),
+  );
   const assignedIds = [...new Set(lines.map((l) => l.assignedCompanyId).filter((id): id is string => id !== null))];
   const assignedNames = new Map(
     assignedIds.length === 0
@@ -438,6 +446,7 @@ export async function getImportBatch(
         duplicateOf,
         assignedCompanyName: l.assignedCompanyId === null ? null : (assignedNames.get(l.assignedCompanyId) ?? null),
         intercompanyCandidate: icCandidates.get(l.id) ?? null,
+        postedSource: l.journalEntryId === null ? null : (sourceByEntry.get(l.journalEntryId) ?? null),
       };
     }),
   };
@@ -575,6 +584,7 @@ export async function postImportLines(
 
   const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
+  const matchedEntries = new Set<string>();
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
   const appliedSoFar = new Map<string, Decimal>(); // documentId → Σ|amount| within THIS submit
   for (const d of input.decisions) {
@@ -669,6 +679,11 @@ export async function postImportLines(
       if (cand === undefined || cand.entryId !== d.counterpartEntryId) {
         throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: that is not the other company's side of this transfer.`);
       }
+      // Two lines of one submit aimed at one entry fail HERE, before anything posts (LL-101).
+      if (matchedEntries.has(cand.entryId)) {
+        throw new BankImportError('TRANSFER_ALREADY_MATCHED', `Line ${n}: another line of this submit already matches that transfer.`);
+      }
+      matchedEntries.add(cand.entryId);
       plan = { kind: 'ic_match', line, counterpartEntryId: cand.entryId, counterpartCompanyId: cand.counterpartCompanyId };
     } else {
       // apply_invoice / apply_bill — the whole line settles ONE open document (ADR-035).
@@ -1068,5 +1083,5 @@ export async function setBatchSharing(
 }
 
 export * from './shared';
-export { transferCounterparts } from './intercompany';
+export { transferCounterparts, unmarkIntercompanyTransfer } from './intercompany';
 export type { IntercompanyCandidate, MemberCompany as TransferCounterpart } from './intercompany';

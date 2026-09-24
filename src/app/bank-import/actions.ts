@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
@@ -153,4 +153,21 @@ export async function setBatchSharingAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(`/bank-import/${batchId}?ok=${shared ? 'shared' : 'unshared'}`);
+}
+
+/** Un-marks a bank line posted as an intercompany transfer (both sides if matched) — LL-100. */
+export async function unmarkIntercompanyTransferAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  const lineId = opt(formData.get('lineId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  try {
+    await unmarkIntercompanyTransfer(userId, companyId, batchId, lineId);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof BankImportError || error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    throw error;
+  }
+  redirect(`/bank-import/${batchId}?ok=unmarked`);
 }
