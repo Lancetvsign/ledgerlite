@@ -8,7 +8,7 @@ import { isUuid } from '@/lib/uuid';
 import { AccountError } from '@/server/accounts';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { assignSharedLines, BankImportError, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, BankImportError, PeriodClosedInCompanyError, unassignSharedLine } from '@/server/bank-import';
 import { LedgerError } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
 import { assignSharedLinesInput } from '@/validation/bank-import';
@@ -33,9 +33,9 @@ function str(v: FormDataEntryValue | null | undefined): string {
 function redirectOnFailure(batchId: string, error: unknown): never {
   if (error instanceof AuthorizationDenied) redirect(`/bank-import/shared/${batchId}?error=denied`);
   if (error instanceof BankImportError || error instanceof LedgerError || error instanceof AccountError) {
-    // The service names the company inside a PERIOD_CLOSED message; carry it to the notice.
-    const company = error instanceof LedgerError && error.code === 'PERIOD_CLOSED' ? `&detail=${encodeURIComponent(error.message)}` : '';
-    redirect(`/bank-import/shared/${batchId}?error=${error.code}${company}`);
+    // A closed period is reported by company ID; the page resolves the name itself (Gate 7 L1).
+    const closedIn = error instanceof PeriodClosedInCompanyError ? `&closedIn=${error.companyId}` : '';
+    redirect(`/bank-import/shared/${batchId}?error=${error.code}${closedIn}`);
   }
   throw error;
 }

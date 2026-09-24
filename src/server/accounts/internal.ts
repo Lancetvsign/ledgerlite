@@ -369,7 +369,7 @@ export async function deactivateIntercompanyPairs(tx: Tx, actorUserId: string, c
       entityType: 'account',
       entityId: account.id,
       before: { status: 'ACTIVE' },
-      after: { status: 'INACTIVE', reason: 'left organization' },
+      after: { status: 'INACTIVE', reason: 'left organization', leftCompanyId: companyId },
     });
   }
   return rows.map((r) => r.id);

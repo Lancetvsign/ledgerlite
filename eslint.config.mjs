@@ -162,7 +162,7 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@/server/*/internal', '**/server/*/internal'],
+              group: ['@/server/*/internal', '**/server/*/internal', '@/server/*/shared', '**/server/*/shared', '@/server/*/intercompany', '**/server/*/intercompany'],
               message:
                 'Unauthorized repository internals cannot be used from routes or pages. ' +
                 'Call the authorized wrapper in the module root instead. See LL-014.',
@@ -176,7 +176,7 @@ export default tseslint.config(
         'error',
         {
           selector:
-            "ImportExpression > Literal[value=/server\u002f[^\u002f]+\u002finternal/]",
+            "ImportExpression > Literal[value=/server\u002f[^\u002f]+\u002f(internal|shared|intercompany)/]",
           message:
             'Dynamic import of repository internals from routes/pages is fenced. See LL-014.',
         },

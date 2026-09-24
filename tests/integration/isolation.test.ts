@@ -42,6 +42,8 @@ import { createCompanyInput } from '@/validation/company';
 import { insertMembership } from '@/server/companies/internal';
 import { changeMemberRole, inviteMember, issueInvitationLink, listInvitations, removeMember, revokeInvitation } from '@/server/members';
 import { addCompanyToOrganization, createOrganization, listOrganizationCompanies, removeCompanyFromOrganization } from '@/server/organizations';
+import { getIntercompanyReport } from '@/server/reports';
+import { transferCounterparts } from '@/server/bank-import';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { attack, type IsolationContext, type IsolationDescriptor } from '../helpers/isolation';
@@ -121,6 +123,35 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'list its organization members',
         expect: 'denied',
         run: (attacker, victim) => listOrganizationCompanies(attacker, victim.companyId),
+      },
+      // LL-098 / LL-099 (Gate 7 L4): the intercompany report and the transfer counterparts are company-scoped reads.
+      {
+        operation: 'read its intercompany balances report',
+        expect: 'denied',
+        run: (attacker, victim) => getIntercompanyReport(attacker, victim.companyId, '2026-12-31'),
+      },
+      {
+        operation: 'list the companies it may move money with',
+        expect: 'denied',
+        run: (attacker, victim) => transferCounterparts(attacker, victim.companyId),
+      },
+    ],
+  },
+  {
+    // LL-096: an organization is cross-tenant by design; joining a guessed one is the uniform denial.
+    table: 'organizations',
+    seed: async (victim) => {
+      const org = await createOrganization(victim.ownerUserId, victim.companyId, { name: 'Victim Group' });
+      return { recordId: org.id };
+    },
+    attempts: [
+      {
+        operation: "add the attacker's own company to the victim's organization by guessed id",
+        expect: 'denied',
+        run: async (attacker, _victim, recordId) => {
+          const own = await createCompanyWithOwner(attacker, createCompanyInput.parse({ legalName: 'Attacker Join Co', timezone: 'UTC' }), 'system-only');
+          return await addCompanyToOrganization(attacker, own.company.id, recordId);
+        },
       },
     ],
   },
@@ -831,6 +862,26 @@ const REGISTRY: IsolationDescriptor[] = [
             rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type is null limit 1`);
           return await postImportLines(attacker, victim.companyId, batchId ?? '', {
             decisions: [{ lineId: lineId ?? '', action: 'post', accountId: acct.rows[0]?.id ?? victim.companyId }],
+          });
+        },
+      },
+      {
+        operation: 'mark a staged line as an intercompany transfer (LL-099)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return await postImportLines(attacker, victim.companyId, batchId ?? '', {
+            decisions: [{ lineId: lineId ?? '', action: 'intercompany_transfer', counterpartCompanyId: victim.companyId }],
+          });
+        },
+      },
+      {
+        operation: 'match a staged line to an intercompany transfer (LL-099)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return await postImportLines(attacker, victim.companyId, batchId ?? '', {
+            decisions: [{ lineId: lineId ?? '', action: 'match_intercompany', counterpartEntryId: victim.companyId }],
           });
         },
       },
