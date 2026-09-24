@@ -958,7 +958,9 @@ describe('GL regression suite (release-blocking)', () => {
     const cExpense = (await getTrialBalance(userId, c, '2026-12-31')).rows.find((r) => r.accountId === expC)?.balance ?? '0.0000';
     expect(cExpense).toBe('-30.0000');
     const cardBalance = (await getTrialBalance(userId, a, '2026-12-31')).rows.find((r) => r.accountId === card.id)?.balance ?? '0.0000';
-    expect(cardBalance).toBe('-1864.5000'); // 120.50 + 45 − 2000 − 30, credit-natural
+    // 120.50 (B's take) − 2000 (payment) − 30 (C's refund), credit-natural. The −45 line was given
+    // back, so its card posting is reversed and the line waits to be decided again.
+    expect(cardBalance).toBe('-1909.5000');
 
     // The refund C took is a NEGATIVE receivable in A (A owes C 30) mirrored by a negative payable in C.
     for (const [companyId, expectDueFrom, expectDueTo] of [[a, '90.5000', '0.0000'], [b, '0.0000', '120.5000'], [c, '0.0000', '-30.0000']] as const) {
