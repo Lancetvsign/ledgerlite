@@ -335,7 +335,7 @@ const TRANSFER_WINDOW_DAYS = 3;
  * company, opposite amount, within a few days. POSTED candidates first (they can be
  * matched), then the nearest date. One query for the whole set (LL-094).
  */
-async function findTransferCandidates(
+export async function findTransferCandidates(
   companyId: string,
   bankAccountId: string,
   lineIds: readonly string[],
@@ -560,7 +560,7 @@ export async function postImportLines(
   // over-application on one line stops the whole submit up front rather than after some
   // lines have posted.
   // One lookup, only when an apply decision is present at all (LL-093).
-  const isCard = input.decisions.some((d) => d.action === 'apply_invoice' || d.action === 'apply_bill')
+  const isCard = input.decisions.some((d) => d.action === 'apply_invoice' || d.action === 'apply_bill' || d.action === 'intercompany_transfer')
     ? (
         await db
           .select({ accountType: schema.accounts.accountType })
@@ -672,6 +672,11 @@ export async function postImportLines(
       const cp = counterparts.find((c) => c.id === d.counterpartCompanyId);
       if (cp === undefined) {
         throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: choose a company of your organization you can post in.`);
+      }
+      // LL-102 (Gate 7 L9): a card CHARGE has no counterpart flow — only a payment or refund
+      // on a card statement can be the other side of a bank movement.
+      if (isCard && toMoney(line.amount).isNegative()) {
+        throw new BankImportError('CARD_CHARGE_NOT_TRANSFER', `Line ${n}: a card charge cannot be an intercompany transfer; share the statement and let the other company take it instead.`);
       }
       plan = { kind: 'ic_mark', line, counterpartCompanyId: cp.id };
     } else if (d.action === 'match_intercompany') {

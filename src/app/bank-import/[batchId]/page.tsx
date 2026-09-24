@@ -263,7 +263,7 @@ export default async function ReviewImportPage({
                           moneyIn={s.moneyIn}
                           allowApply={!isCard}
                           allowPersonal={personalDefault !== null}
-                          allowIntercompany={counterparts.length > 0}
+                          allowIntercompany={counterparts.length > 0 && (!isCard || s.moneyIn)}
                           {...(l.intercompanyCandidate !== null ? { intercompanyMatchLabel: `Match transfer posted by ${l.intercompanyCandidate.counterpartLegalName}` } : {})}
                           {...(l.transferCandidate?.status === 'POSTED'
                             ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
@@ -379,6 +379,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (error === 'TRANSFER_ALREADY_POSTED') return 'The other side of that transfer already posted from the other account — choose “Match transfer” (or Ignore) instead of posting it again.';
   if (error === 'TRANSFER_MISMATCH') return 'That line is not the posted mirror of the transfer — reload and review again.';
   if (error === 'ACCOUNT_INVALID') return 'A personal charge posts to an owner equity or asset account (Owner Distributions), not to an expense or revenue account.';
+  if (error === 'CARD_CHARGE_NOT_TRANSFER') return 'A card charge cannot be an intercompany transfer — share the statement and let the other company take the line.';
   if (error === 'COUNTERPART_INVALID') return 'Choose a company of your organization you can post in for the intercompany transfer.';
   if (error === 'TRANSFER_ALREADY_MATCHED') return 'This company already posted its side of that intercompany transfer — reload and review again.';
   if (error === 'INTERCOMPANY_NOT_ALLOWED') return 'The two companies must be active members of one organization with the same currency.';
