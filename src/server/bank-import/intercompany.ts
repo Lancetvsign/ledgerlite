@@ -6,7 +6,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import { getDb, getDbTx, schema } from '@/db';
 import { todayInTimeZone } from '@/lib/dates';
-import { AuthorizationDenied, requirePermission } from '@/server/authorization';
+import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
 import { getAccountingPeriod } from '@/server/periods';
 import { LedgerError, toLedgerDomainError } from '@/server/ledger';
 import { toMoney } from '@/lib/decimal';
@@ -15,7 +15,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { lockEntryCounters, postEntryCore, reverseEntryCore } from '@/server/ledger';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
-import { BankImportError } from './errors';
+import { BankImportError, PeriodClosedInCompanyError } from './errors';
 
 import type { PoolDatabase } from '@/db';
 import type { BankImportLine } from '@/db/schema';
@@ -68,6 +68,8 @@ export interface MemberCompany {
  * (visible ⇔ actionable, as for shared statements). Empty outside an organization.
  */
 export async function transferCounterparts(actorUserId: string, companyId: string): Promise<MemberCompany[]> {
+  // Company-scoped, so it authorizes itself (AGENTS §6 / Gate 7 M6) even though its output is self-scoped.
+  await requireCompanyMembership(actorUserId, companyId);
   const db = getDb();
   const me = (await db.select({ organizationId: schema.companies.organizationId }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
   const organizationId = me?.organizationId ?? null;
@@ -365,7 +367,7 @@ export async function unmarkIntercompanyTransfer(
   const reversalDate = todayInTimeZone(me.timezone);
   for (const c of companies) {
     if ((await getAccountingPeriod(c.id, reversalDate)).status !== 'OPEN') {
-      throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${reversalDate} is closed in ${c.legalName}.`);
+      throw new PeriodClosedInCompanyError(c.id, `The accounting period for ${reversalDate} is closed in ${c.legalName}.`);
     }
   }
 

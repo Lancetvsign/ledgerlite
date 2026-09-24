@@ -962,7 +962,7 @@ export async function postImportLines(
   return { posted, matched, ignored: toIgnore.length, applied, personal, intercompany };
 }
 
-export { BankImportError } from './errors';
+export { BankImportError, PeriodClosedInCompanyError } from './errors';
 export type { BankImportErrorCode } from './errors';
 export { isExtractionConfigured } from './extract';
 export type { TransactionExtractor } from './extract';

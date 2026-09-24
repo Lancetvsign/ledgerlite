@@ -21,7 +21,7 @@ import {
 import { getAccountingPeriod } from '@/server/periods';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
-import { BankImportError } from './errors';
+import { BankImportError, PeriodClosedInCompanyError } from './errors';
 import { findTransferCandidates, lockStagedLine, pickableAccounts, suggestForCompany, type PickableAccount } from './index';
 
 import type { PoolDatabase } from '@/db';
@@ -287,7 +287,7 @@ async function assertPeriodsOpen(
       open = (await getAccountingPeriod(c.id, date)).status === 'OPEN';
       cache.set(key, open);
     }
-    if (!open) throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${date} is closed in ${c.legalName}.`);
+    if (!open) throw new PeriodClosedInCompanyError(c.id, `The accounting period for ${date} is closed in ${c.legalName}.`);
   }
 }
 

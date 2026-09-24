@@ -1,3 +1,5 @@
+import { LedgerError } from '@/server/ledger/errors';
+
 /**
  * Bank-import domain errors — LL-076. Stable, machine-readable codes; tests and the UI
  * notice map assert on the CODE, never message text.
@@ -55,5 +57,19 @@ export class BankImportError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/**
+ * A two-company posting found a CLOSED period in one of them (LL-097/099). Carries the company
+ * id so a page can name the company it resolves itself — never a free-text message reflected
+ * from the URL (Gate 7 L1). A `LedgerError` with code PERIOD_CLOSED for every existing handler.
+ */
+export class PeriodClosedInCompanyError extends LedgerError {
+  constructor(
+    public readonly companyId: string,
+    message: string,
+  ) {
+    super('PERIOD_CLOSED', message);
   }
 }
