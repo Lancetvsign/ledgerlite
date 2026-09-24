@@ -25,7 +25,8 @@ import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
 import { LineCounterpartSelect } from './line-counterpart';
 import { LineActionControls } from './line-action';
-import { ReviewStateProvider, toLineAction, type LineAction } from './review-state';
+import { toLineAction, type LineAction } from './line-actions';
+import { ReviewStateProvider } from './review-state';
 
 /**
  * Bank-statement import — review (LL-076, LL-077). The human gate: every staged line shows

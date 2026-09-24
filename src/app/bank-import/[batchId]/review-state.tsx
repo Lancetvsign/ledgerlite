@@ -14,11 +14,10 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
  * "Reset to suggestions" returns to. `version` ticks on every programmatic change so the
  * autosaver notices changes that fire no DOM event.
  */
-export type LineAction = 'post' | 'ignore' | 'apply_invoice' | 'apply_bill' | 'match_transfer' | 'personal' | 'intercompany_transfer' | 'match_intercompany';
+import { type LineAction } from './line-actions';
 
-export function toLineAction(value: string): LineAction {
-  return value === 'ignore' || value === 'apply_invoice' || value === 'apply_bill' || value === 'match_transfer' || value === 'personal' || value === 'intercompany_transfer' || value === 'match_intercompany' ? value : 'post';
-}
+export { toLineAction } from './line-actions';
+export type { LineAction } from './line-actions';
 
 interface ReviewState {
   readonly actions: Readonly<Record<string, LineAction>>;
