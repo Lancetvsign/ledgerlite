@@ -30,7 +30,8 @@ enforced only by application code.
 | 5 | Independent accounting review | ✓ §5b |
 | 6 | Independent data-integrity review | ✓ §5c |
 | 7 | Findings consolidated, deduplicated and re-verified by the author | ✓ §6 |
-| 8 | Human sign-off | ☐ §7 |
+| 8 | Blocking fixes (LL-100 … LL-103) merged and deployed | ✓ (#107, #108, #109, #111) |
+| 9 | Human sign-off | ☐ §7 |
 
 ## 2. What was reviewed and how
 
@@ -44,7 +45,7 @@ and concurrency cases).
 ## 3. Invariant enforcement matrix — the new surface
 
 | Invariant (AGENTS §4) | New path | Enforced by | Structural? |
-|---|---|---|---|
+|---|---|---|---|---|
 | 1 Balanced entries | assign (two entries), personal, mark, match | `postEntryCore` + deferred balance trigger, per entry | ✓ |
 | 2 Derived balances | intercompany report, in-transit figures | computed from journal lines on read; no balance column | ✓ (no column) |
 | 3 Immutability | `intercompany_group_id` | `journal_entries_immutable` lists it; unassign/give-back only by reversal | ✓ trigger |
@@ -215,31 +216,34 @@ give-back / mark / match / archive with no constructible cycle.**
 Severity is the author's after re-verifying each cited line in the LL-099 tip; every HIGH and MEDIUM was
 confirmed by reading the code (the ACTIVE filters, the missing un-mark path, the unbounded single-sided
 netting, the date-free partner lookup, the payer-receivable pair rule, the UPDATE/DELETE-only line
-trigger). Dispositions are proposals for §7; nothing has been changed on `main`.
+trigger). Dispositions were proposals for §7. **Status column added 2026-09-24:** every proposed fix has since been
+implemented and merged — LL-100 (#107), LL-101 (#108), LL-102 (#109), LL-103 (#111) — each with its own
+`/code-review high` pass, green CI and a production deploy. M5 (LL-104) and the PERSONAL rule remain the
+owner's decisions.
 
-| # | Sev | Finding (review) | Proposed disposition |
-|---|---|---|---|
-| H1 | HIGH | No correction path for a mistaken mark or match (5b H1) | **Fix now — LL-100**: `unmarkIntercompanyTransfer` (reverse this side if the group has no other side; else reverse both in one transaction with the give-back lock order, `journal.post` in both); review-page Undo on POSTED INTERCOMPANY lines; test mark → unmark → STAGED, balance 0, candidate gone. |
-| H2 | HIGH | The in-transit relaxation accepts ANY single-sided grouped entry of any amount; the badge says "Mirrored"; GL-T029 does not prove ADR-043's claim (5b H2, 5c L1) | **Fix now — LL-101**: three report states (mirrored / in transit — amber, amount and age / MISMATCH); "single-sided" tightened to an entry whose source is a POSTED statement line of the same company on the pair account; the partner lookup date-bounded (M1); the gate fails on single-sided groups older than the transfer window plus a statement lag (proposed 30 days); candidates never offered when the viewer already marked its own side; tests for unequal independent marks and a group-bearing raw one-sided insert. |
-| M1 | MEDIUM | Leave-at-zero bypassed via an INACTIVE pair after rejoin + give-back (5c M1) | **Fix now — LL-100**: leave rule counts INACTIVE pair accounts; give-back reactivates the pair; the exact sequence tested. |
-| M2 | MEDIUM | Report as-of ignores the date when deciding single-sidedness → false MISMATCH between the two statement dates (5b M1) | **Fix now — LL-101** (date-bound `not exists`; as-of test between the dates). |
-| M3 | MEDIUM | A card PAYMENT line can be taken through the shared path; GL-T029 codifies a negative expense in the taker (5b M2) | **Fix now — LL-102**: refuse/hide positive lines that have a same-company transfer candidate in the cardholder; GL-T029 matches the payment in A instead; assert the taker's P&L. |
-| M4 | MEDIUM | With pairs in both directions a repayment grosses up instead of settling (5b M3, 5b L4) | **LL-102**: prefer the pair whose balance the movement reduces; `pairAccountsFor` sees INACTIVE pairs (reactivate rather than create the reverse direction). |
-| M5 | MEDIUM | `journal_lines` accepts INSERT into a POSTED entry; the mirror is not structural against raw SQL (5c M2, 5c L4) | **Decide in §7 — LL-104** (migration): BEFORE INSERT `journal_lines_immutable` with a session-local escape (`set local ledgerlite.posting = on`) set only by `postEntryCore` / `reverseEntryCore`; `CHECK (source_type <> 'REVERSAL' or reversal_of_id is not null)`. Pre-existing invariant-3 gap, now load-bearing. |
-| M6 | MEDIUM | `transferCounterparts` unauthorized at the module root; the lint fence does not cover `shared` / `intercompany` (5a M1) | **Fix now — LL-103**: `requireCompanyMembership` inside; fence pattern extended. |
-| L1 | LOW | `?detail=` free text reflected into the shared-page notice (5a L1) | LL-103: structured `closedIn` discriminator; name resolved on render. |
-| L2 | LOW | Report keeps reading a former member's live legal name and pair account (5a L2) | LL-103: ACTIVE-pair / same-organization filter, or a "former member" label. |
-| L3 | LOW | Organization joins invisible in existing members' audit logs; pair deactivation audit lacks the leaver (5a L3, L6) | LL-103. |
-| L4 | LOW | Isolation registry lacks the report, `transferCounterparts`, the two transfer decisions, an `organizations` descriptor (5a L4) | LL-103. |
-| L5 | LOW | Org row locked before the stake is proven (timing oracle) (5a L5) | LL-103: stake query first. |
-| L6 | LOW | Give-back reversals dated in two timezones can straddle a day (5b L1) | LL-100: one reversal date, open in both. |
-| L7 | LOW | Two equal lines in one submit both target the nearest candidate (5b L2) | LL-101: allocate candidates per submit. |
-| L8 | LOW | Both sides marking independently leaves permanent in-transit both ways (5b L3, 5c L1) | LL-101: auto-link on mark to a mirror single-sided group of the same amount in the window. |
-| L9 | LOW | A card CHARGE can be marked as a transfer with no counterpart flow (5b L5) | LL-102: offer the mark only on positive card lines. |
-| L10 | LOW | Relabel test satisfied by the immutability trigger alone; DRAFT→POSTED path untested (5c L2) | LL-103: the DRAFT→POSTED relabel test. |
-| L11 | LOW | Join / leave not idempotent on retry (5c L3) | LL-103. |
-| N1–N | NOTE | Docs drift — plan §2 "(any role)", §3 Link, §4 "un-assign refused after settlement", "statement-excluded"; ADR-043's "can only be broken by…" (5a N1/N2, 5b M4, 5c N3) | **Fixed in this PR** (plan and ADR wording corrected; `docs/DATABASE.md` pointer). |
-| N | NOTE | PERSONAL allows any ASSET incl. another bank account (5b N2); negative "Due from" presentation (5b N1); pair accounts hard-coded OPERATING (5b L6); over-redacted chart number in audit (5a N4); A's line description crosses into B's entry (5a N5); orphan organizations (5c N2); period guard BEFORE INSERT only (5c N4) | Decide in §7 (item 3) for the PERSONAL rule; the rest accepted and documented. |
+| # | Sev | Finding (review) | Proposed disposition | Status (2026-09-24) |
+|---|---|---|---|---|
+| H1 | HIGH | No correction path for a mistaken mark or match (5b H1) | **Fix now — LL-100**: `unmarkIntercompanyTransfer` (reverse this side if the group has no other side; else reverse both in one transaction with the give-back lock order, `journal.post` in both); review-page Undo on POSTED INTERCOMPANY lines; test mark → unmark → STAGED, balance 0, candidate gone. | FIXED #107 (LL-100) |
+| H2 | HIGH | The in-transit relaxation accepts ANY single-sided grouped entry of any amount; the badge says "Mirrored"; GL-T029 does not prove ADR-043's claim (5b H2, 5c L1) | **Fix now — LL-101**: three report states (mirrored / in transit — amber, amount and age / MISMATCH); "single-sided" tightened to an entry whose source is a POSTED statement line of the same company on the pair account; the partner lookup date-bounded (M1); the gate fails on single-sided groups older than the transfer window plus a statement lag (proposed 30 days); candidates never offered when the viewer already marked its own side; tests for unequal independent marks and a group-bearing raw one-sided insert. | FIXED #108 (LL-101) |
+| M1 | MEDIUM | Leave-at-zero bypassed via an INACTIVE pair after rejoin + give-back (5c M1) | **Fix now — LL-100**: leave rule counts INACTIVE pair accounts; give-back reactivates the pair; the exact sequence tested. | FIXED #107 (LL-100) |
+| M2 | MEDIUM | Report as-of ignores the date when deciding single-sidedness → false MISMATCH between the two statement dates (5b M1) | **Fix now — LL-101** (date-bound `not exists`; as-of test between the dates). | FIXED #108 (LL-101) |
+| M3 | MEDIUM | A card PAYMENT line can be taken through the shared path; GL-T029 codifies a negative expense in the taker (5b M2) | **Fix now — LL-102**: refuse/hide positive lines that have a same-company transfer candidate in the cardholder; GL-T029 matches the payment in A instead; assert the taker's P&L. | FIXED #109 (LL-102) |
+| M4 | MEDIUM | With pairs in both directions a repayment grosses up instead of settling (5b M3, 5b L4) | **LL-102**: prefer the pair whose balance the movement reduces; `pairAccountsFor` sees INACTIVE pairs (reactivate rather than create the reverse direction). | FIXED #109 (LL-102) |
+| M5 | MEDIUM | `journal_lines` accepts INSERT into a POSTED entry; the mirror is not structural against raw SQL (5c M2, 5c L4) | **Decide in §7 — LL-104** (migration): BEFORE INSERT `journal_lines_immutable` with a session-local escape (`set local ledgerlite.posting = on`) set only by `postEntryCore` / `reverseEntryCore`; `CHECK (source_type <> 'REVERSAL' or reversal_of_id is not null)`. Pre-existing invariant-3 gap, now load-bearing. | OPEN — owner decision (§7 item 2, LL-104) |
+| M6 | MEDIUM | `transferCounterparts` unauthorized at the module root; the lint fence does not cover `shared` / `intercompany` (5a M1) | **Fix now — LL-103**: `requireCompanyMembership` inside; fence pattern extended. | FIXED #111 (LL-103) |
+| L1 | LOW | `?detail=` free text reflected into the shared-page notice (5a L1) | LL-103: structured `closedIn` discriminator; name resolved on render. | FIXED #111 (LL-103) |
+| L2 | LOW | Report keeps reading a former member's live legal name and pair account (5a L2) | LL-103: ACTIVE-pair / same-organization filter, or a "former member" label. | FIXED #111 (LL-103) |
+| L3 | LOW | Organization joins invisible in existing members' audit logs; pair deactivation audit lacks the leaver (5a L3, L6) | LL-103. | FIXED #111 (LL-103) |
+| L4 | LOW | Isolation registry lacks the report, `transferCounterparts`, the two transfer decisions, an `organizations` descriptor (5a L4) | LL-103. | FIXED #111 (LL-103) |
+| L5 | LOW | Org row locked before the stake is proven (timing oracle) (5a L5) | LL-103: stake query first. | FIXED #111 (LL-103) |
+| L6 | LOW | Give-back reversals dated in two timezones can straddle a day (5b L1) | LL-100: one reversal date, open in both. | FIXED #107 (LL-100) |
+| L7 | LOW | Two equal lines in one submit both target the nearest candidate (5b L2) | LL-101: allocate candidates per submit. | FIXED #108 (LL-101) |
+| L8 | LOW | Both sides marking independently leaves permanent in-transit both ways (5b L3, 5c L1) | LL-101: auto-link on mark to a mirror single-sided group of the same amount in the window. | FIXED #108 (LL-101) |
+| L9 | LOW | A card CHARGE can be marked as a transfer with no counterpart flow (5b L5) | LL-102: offer the mark only on positive card lines. | FIXED #109 (LL-102) |
+| L10 | LOW | Relabel test satisfied by the immutability trigger alone; DRAFT→POSTED path untested (5c L2) | LL-103: the DRAFT→POSTED relabel test. | FIXED #111 (LL-103) |
+| L11 | LOW | Join / leave not idempotent on retry (5c L3) | LL-103. | FIXED #111 (LL-103) |
+| N1–N | NOTE | Docs drift — plan §2 "(any role)", §3 Link, §4 "un-assign refused after settlement", "statement-excluded"; ADR-043's "can only be broken by…" (5a N1/N2, 5b M4, 5c N3) | **Fixed in this PR** (plan and ADR wording corrected; `docs/DATABASE.md` pointer). | FIXED #106 |
+| N | NOTE | PERSONAL allows any ASSET incl. another bank account (5b N2); negative "Due from" presentation (5b N1); pair accounts hard-coded OPERATING (5b L6); over-redacted chart number in audit (5a N4); A's line description crosses into B's entry (5a N5); orphan organizations (5c N2); period guard BEFORE INSERT only (5c N4) | Decide in §7 (item 3) for the PERSONAL rule; the rest accepted and documented. | OPEN — PERSONAL rule (§7 item 3); rest accepted |
 
 ## 7. Human sign-off
 
@@ -247,6 +251,8 @@ Decisions requested of the product owner:
 
 1. **Accept the proposed dispositions in §6**, or adjust severities/order. H1, H2 and M1–M3 are proposed as
    blocking: the gate passes when LL-100, LL-101 and LL-102 are merged. LL-103 (housekeeping) follows.
+   **Update 2026-09-24: all four are merged and deployed (#107, #108, #109, #111); the blocking items are
+   closed — what remains is your acceptance of the dispositions as executed.**
 2. **M5 — make line immutability structural** (`journal_lines` BEFORE INSERT guard with a session-local
    escape, LL-104). This touches the ledger engine's posting mechanics and needs plan mode; approve the
    direction or accept the gap as documented.
