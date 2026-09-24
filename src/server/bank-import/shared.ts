@@ -22,6 +22,7 @@ import { getAccountingPeriod } from '@/server/periods';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
 import { BankImportError, PeriodClosedInCompanyError } from './errors';
+import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
 import { findTransferCandidates, lockStagedLine, pickableAccounts, suggestForCompany, type PickableAccount } from './index';
 
 import type { PoolDatabase } from '@/db';
@@ -70,6 +71,8 @@ export interface SharedImportSummary {
   readonly stagedCount: number;
   /** Lines already assigned to the viewing company. */
   readonly assignedToMeCount: number;
+  /** LL-105: the viewing company's saved-but-not-taken choices on this statement. */
+  readonly draftCount: number;
 }
 
 export interface SharedLineView {
@@ -85,6 +88,8 @@ export interface SharedLineView {
   /** When assigned to the viewer: the viewer's expense account and entry. */
   readonly assignedAccountId: string | null;
   readonly assignedJournalEntryId: string | null;
+  /** LL-105: the viewing company's saved tick + account for an untaken line, if any. */
+  readonly draft: LineDraft | null;
 }
 
 export interface SharedImportBatchView {
@@ -95,7 +100,7 @@ export interface SharedImportBatchView {
   readonly pickable: readonly PickableAccount[];
 }
 
-interface VisibleBatch {
+export interface VisibleBatch {
   readonly id: string;
   readonly ownerCompanyId: string;
   readonly ownerLegalName: string;
@@ -108,7 +113,7 @@ interface VisibleBatch {
 }
 
 /** The batches of other members that the actor may take lines from, into `viewerCompanyId`. */
-async function visibleBatches(actorUserId: string, viewerCompanyId: string, batchId?: string): Promise<VisibleBatch[]> {
+export async function visibleBatches(actorUserId: string, viewerCompanyId: string, batchId?: string): Promise<VisibleBatch[]> {
   const db = getDb();
   const viewer = (
     await db
@@ -185,8 +190,9 @@ async function lineCounts(batches: readonly VisibleBatch[], viewerCompanyId: str
   return out;
 }
 
-function toSummary(v: VisibleBatch, counts: { staged: number; mine: number } | undefined): SharedImportSummary {
+function toSummary(v: VisibleBatch, counts: { staged: number; mine: number } | undefined, draftCount = 0): SharedImportSummary {
   return {
+    draftCount,
     batchId: v.id,
     ownerCompanyId: v.ownerCompanyId,
     ownerLegalName: v.ownerLegalName,
@@ -204,7 +210,8 @@ export async function listSharedImports(actorUserId: string, viewerCompanyId: st
   await requirePermission(actorUserId, viewerCompanyId, 'journal.post');
   const batches = await visibleBatches(actorUserId, viewerCompanyId);
   const counts = await lineCounts(batches, viewerCompanyId);
-  return batches.map((v) => toSummary(v, counts.get(v.id)));
+  const drafts = await draftCountsByBatch(getDb(), viewerCompanyId, batches.map((v) => v.id));
+  return batches.map((v) => toSummary(v, counts.get(v.id), drafts.get(v.id) ?? 0));
 }
 
 /** One shared statement as seen from the viewer: untaken lines and the viewer's own; null when invisible. */
@@ -254,9 +261,10 @@ export async function getSharedImportBatch(
     for (const r of rows) accountByEntry.set(r.entryId, r.accountId);
   }
   const counts = await lineCounts([visible], viewerCompanyId);
+  const drafts = await draftsFor(db, viewerCompanyId, lines.filter((x) => x.status === 'STAGED').map((x) => x.id));
 
   return {
-    batch: toSummary(visible, counts.get(visible.id)),
+    batch: toSummary(visible, counts.get(visible.id), drafts.size),
     viewerCompanyId,
     pickable,
     lines: lines.map((x) => ({
@@ -270,6 +278,7 @@ export async function getSharedImportBatch(
       suggestedAccountId: x.status === 'STAGED' ? (suggestions.get(x.description ?? '') ?? null) : null,
       assignedAccountId: x.assignedJournalEntryId === null ? null : (accountByEntry.get(x.assignedJournalEntryId) ?? null),
       assignedJournalEntryId: x.assignedJournalEntryId,
+      draft: drafts.get(x.id) ?? null,
     })),
   };
 }

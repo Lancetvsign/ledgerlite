@@ -182,6 +182,64 @@ export const bankImportLines = pgTable(
   ],
 );
 
+/**
+ * LL-105 (ADR-045): a reviewer's saved-but-not-posted choice for one STAGED line, kept per
+ * DRAFTING COMPANY — the cardholder on its own review screen, a member company on the shared
+ * "take" screen (cross-company by design, like `assigned_company_id`). Scratch state, never a
+ * posting: the account is composite-FK'd to the drafting company's chart, the document and
+ * counterpart are re-validated when the line finally posts, and the row lives only while the
+ * line is STAGED — the 0043 triggers refuse a draft for a decided line and drop the drafts of a
+ * line the moment it leaves STAGED. Deleting a line (batch delete, purge) cascades.
+ */
+export const bankImportDraftAction = pgEnum('bank_import_draft_action', [
+  'post',
+  'ignore',
+  'apply_invoice',
+  'apply_bill',
+  'match_transfer',
+  'personal',
+  'intercompany_transfer',
+  'match_intercompany',
+  'take',
+  'skip',
+]);
+
+export const bankImportLineDrafts = pgTable(
+  'bank_import_line_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    lineId: uuid('line_id')
+      .notNull()
+      .references(() => bankImportLines.id, { onDelete: 'cascade' }),
+    /** The company whose reviewer saved the choice (batch owner, or the viewing member). */
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'restrict' }),
+    action: bankImportDraftAction('action').notNull(),
+    /** The drafting company's own account (composite FK) — or null when none was picked. */
+    accountId: uuid('account_id'),
+    /** An open invoice / bill of the drafting company; a scratch pointer, validated at post time. */
+    documentId: uuid('document_id'),
+    /** intercompany_transfer: the other company chosen so far, if any. SET NULL: a draft is scratch and must never block a purge. */
+    counterpartCompanyId: uuid('counterpart_company_id').references(() => companies.id, { onDelete: 'set null' }),
+    updatedBy: uuid('updated_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique('bank_import_line_drafts_line_company_unique').on(table.lineId, table.companyId),
+    foreignKey({
+      columns: [table.companyId, table.accountId],
+      foreignColumns: [accounts.companyId, accounts.id],
+      name: 'bank_import_line_drafts_account_same_company_fk',
+    }).onDelete('restrict'),
+    index('bank_import_line_drafts_company_line_idx').on(table.companyId, table.lineId),
+  ],
+);
+
 export type BankImportBatch = typeof bankImportBatches.$inferSelect;
 export type BankImportLine = typeof bankImportLines.$inferSelect;
 export type BankImportLineStatus = (typeof bankImportLineStatus.enumValues)[number];
+export type BankImportLineDraft = typeof bankImportLineDrafts.$inferSelect;
+export type BankImportDraftAction = (typeof bankImportDraftAction.enumValues)[number];

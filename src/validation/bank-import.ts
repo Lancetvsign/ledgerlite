@@ -62,6 +62,12 @@ const decisionSchema = z.object({
   counterpartLineId: z.uuid().optional(),
   /** intercompany_transfer (LL-099): the other company of the organization this money moved to/from. */
   counterpartCompanyId: z.uuid().optional(),
+  /**
+   * intercompany_transfer (LL-106): instead of a company, the OTHER company's still-staged
+   * bank-statement line that is the other side of this movement; the service resolves and
+   * re-proves the company from it.
+   */
+  counterpartStatementLineId: z.uuid().optional(),
   /** match_intercompany (LL-099): the other company's already-posted INTERCOMPANY entry for this movement. */
   counterpartEntryId: z.uuid().optional(),
 });
@@ -71,6 +77,30 @@ export const postImportLinesInput = z.object({
 });
 export type PostImportLinesInput = z.infer<typeof postImportLinesInput>;
 export type ImportLineDecision = z.infer<typeof decisionSchema>;
+
+/**
+ * LL-105: a reviewer's saved-but-not-posted choices (one per staged line) — the review screen's
+ * autosave. Same shape as a decision minus the transfer counterpart line/entry ids (those are
+ * recomputed on render); an empty save is a no-op. Nothing here posts.
+ */
+export const saveReviewDraftsInput = z.object({
+  drafts: z.array(
+    z.object({
+      lineId: z.uuid(),
+      action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill', 'match_transfer', 'personal', 'intercompany_transfer', 'match_intercompany']),
+      accountId: z.uuid().optional(),
+      documentId: z.uuid().optional(),
+      counterpartCompanyId: z.uuid().optional(),
+    }),
+  ),
+});
+export type SaveReviewDraftsInput = z.infer<typeof saveReviewDraftsInput>;
+
+/** LL-105: the shared "take" screen's saved choices — tick + the viewing company's account. */
+export const saveSharedDraftsInput = z.object({
+  drafts: z.array(z.object({ lineId: z.uuid(), take: z.boolean(), accountId: z.uuid().optional() })),
+});
+export type SaveSharedDraftsInput = z.infer<typeof saveSharedDraftsInput>;
 
 /** LL-097: from a member company, take STAGED lines of a shared card statement as its own expenses. */
 export const assignSharedLinesInput = z.object({

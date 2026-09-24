@@ -22,7 +22,8 @@ import { getAccountingPeriod } from '@/server/periods';
 import { extractedTransactionsSchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
-import { auditIntercompanyLine, findIntercompanyCandidates, markIntercompanyTransfer, matchIntercompanyTransfer, transferCounterparts, type IntercompanyCandidate } from './intercompany';
+import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
+import { auditIntercompanyLine, findIntercompanyCandidates, findOrganizationStatementMatches, markIntercompanyTransfer, matchIntercompanyTransfer, statementCounterpartFor, transferCounterparts, type IntercompanyCandidate, type OrganizationMatch } from './intercompany';
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
 
@@ -316,6 +317,10 @@ export interface ImportLineView extends BankImportLine {
   readonly intercompanyCandidate: IntercompanyCandidate | null;
   /** For a POSTED line: the source of its entry — 'INTERCOMPANY' means it can be un-marked (LL-100). */
   readonly postedSource: string | null;
+  /** LL-105: this company's saved-but-not-posted choice for a STAGED line, if any. */
+  readonly draft: LineDraft | null;
+  /** LL-106: the other members' statement lines that mirror this one (nearest first). */
+  readonly organizationMatches: readonly OrganizationMatch[];
 }
 
 export interface TransferCandidate {
@@ -419,8 +424,11 @@ export async function getImportBatch(
     target.set(r.hash, set);
   }
 
-  const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
+  const stagedIds = lines.filter((l) => l.status === 'STAGED').map((l) => l.id);
+  const candidates = await findTransferCandidates(companyId, batch.bankAccountId, stagedIds);
   const icCandidates = await findIntercompanyCandidates(actorUserId, companyId, lines);
+  const drafts = await draftsFor(db, companyId, stagedIds);
+  const orgMatches = await findOrganizationStatementMatches(actorUserId, companyId, lines);
   const entryIds = lines.map((l) => l.journalEntryId).filter((id): id is string => id !== null);
   const sourceByEntry = new Map(
     entryIds.length === 0
@@ -447,20 +455,56 @@ export async function getImportBatch(
         assignedCompanyName: l.assignedCompanyId === null ? null : (assignedNames.get(l.assignedCompanyId) ?? null),
         intercompanyCandidate: icCandidates.get(l.id) ?? null,
         postedSource: l.journalEntryId === null ? null : (sourceByEntry.get(l.journalEntryId) ?? null),
+        draft: drafts.get(l.id) ?? null,
+        organizationMatches: orgMatches.get(l.id) ?? [],
       };
     }),
   };
 }
 
-/** Recent batches for the upload page. */
-export async function listImportBatches(actorUserId: string, companyId: string): Promise<BankImportBatch[]> {
+/** LL-105: where a statement's review stands — derived from its lines and this company's drafts. */
+export type ReviewStatus = 'new' | 'in_progress' | 'complete';
+
+export interface ImportBatchSummary extends BankImportBatch {
+  readonly stagedCount: number;
+  /** Lines that left STAGED (posted, personal, taken, ignored). */
+  readonly decidedCount: number;
+  readonly draftCount: number;
+  readonly reviewStatus: ReviewStatus;
+}
+
+export function reviewStatusOf(c: { stagedCount: number; decidedCount: number; draftCount: number }): ReviewStatus {
+  if (c.stagedCount === 0) return 'complete';
+  if (c.draftCount > 0 || c.decidedCount > 0) return 'in_progress';
+  return 'new';
+}
+
+/** Recent batches for the upload page, each with its review status (LL-105). */
+export async function listImportBatches(actorUserId: string, companyId: string): Promise<ImportBatchSummary[]> {
   await requirePermission(actorUserId, companyId, 'journal.post');
-  return await getDb()
+  const db = getDb();
+  const batches = await db
     .select()
     .from(schema.bankImportBatches)
     .where(eq(schema.bankImportBatches.companyId, companyId))
     .orderBy(desc(schema.bankImportBatches.createdAt))
     .limit(20);
+  if (batches.length === 0) return [];
+  const ids = batches.map((b) => b.id);
+  const counts = new Map<string, { staged: number; decided: number }>();
+  const rows = await db.execute<{ batch_id: string; staged: string; decided: string }>(sql`
+    select batch_id::text as batch_id,
+           count(*) filter (where status = 'STAGED')::text as staged,
+           count(*) filter (where status <> 'STAGED')::text as decided
+    from bank_import_lines
+    where company_id = ${companyId} and batch_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    group by batch_id`);
+  for (const r of rows.rows) counts.set(r.batch_id, { staged: Number(r.staged), decided: Number(r.decided) });
+  const drafts = await draftCountsByBatch(db, companyId, ids);
+  return batches.map((b) => {
+    const c = { stagedCount: counts.get(b.id)?.staged ?? 0, decidedCount: counts.get(b.id)?.decided ?? 0, draftCount: drafts.get(b.id) ?? 0 };
+    return { ...b, ...c, reviewStatus: reviewStatusOf(c) };
+  });
 }
 
 export interface PostImportResult {
@@ -668,8 +712,17 @@ export async function postImportLines(
       }
       plan = { kind: 'post', line, accountId: d.accountId, personal: true };
     } else if (d.action === 'intercompany_transfer') {
-      // LL-099: this company's side of money moved to/from another member company.
-      const cp = counterparts.find((c) => c.id === d.counterpartCompanyId);
+      // LL-099: this company's side of money moved to/from another member company. LL-106: the
+      // company is named either by the OTHER company's staged statement line (re-proven from the
+      // database — never a guessed id) or, as a last resort, by a company picker.
+      if (d.counterpartStatementLineId === undefined && d.counterpartCompanyId === undefined) {
+        throw new BankImportError('COUNTERPART_REQUIRED', `Line ${n}: still waiting for the other company's statement — nothing to match yet.`);
+      }
+      const resolved = d.counterpartStatementLineId === undefined ? null : await statementCounterpartFor(actorUserId, companyId, line, d.counterpartStatementLineId, counterparts);
+      if (d.counterpartStatementLineId !== undefined && resolved === null) {
+        throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: that statement line is no longer the other side of this movement — check again.`);
+      }
+      const cp = counterparts.find((c) => c.id === (resolved ?? d.counterpartCompanyId));
       if (cp === undefined) {
         throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: choose a company of your organization you can post in.`);
       }
@@ -1089,4 +1142,6 @@ export async function setBatchSharing(
 
 export * from './shared';
 export { transferCounterparts, unmarkIntercompanyTransfer } from './intercompany';
-export type { IntercompanyCandidate, MemberCompany as TransferCounterpart } from './intercompany';
+export { saveReviewDrafts, saveSharedDrafts } from './drafts';
+export type { LineDraft } from './drafts';
+export type { IntercompanyCandidate, MemberCompany as TransferCounterpart, OrganizationMatch } from './intercompany';

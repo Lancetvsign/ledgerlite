@@ -6,13 +6,13 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
-import { postImportLinesInput, stageImportInput } from '@/validation/bank-import';
+import { postImportLinesInput, saveReviewDraftsInput, stageImportInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
 
 /**
@@ -36,6 +36,24 @@ async function requireContext(): Promise<{ userId: string; companyId: string }> 
 function opt(v: FormDataEntryValue | null): string | undefined {
   const s = typeof v === 'string' ? v.trim() : '';
   return s === '' ? undefined : s;
+}
+
+/**
+ * LL-106: the row's counterpart select carries either a match found on the other company's
+ * statement (`line:<lineId>:<companyId>`) or a plain company pick (`company:<id>`); empty means
+ * the line is still waiting for a match. The service re-proves whichever arrives.
+ */
+function parseCounterpart(v: FormDataEntryValue | null | undefined): { counterpartCompanyId?: string; counterpartStatementLineId?: string } {
+  const s = typeof v === 'string' ? v.trim() : '';
+  if (s.startsWith('line:')) {
+    const [, lineId, companyId] = s.split(':');
+    return { ...(lineId !== undefined && lineId !== '' ? { counterpartStatementLineId: lineId } : {}), ...(companyId !== undefined && companyId !== '' ? { counterpartCompanyId: companyId } : {}) };
+  }
+  if (s.startsWith('company:')) {
+    const id = s.slice('company:'.length);
+    return id === '' ? {} : { counterpartCompanyId: id };
+  }
+  return {};
 }
 
 export async function uploadStatementAction(formData: FormData): Promise<void> {
@@ -89,16 +107,21 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const documentIds = formData.getAll('documentId');
   const counterpartIds = formData.getAll('counterpartLineId');
   const counterpartEntryIds = formData.getAll('counterpartEntryId');
-  const counterpartCompanyIds = formData.getAll('counterpartCompanyId');
-  const decisions = lineIds.map((lineId, i) => ({
+  const counterparts = formData.getAll('counterpart');
+  const all = lineIds.map((lineId, i) => ({
     lineId: typeof lineId === 'string' ? lineId : '',
     action: typeof actions[i] === 'string' ? actions[i] : 'post',
     accountId: opt(accountIds[i] ?? null),
     documentId: opt(documentIds[i] ?? null),
     counterpartLineId: opt(counterpartIds[i] ?? null),
     counterpartEntryId: opt(counterpartEntryIds[i] ?? null),
-    counterpartCompanyId: opt(counterpartCompanyIds[i] ?? null),
+    ...parseCounterpart(counterparts[i]),
   }));
+  // LL-106: a transfer still waiting for the other company's statement is not submitted — it
+  // stays a draft and the notice says so; the service would refuse it (COUNTERPART_REQUIRED).
+  const waiting = all.filter((d) => d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined).length;
+  const decisions = all.filter((d) => !(d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined));
+  if (decisions.length === 0) redirect(`/bank-import/${batchId}?ok=posted&posted=0&ignored=0&waiting=${String(waiting)}`);
 
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
@@ -120,8 +143,45 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}`,
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}&waiting=${String(waiting)}`,
   );
+}
+
+/**
+ * Saves the review screen's current choices as drafts — LL-105. Called by the autosaver with
+ * the form serialised exactly as a submit would be; never posts, never redirects (the page
+ * stays put), and any failure is reported as `ok: false` for the status text — an autosave
+ * must not throw the reviewer off the page.
+ */
+export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: true; saved: number } | { ok: false }> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) return { ok: false };
+  const lineIds = formData.getAll('lineId');
+  const actions = formData.getAll('action');
+  const accountIds = formData.getAll('accountId');
+  const documentIds = formData.getAll('documentId');
+  const counterparts = formData.getAll('counterpart');
+  const parsed = saveReviewDraftsInput.safeParse({
+    drafts: lineIds.map((lineId, i) => {
+      const { counterpartCompanyId } = parseCounterpart(counterparts[i]);
+      return {
+        lineId: typeof lineId === 'string' ? lineId : '',
+        action: typeof actions[i] === 'string' ? actions[i] : 'post',
+        accountId: opt(accountIds[i] ?? null),
+        documentId: opt(documentIds[i] ?? null),
+        ...(counterpartCompanyId === undefined ? {} : { counterpartCompanyId }),
+      };
+    }),
+  });
+  if (!parsed.success) return { ok: false };
+  try {
+    const { saved } = await saveReviewDrafts(userId, companyId, batchId, parsed.data);
+    return { ok: true, saved };
+  } catch (error) {
+    if (error instanceof AuthorizationDenied || error instanceof BankImportError) return { ok: false };
+    throw error;
+  }
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */

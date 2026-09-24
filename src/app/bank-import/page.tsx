@@ -12,6 +12,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
 import { uploadStatementAction } from './actions';
+import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from './review-status';
 import { UploadSubmitButton } from './upload-submit-button';
 
 /**
@@ -116,7 +117,7 @@ export default async function BankImportPage({
                   <Link href={`/bank-import/shared/${b.batchId}`} data-testid="shared-link" className="underline">
                     {b.ownerLegalName} — {b.accountName} — {b.filename ?? 'statement'}
                   </Link>{' '}
-                  <span className="text-neutral-500">· {String(b.stagedCount)} untaken · {String(b.assignedToMeCount)} yours</span>
+                  <span className="text-neutral-500">· {String(b.stagedCount)} untaken · {String(b.assignedToMeCount)} yours{b.draftCount > 0 ? ' · in progress' : ''}</span>
                 </li>
               ))}
             </ul>
@@ -131,10 +132,17 @@ export default async function BankImportPage({
         ) : (
           <ul className="flex flex-col gap-1 text-sm" data-testid="batch-list">
             {batches.map((b) => (
-              <li key={b.id}>
+              <li key={b.id} className="flex flex-wrap items-center gap-2">
                 <Link href={`/bank-import/${b.id}`} data-testid="batch-link" className="underline">
                   {b.filename ?? 'statement'} — {nameById.get(b.bankAccountId) ?? b.bankAccountId}
                 </Link>
+                {/* LL-105: where the review stands — a saved draft counts as progress. */}
+                <span data-testid="batch-status" data-status={b.reviewStatus} className={`rounded px-1.5 py-0.5 text-xs ${REVIEW_STATUS_CLASS[b.reviewStatus]}`}>
+                  {REVIEW_STATUS_TEXT[b.reviewStatus]}
+                </span>
+                <span className="text-xs text-neutral-500">
+                  {String(b.stagedCount)} to review · {String(b.decidedCount)} done
+                </span>
               </li>
             ))}
           </ul>

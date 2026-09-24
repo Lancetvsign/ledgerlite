@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -827,6 +827,17 @@ const REGISTRY: IsolationDescriptor[] = [
           return await assignSharedLines(attacker, own.rows[0]?.company_id ?? attacker, recordId, { decisions: [{ lineId: line.rows[0]?.id ?? recordId, accountId: recordId }] });
         },
       },
+      // LL-105: review drafts are scoped like the screens they belong to.
+      {
+        operation: 'save review drafts on it (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => saveReviewDrafts(attacker, victim.companyId, recordId, { drafts: [] }),
+      },
+      {
+        operation: 'save shared-screen drafts on it as if viewing from the victim company',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => saveSharedDrafts(attacker, victim.companyId, recordId, { drafts: [] }),
+      },
       {
         operation: 'give a line of it back from the attacker company',
         expect: 'denied',
@@ -836,6 +847,47 @@ const REGISTRY: IsolationDescriptor[] = [
           const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
           const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
           return await unassignSharedLine(attacker, own.rows[0]?.company_id ?? attacker, recordId, line.rows[0]?.id ?? recordId);
+        },
+      },
+    ],
+  },
+  {
+    // LL-105: a saved-but-not-posted review choice on a staged line of the victim company.
+    // Drafts are per drafting company and are read only through the batch views.
+    table: 'bank_import_line_drafts',
+    seed: async (victim) => {
+      const db = await getTestDb();
+      const line = (await db.execute<{ id: string; batch_id: string }>(
+        sql`select id, batch_id from bank_import_lines where company_id = ${victim.companyId} and status = 'STAGED' limit 1`)).rows[0];
+      if (line === undefined) throw new Error('bank_import_line_drafts seed expects the batches descriptor to have run first');
+      await saveReviewDrafts(victim.ownerUserId, victim.companyId, line.batch_id, { drafts: [{ lineId: line.id, action: 'ignore' }] });
+      const draft = (await db.execute<{ id: string }>(
+        sql`select id from bank_import_line_drafts where company_id = ${victim.companyId} and line_id = ${line.id}`)).rows[0];
+      if (draft === undefined) throw new Error('the seed draft was not saved');
+      return { recordId: `${line.batch_id}:${line.id}` };
+    },
+    attempts: [
+      {
+        operation: 'overwrite the victim company\'s draft (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return saveReviewDrafts(attacker, victim.companyId, batchId ?? '', { drafts: [{ lineId: lineId ?? '', action: 'post' }] });
+        },
+      },
+      {
+        operation: 'read the victim company\'s draft through the batch view',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getImportBatch(attacker, victim.companyId, recordId.split(':')[0] ?? ''),
+      },
+      {
+        operation: 'drafts are per company; none of the victim\'s ever appears under the attacker company',
+        expect: 'empty',
+        run: async (attacker) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return (await db.execute<{ id: string }>(rawSql`select id from bank_import_line_drafts where company_id = ${own.rows[0]?.company_id ?? attacker}`)).rows;
         },
       },
     ],

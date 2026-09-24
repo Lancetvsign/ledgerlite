@@ -261,7 +261,7 @@ concurrency rather than only reasoned about.
 
 > The tables are documented per ticket: see `docs/tickets/` and the ADRs (ADR-043 for `organizations`,
 > the intercompany columns on `accounts`, `journal_entries.intercompany_group_id` and the LL-097 columns on
-> `bank_import_lines`). The paragraph below is the original bootstrap note.
+> `bank_import_lines`; ADR-045 for `bank_import_line_drafts`). The paragraph below is the original bootstrap note.
 
 One table, `_health`, created by `0000_initial_health_probe`. It is a connectivity probe
 and deliberately not an accounting entity — it exists so LL-002 could prove the migration

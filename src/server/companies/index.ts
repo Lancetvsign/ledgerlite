@@ -181,6 +181,7 @@ export async function hasActiveMembership(userId: string, companyId: string): Pr
 export const PURGE_ORDER = [
   'bank_reconciliation_lines',
   'bank_reconciliations',
+  'bank_import_line_drafts',
   'bank_import_lines',
   'bank_import_batches',
   'payment_applications',

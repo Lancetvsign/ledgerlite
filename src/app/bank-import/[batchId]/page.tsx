@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, transferCounterparts, type ImportLineView } from '@/server/bank-import';
+import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listOpenBills } from '@/server/bill-payments';
 import { listCustomers } from '@/server/customers';
@@ -18,12 +18,15 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
+import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
-import { LineCounterpartSelect } from './line-counterpart';
+import { LineCounterpartSelect, type CounterpartOption } from './line-counterpart';
 import { LineActionControls } from './line-action';
-import { ReviewStateProvider, type LineAction } from './review-state';
+import { toLineAction, type LineAction } from './line-actions';
+import { ReviewStateProvider } from './review-state';
 
 /**
  * Bank-statement import — review (LL-076, LL-077). The human gate: every staged line shows
@@ -49,7 +52,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -140,23 +143,72 @@ export default async function ReviewImportPage({
     };
   };
 
-  // The client-side review state starts from the server's suggestion per STAGED line (LL-089).
+  // The client-side review state starts from the server's suggestion per STAGED line (LL-089)…
   const defaultActions: Record<string, LineAction> = Object.fromEntries(
     view.lines.flatMap((l, i) => (l.status === 'STAGED' ? [[String(i), suggestionFor(l).action]] : [])),
   );
+  // …unless a draft was saved (LL-105): the page opens where the reviewer left off. A draft
+  // action the row can no longer offer (its candidate vanished) falls back to the suggestion.
+  const allowedFor = (l: ImportLineView, s: { moneyIn: boolean }): Set<LineAction> => {
+    const allowed = new Set<LineAction>(['post', 'ignore']);
+    if (personalDefault !== null) allowed.add('personal');
+    if (l.intercompanyCandidate !== null) allowed.add('match_intercompany');
+    if (counterparts.length > 0 && (!isCard || s.moneyIn)) allowed.add('intercompany_transfer');
+    if (l.transferCandidate?.status === 'POSTED') allowed.add('match_transfer');
+    if (!isCard) allowed.add(s.moneyIn ? 'apply_invoice' : 'apply_bill');
+    return allowed;
+  };
+  const initialActions: Record<string, LineAction> = Object.fromEntries(
+    view.lines.flatMap((l, i) => {
+      if (l.status !== 'STAGED') return [];
+      const s = suggestionFor(l);
+      const draft = l.draft === null ? null : toLineAction(l.draft.action);
+      return [[String(i), draft !== null && allowedFor(l, s).has(draft) ? draft : s.action]];
+    }),
+  );
+  const draftCount = view.lines.filter((l) => l.status === 'STAGED' && l.draft !== null).length;
+
+  // LL-106: the other side of a movement, found on the other members' statements. A staged line
+  // there is offered first (choosing it marks OUR side now; their reviewer sees the match);
+  // the plain company picker stays as a last resort; a card payment with nothing to match yet
+  // WAITS (a draft the submit skips) and the page re-reads the server while anything waits.
+  const counterpartOptionsFor = (l: ImportLineView): CounterpartOption[] => [
+    ...l.organizationMatches
+      .filter((m) => m.status === 'staged')
+      .map((m) => ({ value: `line:${m.lineId}:${m.companyId}`, label: `${m.legalName} · ${m.accountName} · ${m.txnDate} · not yet reviewed there` })),
+    ...counterparts.map((c) => ({ value: `company:${c.id}`, label: `${c.legalName} — no statement line found` })),
+  ];
+  const initialCounterpartFor = (l: ImportLineView, moneyIn: boolean): string => {
+    const stagedMatches = l.organizationMatches.filter((m) => m.status === 'staged');
+    const draftCompany = l.draft?.counterpartCompanyId ?? null;
+    const fromDraft = draftCompany === null ? undefined : stagedMatches.find((m) => m.companyId === draftCompany);
+    if (fromDraft !== undefined) return `line:${fromDraft.lineId}:${fromDraft.companyId}`;
+    if (draftCompany !== null && counterparts.some((c) => c.id === draftCompany)) return `company:${draftCompany}`;
+    const first = stagedMatches[0];
+    if (first !== undefined) return `line:${first.lineId}:${first.companyId}`;
+    if (isCard && moneyIn) return ''; // wait for the other statement rather than guess
+    return counterparts[0] === undefined ? '' : `company:${counterparts[0].id}`;
+  };
+  const waiting = view.lines.filter((l, i) => l.status === 'STAGED' && initialActions[String(i)] === 'intercompany_transfer' && initialCounterpartFor(l, toMoney(l.amount).isPositive()) === '').length;
   const staged = view.lines.filter((l) => l.status === 'STAGED').length;
   const posted = view.lines.filter((l) => l.status === 'POSTED').length;
   const personal = view.lines.filter((l) => l.status === 'PERSONAL').length;
   const assigned = view.lines.filter((l) => l.status === 'ASSIGNED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
   const decided = posted + personal + assigned;
+  const reviewStatus = reviewStatusOf({ stagedCount: staged, decidedCount: decided + ignored, draftCount });
 
   const selectClass = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Review import</h1>
+        <h1 className="flex items-center gap-3 text-2xl font-semibold">
+          Review import
+          <span data-testid="review-status" data-status={reviewStatus} className={`rounded px-2 py-0.5 text-xs font-medium ${REVIEW_STATUS_CLASS[reviewStatus]}`}>
+            {REVIEW_STATUS_TEXT[reviewStatus]}
+          </span>
+        </h1>
         <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
       </header>
 
@@ -189,8 +241,14 @@ export default async function ReviewImportPage({
 
       <form action={postImportLinesAction} data-testid="review-form" className="flex flex-col gap-4">
         <input type="hidden" name="batchId" value={view.batch.id} />
-        <ReviewStateProvider defaults={defaultActions}>
-        {staged > 0 && <BulkControls />}
+        <ReviewStateProvider defaults={defaultActions} initial={initialActions}>
+        {staged > 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            <BulkControls />
+            {/* LL-105: every change is saved as a draft; leaving the page loses nothing. */}
+            <Autosave action={saveReviewDraftsAction} waiting={waiting} />
+          </div>
+        )}
         <table className="w-full border-collapse text-sm" data-testid="import-lines">
           <thead>
             <tr className="border-b border-neutral-300 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-700">
@@ -222,6 +280,17 @@ export default async function ReviewImportPage({
                         {`transfer posted by ${l.intercompanyCandidate.counterpartLegalName} on ${l.intercompanyCandidate.txnDate}`}
                       </span>
                     )}
+                    {l.status === 'STAGED' && l.organizationMatches.some((m) => m.status === 'staged') && (
+                      // LL-106: the other side sits on another company's statement, not yet reviewed there.
+                      <span data-testid="organization-match-flag" className="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-900 dark:bg-violet-900 dark:text-violet-100">
+                        {(() => { const m = l.organizationMatches.find((x) => x.status === 'staged')!; return `on ${m.legalName}'s ${m.accountName} statement, ${m.txnDate}`; })()}
+                      </span>
+                    )}
+                    {l.status === 'STAGED' && l.intercompanyCandidate === null && l.organizationMatches.some((m) => m.status === 'decided') && (
+                      <span data-testid="organization-decided-flag" className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        {(() => { const m = l.organizationMatches.find((x) => x.status === 'decided')!; return `${m.legalName} already ${m.detail ?? 'decided'} its side (${m.txnDate}) — undo it there first`; })()}
+                      </span>
+                    )}
                     {l.transferCandidate !== null && (
                       <span data-testid="transfer-flag" className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-900 dark:bg-sky-900 dark:text-sky-100">
                         {l.transferCandidate.status === 'POSTED'
@@ -239,17 +308,20 @@ export default async function ReviewImportPage({
                         <input type="hidden" name="lineId" value={l.id} />
                         <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
                         <input type="hidden" name="counterpartEntryId" value={l.intercompanyCandidate?.entryId ?? ''} />
-                        {counterparts.length > 0 && <LineCounterpartSelect index={i} options={counterparts} />}
+                        {counterparts.length > 0 && (
+                          <LineCounterpartSelect index={i} options={counterpartOptionsFor(l)} initialValue={initialCounterpartFor(l, s.moneyIn)} offerWaiting={isCard && s.moneyIn} />
+                        )}
                         <LineAccountSelect
                           index={i}
                           options={pickableOptions}
                           suggestedId={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.accountId : (l.suggestedAccountId ?? '')}
                           personalDefaultId={personalDefault?.id ?? null}
+                          initialId={initialActions[String(i)] === (l.draft === null ? null : toLineAction(l.draft.action)) ? (l.draft?.accountId ?? null) : null}
                         />
                       </td>
                       <td className="py-2 pr-2">
                         {!isCard && (
-                          <select name="documentId" defaultValue={s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
+                          <select name="documentId" defaultValue={l.draft?.documentId ?? s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
                             <option value="">{s.moneyIn ? 'Open invoice…' : 'Open bill…'}</option>
                             {s.options.map((o) => (
                               <option key={o.id} value={o.id}>{o.label}</option>
@@ -264,6 +336,7 @@ export default async function ReviewImportPage({
                           allowApply={!isCard}
                           allowPersonal={personalDefault !== null}
                           allowIntercompany={counterparts.length > 0 && (!isCard || s.moneyIn)}
+                          intercompanyLabel={isCard ? 'Paid by another company…' : 'Transfer with another company…'}
                           {...(l.intercompanyCandidate !== null ? { intercompanyMatchLabel: `Match transfer posted by ${l.intercompanyCandidate.counterpartLegalName}` } : {})}
                           {...(l.transferCandidate?.status === 'POSTED'
                             ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
@@ -350,7 +423,7 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
@@ -362,9 +435,11 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
       (applied === '0' ? '' : ` ${applied} applied to open invoices/bills.`) +
       (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`) +
       (personal === '0' ? '' : ` ${personal} marked personal.`) +
-      (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`)
+      (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`) +
+      (sp.waiting === undefined || sp.waiting === '0' ? '' : ` ${sp.waiting} still waiting for another company's statement — not posted.`)
     );
   }
+  if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
   if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
   if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';
