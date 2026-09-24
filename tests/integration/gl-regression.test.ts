@@ -57,7 +57,7 @@ import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
 
-import { assignSharedLines, getImportBatch, postImportLines, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, getSharedImportBatch, postImportLines, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { cannedExtractor } from '@/server/bank-import/extract';
 
 import { getTestDb, truncateAll } from '../helpers/database';
@@ -930,16 +930,38 @@ describe('GL regression suite (release-blocking)', () => {
     const expenseOf = async (companyId: string): Promise<string> =>
       (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${companyId} and account_type = 'EXPENSE' and status = 'ACTIVE' order by account_number limit 1`)).rows[0]!.id;
 
-    // A shared card statement (−120.50, −45.00, +2000): B takes two lines, C takes the refund-shaped payment; B gives one back.
-    const batch = await stageImport(userId, a, { bankAccountId: card.id, filename: 'visa.pdf', fileBytes: new Uint8Array(), shareWithOrganization: true }, cannedExtractor);
+    // A shared card statement (−120.50, −45.00, +2000 PAYMENT, +30 REFUND). A's own bank statement carries
+    // the −2000 card payment and is posted first, so the card's +2000 is the cardholder's to MATCH (LL-094),
+    // never another company's to take (LL-102). B takes two charges and gives one back; C takes the refund.
+    const bankA0 = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${a} and account_number = '1000'`)).rows[0]!.id;
+    const bankBatch = await stageImport(userId, a, { bankAccountId: bankA0, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-06-05', description: 'CARD PAYMENT', amount: '-2000.00' }]));
+    const bankLine = (await getImportBatch(userId, a, bankBatch.id))!.lines[0]!;
+    await postImportLines(userId, a, bankBatch.id, { decisions: [{ lineId: bankLine.id, action: 'post', accountId: card.id }] });
+    const cardRows = () => Promise.resolve([
+      { date: '2026-06-02', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+      { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
+      { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
+      { date: '2026-06-06', description: 'REFUND OFFICE DEPOT', amount: '30.00', category: 'Office Supplies' },
+    ]);
+    const batch = await stageImport(userId, a, { bankAccountId: card.id, filename: 'visa.pdf', fileBytes: new Uint8Array(), shareWithOrganization: true }, cardRows);
     const lines = (await getImportBatch(userId, a, batch.id))!.lines;
+    expect(lines[2]!.transferCandidate?.status).toBe('POSTED');
+    const seenByC = (await getSharedImportBatch(userId, c, batch.id))!.lines.map((l) => l.lineNumber);
+    expect(seenByC).toEqual([1, 2, 4]); // the payment is not on offer
     await assignSharedLines(userId, b, batch.id, { decisions: [{ lineId: lines[0]!.id, accountId: await expenseOf(b) }, { lineId: lines[1]!.id, accountId: await expenseOf(b) }] });
-    await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: await expenseOf(c) }] });
+    expect(await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: await expenseOf(c) }] }).then(() => 'OK', (e: unknown) => (e as { code?: string }).code)).toBe('CARD_PAYMENT_NOT_TAKEABLE');
+    await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[3]!.id, accountId: await expenseOf(c) }] });
+    await postImportLines(userId, a, batch.id, { decisions: [{ lineId: lines[2]!.id, action: 'match_transfer', counterpartLineId: bankLine.id }] });
     await unassignSharedLine(userId, b, batch.id, lines[1]!.id);
+    // C's P&L carries only the refund (a negative expense); A's card equals its statement.
+    const expC = await expenseOf(c);
+    const cExpense = (await getTrialBalance(userId, c, '2026-12-31')).rows.find((r) => r.accountId === expC)?.balance ?? '0.0000';
+    expect(cExpense).toBe('-30.0000');
+    const cardBalance = (await getTrialBalance(userId, a, '2026-12-31')).rows.find((r) => r.accountId === card.id)?.balance ?? '0.0000';
+    expect(cardBalance).toBe('-1864.5000'); // 120.50 + 45 − 2000 − 30, credit-natural
 
-    // C took the +2000 payment-shaped line, so A's "Due from C" is a NEGATIVE receivable (A owes C) and
-    // C's "Due to A" a negative payable: totals net to −1879.50 in A, and the mirror holds sign for sign.
-    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '-1879.5000', '0.0000'], [b, '0.0000', '120.5000'], [c, '0.0000', '-2000.0000']] as const) {
+    // The refund C took is a NEGATIVE receivable in A (A owes C 30) mirrored by a negative payable in C.
+    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '90.5000', '0.0000'], [b, '0.0000', '120.5000'], [c, '0.0000', '-30.0000']] as const) {
       const report = await getIntercompanyReport(userId, companyId, '2026-12-31');
       expect(report.mirrored, companyId).toBe(true);
       for (const row of report.rows) {

@@ -177,6 +177,7 @@ function noticeFrom(sp: { error?: string; ok?: string; assigned?: string; detail
   if (error === undefined) return null;
   if (error === 'nothing') return 'Tick the lines to take.';
   if (error === 'ACCOUNT_REQUIRED') return 'Choose one of our accounts for every ticked line.';
+  if (error === 'CARD_PAYMENT_NOT_TAKEABLE') return 'That line is a payment to the card from the cardholder’s own bank — it stays with the cardholder.';
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Choose one of our active expense or asset accounts — never a control or intercompany account.';
   if (error === 'PERIOD_CLOSED') return sp.detail ?? 'A line falls in a closed accounting period.';
   if (error === 'INTERCOMPANY_NOT_ALLOWED') return 'The two companies must be active members of one organization with the same currency.';

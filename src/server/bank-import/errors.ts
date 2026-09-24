@@ -42,7 +42,11 @@ export type BankImportErrorCode =
   /** The named counterpart is not an organization member the actor may act in (LL-099). */
   | 'COUNTERPART_INVALID'
   /** This company already posted its side of that intercompany movement (LL-099). */
-  | 'TRANSFER_ALREADY_MATCHED';
+  | 'TRANSFER_ALREADY_MATCHED'
+  /** A card CHARGE cannot be an intercompany bank transfer — only a card payment/refund can (LL-102). */
+  | 'CARD_CHARGE_NOT_TRANSFER'
+  /** A card PAYMENT (mirrored by the cardholder's own bank) cannot be taken by another company (LL-102). */
+  | 'CARD_PAYMENT_NOT_TAKEABLE';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';
