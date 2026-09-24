@@ -2431,7 +2431,9 @@ shared across companies (which company owns the cash?); multi-currency groups ap
 **Amendment (LL-097 — shared card statements):** `bank_import_batches.shared_with_organization`;
 `bank_import_line_status` += `PERSONAL` (posted like `post`, to an owner equity/asset account the
 reviewer picks — Owner Distributions by default — so the card still reconciles and the P&L never
-carries it) and `ASSIGNED` (taken by another member: `assigned_company_id` +
+carries it; **owner decision, Gate 7 §7 item 3, 2026-09-24: kept as is — any equity or asset account,
+a bank account included (a personal charge the owner later repays from their own account lands there)**)
+and `ASSIGNED` (taken by another member: `assigned_company_id` +
 `assigned_journal_entry_id`, composite-FK'd to that company's entry; this company's side stays in
 `journal_entry_id`). `journal_entries.intercompany_group_id` (unique per company, INTERCOMPANY only,
 immutable once posted) links the two sides. Only a CARD statement can be shared. Visibility from

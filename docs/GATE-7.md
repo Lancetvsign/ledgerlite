@@ -244,7 +244,7 @@ owner's decisions.
 | L10 | LOW | Relabel test satisfied by the immutability trigger alone; DRAFT→POSTED path untested (5c L2) | LL-103: the DRAFT→POSTED relabel test. | FIXED #111 (LL-103) |
 | L11 | LOW | Join / leave not idempotent on retry (5c L3) | LL-103. | FIXED #111 (LL-103) |
 | N1–N | NOTE | Docs drift — plan §2 "(any role)", §3 Link, §4 "un-assign refused after settlement", "statement-excluded"; ADR-043's "can only be broken by…" (5a N1/N2, 5b M4, 5c N3) | **Fixed in this PR** (plan and ADR wording corrected; `docs/DATABASE.md` pointer). | FIXED #106 |
-| N | NOTE | PERSONAL allows any ASSET incl. another bank account (5b N2); negative "Due from" presentation (5b N1); pair accounts hard-coded OPERATING (5b L6); over-redacted chart number in audit (5a N4); A's line description crosses into B's entry (5a N5); orphan organizations (5c N2); period guard BEFORE INSERT only (5c N4) | Decide in §7 (item 3) for the PERSONAL rule; the rest accepted and documented. | OPEN — PERSONAL rule (§7 item 3); rest accepted |
+| N | NOTE | PERSONAL allows any ASSET incl. another bank account (5b N2); negative "Due from" presentation (5b N1); pair accounts hard-coded OPERATING (5b L6); over-redacted chart number in audit (5a N4); A's line description crosses into B's entry (5a N5); orphan organizations (5c N2); period guard BEFORE INSERT only (5c N4) | Decide in §7 (item 3) for the PERSONAL rule; the rest accepted and documented. | DECIDED 2026-09-24 — PERSONAL rule kept as is (any equity or asset account the reviewer picks); rest accepted |
 
 ## 7. Human sign-off
 
@@ -261,6 +261,8 @@ Decisions requested of the product owner:
    instead (ADR-044); 5c L4 and 5c N4 closed with it.
 3. **PERSONAL account rule** — keep "any equity or asset account the reviewer picks" (today), or restrict
    to equity plus an explicit owner-loan asset subtype.
+   **Decided 2026-09-24 ("Keep PERSONAL as any equity or asset account the reviewer picks"):** kept as
+   built in LL-097; no restriction. Recorded in ADR-043.
 4. **Manual acceptance (§4)** — the real card statement split and the real bank transfer across two of
    your companies.
 
