@@ -62,6 +62,12 @@ const decisionSchema = z.object({
   counterpartLineId: z.uuid().optional(),
   /** intercompany_transfer (LL-099): the other company of the organization this money moved to/from. */
   counterpartCompanyId: z.uuid().optional(),
+  /**
+   * intercompany_transfer (LL-106): instead of a company, the OTHER company's still-staged
+   * bank-statement line that is the other side of this movement; the service resolves and
+   * re-proves the company from it.
+   */
+  counterpartStatementLineId: z.uuid().optional(),
   /** match_intercompany (LL-099): the other company's already-posted INTERCOMPANY entry for this movement. */
   counterpartEntryId: z.uuid().optional(),
 });

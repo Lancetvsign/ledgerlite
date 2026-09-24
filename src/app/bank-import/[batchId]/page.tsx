@@ -23,7 +23,7 @@ import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
-import { LineCounterpartSelect } from './line-counterpart';
+import { LineCounterpartSelect, type CounterpartOption } from './line-counterpart';
 import { LineActionControls } from './line-action';
 import { toLineAction, type LineAction } from './line-actions';
 import { ReviewStateProvider } from './review-state';
@@ -52,7 +52,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -167,6 +167,29 @@ export default async function ReviewImportPage({
     }),
   );
   const draftCount = view.lines.filter((l) => l.status === 'STAGED' && l.draft !== null).length;
+
+  // LL-106: the other side of a movement, found on the other members' statements. A staged line
+  // there is offered first (choosing it marks OUR side now; their reviewer sees the match);
+  // the plain company picker stays as a last resort; a card payment with nothing to match yet
+  // WAITS (a draft the submit skips) and the page re-reads the server while anything waits.
+  const counterpartOptionsFor = (l: ImportLineView): CounterpartOption[] => [
+    ...l.organizationMatches
+      .filter((m) => m.status === 'staged')
+      .map((m) => ({ value: `line:${m.lineId}:${m.companyId}`, label: `${m.legalName} · ${m.accountName} · ${m.txnDate} · not yet reviewed there` })),
+    ...counterparts.map((c) => ({ value: `company:${c.id}`, label: `${c.legalName} — no statement line found` })),
+  ];
+  const initialCounterpartFor = (l: ImportLineView, moneyIn: boolean): string => {
+    const stagedMatches = l.organizationMatches.filter((m) => m.status === 'staged');
+    const draftCompany = l.draft?.counterpartCompanyId ?? null;
+    const fromDraft = draftCompany === null ? undefined : stagedMatches.find((m) => m.companyId === draftCompany);
+    if (fromDraft !== undefined) return `line:${fromDraft.lineId}:${fromDraft.companyId}`;
+    if (draftCompany !== null && counterparts.some((c) => c.id === draftCompany)) return `company:${draftCompany}`;
+    const first = stagedMatches[0];
+    if (first !== undefined) return `line:${first.lineId}:${first.companyId}`;
+    if (isCard && moneyIn) return ''; // wait for the other statement rather than guess
+    return counterparts[0] === undefined ? '' : `company:${counterparts[0].id}`;
+  };
+  const waiting = view.lines.filter((l, i) => l.status === 'STAGED' && initialActions[String(i)] === 'intercompany_transfer' && initialCounterpartFor(l, toMoney(l.amount).isPositive()) === '').length;
   const staged = view.lines.filter((l) => l.status === 'STAGED').length;
   const posted = view.lines.filter((l) => l.status === 'POSTED').length;
   const personal = view.lines.filter((l) => l.status === 'PERSONAL').length;
@@ -223,7 +246,7 @@ export default async function ReviewImportPage({
           <div className="flex flex-wrap items-center gap-3">
             <BulkControls />
             {/* LL-105: every change is saved as a draft; leaving the page loses nothing. */}
-            <Autosave action={saveReviewDraftsAction} />
+            <Autosave action={saveReviewDraftsAction} waiting={waiting} />
           </div>
         )}
         <table className="w-full border-collapse text-sm" data-testid="import-lines">
@@ -257,6 +280,17 @@ export default async function ReviewImportPage({
                         {`transfer posted by ${l.intercompanyCandidate.counterpartLegalName} on ${l.intercompanyCandidate.txnDate}`}
                       </span>
                     )}
+                    {l.status === 'STAGED' && l.organizationMatches.some((m) => m.status === 'staged') && (
+                      // LL-106: the other side sits on another company's statement, not yet reviewed there.
+                      <span data-testid="organization-match-flag" className="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-900 dark:bg-violet-900 dark:text-violet-100">
+                        {(() => { const m = l.organizationMatches.find((x) => x.status === 'staged')!; return `on ${m.legalName}'s ${m.accountName} statement, ${m.txnDate}`; })()}
+                      </span>
+                    )}
+                    {l.status === 'STAGED' && l.intercompanyCandidate === null && l.organizationMatches.some((m) => m.status === 'decided') && (
+                      <span data-testid="organization-decided-flag" className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        {(() => { const m = l.organizationMatches.find((x) => x.status === 'decided')!; return `${m.legalName} already ${m.detail ?? 'decided'} its side (${m.txnDate}) — undo it there first`; })()}
+                      </span>
+                    )}
                     {l.transferCandidate !== null && (
                       <span data-testid="transfer-flag" className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-900 dark:bg-sky-900 dark:text-sky-100">
                         {l.transferCandidate.status === 'POSTED'
@@ -274,7 +308,9 @@ export default async function ReviewImportPage({
                         <input type="hidden" name="lineId" value={l.id} />
                         <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
                         <input type="hidden" name="counterpartEntryId" value={l.intercompanyCandidate?.entryId ?? ''} />
-                        {counterparts.length > 0 && <LineCounterpartSelect index={i} options={counterparts} initialId={l.draft?.counterpartCompanyId ?? null} />}
+                        {counterparts.length > 0 && (
+                          <LineCounterpartSelect index={i} options={counterpartOptionsFor(l)} initialValue={initialCounterpartFor(l, s.moneyIn)} offerWaiting={isCard && s.moneyIn} />
+                        )}
                         <LineAccountSelect
                           index={i}
                           options={pickableOptions}
@@ -300,6 +336,7 @@ export default async function ReviewImportPage({
                           allowApply={!isCard}
                           allowPersonal={personalDefault !== null}
                           allowIntercompany={counterparts.length > 0 && (!isCard || s.moneyIn)}
+                          intercompanyLabel={isCard ? 'Paid by another company…' : 'Transfer with another company…'}
                           {...(l.intercompanyCandidate !== null ? { intercompanyMatchLabel: `Match transfer posted by ${l.intercompanyCandidate.counterpartLegalName}` } : {})}
                           {...(l.transferCandidate?.status === 'POSTED'
                             ? { matchLabel: `Match transfer (posted from ${nameById.get(l.transferCandidate.accountId) ?? 'another account'})` }
@@ -386,7 +423,7 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
@@ -398,9 +435,11 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
       (applied === '0' ? '' : ` ${applied} applied to open invoices/bills.`) +
       (matched === '0' ? '' : ` ${matched} matched to a transfer already posted from the other account.`) +
       (personal === '0' ? '' : ` ${personal} marked personal.`) +
-      (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`)
+      (intercompany === '0' ? '' : ` ${intercompany} posted as intercompany transfers.`) +
+      (sp.waiting === undefined || sp.waiting === '0' ? '' : ` ${sp.waiting} still waiting for another company's statement — not posted.`)
     );
   }
+  if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
   if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
   if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';

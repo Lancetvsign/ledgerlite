@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { useOptionalReviewVersion } from './review-state';
@@ -8,6 +9,7 @@ export type AutosaveResult = { readonly ok: true; readonly saved: number } | { r
 
 const DEBOUNCE_MS = 600;
 const RETRY_MS = 3000;
+const REFRESH_MS = 30_000;
 
 type Status = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: string } | { kind: 'error' };
 
@@ -22,8 +24,18 @@ type Status = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved'; at: strin
  * Nothing here blocks the real submit. "Save progress" requests a save at once for people
  * who want to click.
  */
-export function Autosave({ action, label = 'Save progress' }: { action: (formData: FormData) => Promise<AutosaveResult>; label?: string }) {
+export function Autosave({
+  action,
+  label = 'Save progress',
+  waiting = 0,
+}: {
+  action: (formData: FormData) => Promise<AutosaveResult>;
+  label?: string;
+  /** LL-106: lines waiting for another company's statement — while any wait, the page re-reads the server every 30 s. */
+  waiting?: number;
+}) {
   const anchor = useRef<HTMLSpanElement>(null);
+  const router = useRouter();
   const [requested, setRequested] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const version = useOptionalReviewVersion();
@@ -49,6 +61,19 @@ export function Autosave({ action, label = 'Save progress' }: { action: (formDat
       setRequested((n) => n + 1);
     }
   }, [version]);
+
+  // LL-106: while a line waits for the other company's statement, look again every 30 s —
+  // the candidates are recomputed by the server on every render, so the match appears here
+  // the moment the other statement is uploaded, without leaving the page.
+  useEffect(() => {
+    if (waiting === 0) return;
+    const timer = setInterval(() => {
+      router.refresh();
+    }, REFRESH_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [waiting, router]);
 
   // The debounced save: a new request during the wait restarts it (the cleanup clears the timer).
   useEffect(() => {
@@ -94,6 +119,23 @@ export function Autosave({ action, label = 'Save progress' }: { action: (formDat
       <span data-testid="autosave-status" data-state={status.kind} aria-live="polite">
         {status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? `Saved ${status.at}` : status.kind === 'error' ? 'Not saved — retrying' : ''}
       </span>
+      {waiting > 0 && (
+        <>
+          <span data-testid="waiting-count" className="text-amber-700 dark:text-amber-300">
+            {String(waiting)} waiting for another company&apos;s statement · checking every 30 s
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              router.refresh();
+            }}
+            data-testid="check-again"
+            className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700"
+          >
+            Check again
+          </button>
+        </>
+      )}
     </span>
   );
 }

@@ -43,6 +43,8 @@ export type BankImportErrorCode =
   | 'ONLY_CARDS_SHAREABLE'
   /** The named counterpart is not an organization member the actor may act in (LL-099). */
   | 'COUNTERPART_INVALID'
+  /** LL-106: an intercompany transfer named neither a statement line nor a company (a line still waiting for its match). */
+  | 'COUNTERPART_REQUIRED'
   /** This company already posted its side of that intercompany movement (LL-099). */
   | 'TRANSFER_ALREADY_MATCHED'
   /** A card CHARGE cannot be an intercompany bank transfer — only a card payment/refund can (LL-102). */
