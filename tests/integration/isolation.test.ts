@@ -852,6 +852,47 @@ const REGISTRY: IsolationDescriptor[] = [
     ],
   },
   {
+    // LL-105: a saved-but-not-posted review choice on a staged line of the victim company.
+    // Drafts are per drafting company and are read only through the batch views.
+    table: 'bank_import_line_drafts',
+    seed: async (victim) => {
+      const db = await getTestDb();
+      const line = (await db.execute<{ id: string; batch_id: string }>(
+        sql`select id, batch_id from bank_import_lines where company_id = ${victim.companyId} and status = 'STAGED' limit 1`)).rows[0];
+      if (line === undefined) throw new Error('bank_import_line_drafts seed expects the batches descriptor to have run first');
+      await saveReviewDrafts(victim.ownerUserId, victim.companyId, line.batch_id, { drafts: [{ lineId: line.id, action: 'ignore' }] });
+      const draft = (await db.execute<{ id: string }>(
+        sql`select id from bank_import_line_drafts where company_id = ${victim.companyId} and line_id = ${line.id}`)).rows[0];
+      if (draft === undefined) throw new Error('the seed draft was not saved');
+      return { recordId: `${line.batch_id}:${line.id}` };
+    },
+    attempts: [
+      {
+        operation: 'overwrite the victim company\'s draft (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return saveReviewDrafts(attacker, victim.companyId, batchId ?? '', { drafts: [{ lineId: lineId ?? '', action: 'post' }] });
+        },
+      },
+      {
+        operation: 'read the victim company\'s draft through the batch view',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => getImportBatch(attacker, victim.companyId, recordId.split(':')[0] ?? ''),
+      },
+      {
+        operation: 'drafts are per company; none of the victim\'s ever appears under the attacker company',
+        expect: 'empty',
+        run: async (attacker) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return (await db.execute<{ id: string }>(rawSql`select id from bank_import_line_drafts where company_id = ${own.rows[0]?.company_id ?? attacker}`)).rows;
+        },
+      },
+    ],
+  },
+  {
     table: 'bank_import_lines',
     seed: async (victim) => {
       const db = await getTestDb();
