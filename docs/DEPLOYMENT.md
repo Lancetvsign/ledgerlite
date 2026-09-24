@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Local | any | your own Neon branch (`dev/lance`) | you, once |
 | CI | pull request | ephemeral `test/pr-N-run-M`, deleted after the run | `ci.yml` |
-| Preview | pull request | **schema-only** `preview/pr-N`, deleted when the PR closes (at most 2 at once — see below) | `preview-database.yml` |
+| Preview | pull request | **schema-only** `preview/pr-N`, deleted when the PR closes (at most 4 at once — see below) | `preview-database.yml` |
 | Production | `main` | production Neon branch | `production-deploy.yml` |
 
 The production database is never used for local development, tests, pull request
@@ -53,10 +53,13 @@ same category as `main`, and root branches are capped per project:
 | Launch | 5 |
 | Scale | 25 |
 
-The production branch is one of them. **On the Free plan this project is on, at most 2
-preview databases can exist at once.** The cap was found the hard way on 2026-09-24: with
-`preview/pr-106` and `preview/pr-107` alive, provisioning for #108 failed with
-`ERROR: root branches limit exceeded` (run 35937875314). Branches created with a parent
+The production branch is one of them. **This project's cap is 5 root branches, the Launch
+allowance, so at most 4 preview databases can exist at once.** The cap was found the hard
+way on 2026-09-24: provisioning for #108 failed with `ERROR: root branches limit exceeded`
+(run 35937875314). Only two open PRs held previews at the time, which is why the cap was
+first misread as 3; the other two slots were `preview/pr-93` (an open PR from 09-14) and
+`preview/pr-7`, leaked when PR #7 was closed on 2026-09-02 and its teardown never ran. The
+reaper's first run (36004252618) deleted it three weeks later. Branches created with a parent
 (`test/*` in `ci.yml`, a normal `dev/*` branch) are not root branches and do not count.
 
 Do **not** work around the cap by giving preview branches a parent. A child branch is
@@ -250,16 +253,14 @@ Verified in production (2026-09-11):
 - REST git-source deployment builds the exact `main` commit with the Production environment and
   aliases `ledgerlite-omega.vercel.app`; sign-up, company creation and the dashboard work.
 - Preview database provisioning end to end and the branch-scoped Preview variables (every PR).
-- The root-branch-cap path in `preview-database.yml`: on 2026-09-24, with #106 and #107
-  holding the two slots, PR #110 (run 35938851383) got the warning, every database step
-  skipped, and a green job.
+- The root-branch-cap path in `preview-database.yml`: on 2026-09-24, with every slot taken,
+  PR #110 (run 35938851383) got the warning, every database step skipped, and a green job.
+- The `preview/*` step of the reaper: its first run (36004252618, 2026-09-24) kept the two
+  open PRs' branches and deleted `preview/pr-7`, leaked since 2026-09-02.
 - Vercel Node version is 24.x, matching `.nvmrc`; all workflow files parse as valid YAML.
 
 **Not yet exercised:**
 
-- The `preview/*` step of the reaper (new on 2026-09-24). Run it by hand via
-  `workflow_dispatch` once merged; it should delete nothing while every preview PR is open
-  and younger than 14 days.
 - A failed production migration blocking promotion (only the success path has run).
 - A real statement extraction end to end — the pipeline reaches the model; first successful run
   pending the direct-Anthropic route (#78).
