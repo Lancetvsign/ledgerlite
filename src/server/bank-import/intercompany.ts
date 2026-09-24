@@ -4,11 +4,15 @@ import { randomUUID } from 'node:crypto';
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import { getDb, schema } from '@/db';
+import { getDb, getDbTx, schema } from '@/db';
+import { todayInTimeZone } from '@/lib/dates';
+import { AuthorizationDenied, requirePermission } from '@/server/authorization';
+import { getAccountingPeriod } from '@/server/periods';
+import { LedgerError, toLedgerDomainError } from '@/server/ledger';
 import { toMoney } from '@/lib/decimal';
 import { ensureIntercompanyPair } from '@/server/accounts/internal';
 import { recordAuditEvent } from '@/server/audit';
-import { lockEntryCounters, postEntryCore } from '@/server/ledger';
+import { lockEntryCounters, postEntryCore, reverseEntryCore } from '@/server/ledger';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
 import { BankImportError } from './errors';
@@ -252,4 +256,143 @@ export async function auditIntercompanyLine(tx: Tx, companyId: string, actorUser
     entityId: line.id,
     after: { batchId, accountId: r.accountId, amount: line.amount, journalEntryId: r.entryId, intercompany: kind, counterpartCompanyId, intercompanyGroupId: r.intercompanyGroupId },
   });
+}
+
+/**
+ * Un-marks / un-matches a bank line posted as an intercompany transfer — AUTHORIZED
+ * (`journal.post` here; and in the other company when its side exists) — Gate 7 H1. Reverses
+ * this company's INTERCOMPANY entry and, if the other company already posted its side into the
+ * same group, that entry too — in ONE transaction, both dated today (this company's today, open
+ * in both). Both statement lines return to STAGED so either company can decide them again; the
+ * group is left behind as two REVERSED entries. A line that was posted in the other company but
+ * whose actor lacks rights there is refused with the uniform denial.
+ */
+export async function unmarkIntercompanyTransfer(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+  lineId: string,
+): Promise<{ reversed: number }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  const db = getDb();
+  const line = (
+    await db
+      .select()
+      .from(schema.bankImportLines)
+      .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.batchId, batchId), eq(schema.bankImportLines.id, lineId)))
+      .limit(1)
+  )[0];
+  if (line === undefined || line.status !== 'POSTED' || line.journalEntryId === null) {
+    throw new BankImportError('LINE_NOT_FOUND', 'That line is not a posted intercompany transfer.');
+  }
+  const mine = (
+    await db
+      .select({ sourceType: schema.journalEntries.sourceType, status: schema.journalEntries.status, groupId: schema.journalEntries.intercompanyGroupId })
+      .from(schema.journalEntries)
+      .where(and(eq(schema.journalEntries.companyId, companyId), eq(schema.journalEntries.id, line.journalEntryId)))
+      .limit(1)
+  )[0];
+  if (mine === undefined || mine.sourceType !== 'INTERCOMPANY' || mine.status !== 'POSTED' || mine.groupId === null) {
+    throw new BankImportError('LINE_NOT_FOUND', 'That line is not a posted intercompany transfer.');
+  }
+  // The other side, if any: the one other POSTED entry of the group.
+  const other = (
+    await db
+      .select({ id: schema.journalEntries.id, companyId: schema.journalEntries.companyId, status: schema.journalEntries.status })
+      .from(schema.journalEntries)
+      .where(and(eq(schema.journalEntries.intercompanyGroupId, mine.groupId), sql`${schema.journalEntries.id} <> ${line.journalEntryId}`))
+      .limit(1)
+  )[0];
+  if (other !== undefined && other.status !== 'POSTED') {
+    throw new BankImportError('TRANSFER_MISMATCH', "The other company's side of this transfer is already reversed; reload.");
+  }
+  if (other !== undefined) await requirePermission(actorUserId, other.companyId, 'journal.post');
+
+  const companies = await db
+    .select({ id: schema.companies.id, legalName: schema.companies.legalName, timezone: schema.companies.timezone })
+    .from(schema.companies)
+    .where(inArray(schema.companies.id, other === undefined ? [companyId] : [companyId, other.companyId]));
+  const me = companies.find((c) => c.id === companyId);
+  if (me === undefined) throw new AuthorizationDenied();
+  const reversalDate = todayInTimeZone(me.timezone);
+  for (const c of companies) {
+    if ((await getAccountingPeriod(c.id, reversalDate)).status !== 'OPEN') {
+      throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${reversalDate} is closed in ${c.legalName}.`);
+    }
+  }
+
+  const entryId = line.journalEntryId;
+  try {
+    return await getDbTx().transaction(async (tx) => {
+      const locked = (
+        await tx
+          .select({ status: schema.bankImportLines.status, journalEntryId: schema.bankImportLines.journalEntryId })
+          .from(schema.bankImportLines)
+          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, lineId)))
+          .for('update')
+      )[0];
+      if (locked?.status !== 'POSTED' || locked.journalEntryId !== entryId) return { reversed: 0 };
+      const ids = other === undefined ? [companyId] : [companyId, other.companyId];
+      for (const id of [...ids].sort()) await lockCompanyKeyShare(tx, id);
+      await lockEntryCounters(tx, ids);
+
+      await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: 'Intercompany transfer un-marked' }, reversalDate);
+      let reversed = 1;
+      if (other !== undefined) {
+        // Their statement line (marked or matched) goes back to STAGED with ours; lock it too.
+        const theirLine = (
+          await tx
+            .select({ id: schema.bankImportLines.id, status: schema.bankImportLines.status })
+            .from(schema.bankImportLines)
+            .where(and(eq(schema.bankImportLines.companyId, other.companyId), eq(schema.bankImportLines.journalEntryId, other.id)))
+            .for('update')
+        )[0];
+        await reverseEntryCore(tx, { companyId: other.companyId, actorUserId, entryId: other.id, description: `Intercompany transfer un-marked by ${me.legalName}` }, reversalDate);
+        reversed += 1;
+        if (theirLine !== undefined && theirLine.status === 'POSTED') {
+          await tx
+            .update(schema.bankImportLines)
+            .set({ status: 'STAGED', chosenAccountId: null, journalEntryId: null, updatedAt: sql`now()` })
+            .where(and(eq(schema.bankImportLines.companyId, other.companyId), eq(schema.bankImportLines.id, theirLine.id)));
+        }
+        await recordAuditEvent({
+          tx,
+          companyId: other.companyId,
+          actorUserId,
+          action: 'BANK_IMPORT_UNASSIGNED',
+          entityType: 'journal_entry',
+          entityId: other.id,
+          before: { intercompanyGroupId: mine.groupId, unmarkedBy: companyId },
+          after: { reversed: true },
+        });
+      }
+      await tx
+        .update(schema.bankImportLines)
+        .set({ status: 'STAGED', chosenAccountId: null, journalEntryId: null, updatedAt: sql`now()` })
+        .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, lineId)));
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId,
+        action: 'BANK_IMPORT_UNASSIGNED',
+        entityType: 'bank_import_line',
+        entityId: lineId,
+        before: { journalEntryId: entryId, intercompanyGroupId: mine.groupId, otherSide: other?.companyId ?? null },
+        after: { status: 'STAGED', reversed },
+      });
+      return { reversed };
+    });
+  } catch (error) {
+    throw toLedgerDomainError(error);
+  }
+}
+
+async function lockCompanyKeyShare(tx: Tx, companyId: string): Promise<void> {
+  const rows = await tx
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(and(eq(schema.companies.id, companyId), eq(schema.companies.status, 'ACTIVE')))
+    .limit(1)
+    .for('key share');
+  if (rows[0] === undefined) throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
 }
