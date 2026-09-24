@@ -184,7 +184,8 @@ describe('validation, visibility and races', () => {
     for (const bad of [c.a, solo, '00000000-0000-4000-8000-000000000000']) {
       expect(await codeOf(postImportLines(c.owner, c.a, outA.batch.id, { decisions: [{ lineId: outA.line.id, action: 'intercompany_transfer', counterpartCompanyId: bad }] }), BankImportError)).toBe('COUNTERPART_INVALID');
     }
-    expect(await codeOf(postImportLines(c.owner, c.a, outA.batch.id, { decisions: [{ lineId: outA.line.id, action: 'intercompany_transfer' }] }), BankImportError)).toBe('COUNTERPART_INVALID');
+    // LL-106: naming nothing at all is its own refusal — the line is still waiting for the other company's statement.
+    expect(await codeOf(postImportLines(c.owner, c.a, outA.batch.id, { decisions: [{ lineId: outA.line.id, action: 'intercompany_transfer' }] }), BankImportError)).toBe('COUNTERPART_REQUIRED');
     // An accountant of A who is only READ_ONLY in B cannot move money with B — and sees no B candidates.
     const acct = await makeUser();
     await insertMembership(c.a, acct, 'ACCOUNTANT');
