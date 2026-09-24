@@ -35,6 +35,14 @@ export function LineCounterpartSelect({
   const { actions } = useReviewState();
   const active = (actions[String(index)] ?? 'post') === 'intercompany_transfer';
   const [value, setValue] = useState(initialValue);
+  // The page re-reads the server while a line waits (LL-106): when the refresh brings a match
+  // for a row still on "waiting", adopt it — a manual pick is never overridden (state adjusted
+  // during render, no effect).
+  const [seenInitial, setSeenInitial] = useState(initialValue);
+  if (seenInitial !== initialValue) {
+    setSeenInitial(initialValue);
+    if (value === '' && initialValue !== '') setValue(initialValue);
+  }
   return (
     <>
       <select

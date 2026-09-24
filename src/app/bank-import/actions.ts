@@ -163,13 +163,16 @@ export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: 
   const documentIds = formData.getAll('documentId');
   const counterparts = formData.getAll('counterpart');
   const parsed = saveReviewDraftsInput.safeParse({
-    drafts: lineIds.map((lineId, i) => ({
-      lineId: typeof lineId === 'string' ? lineId : '',
-      action: typeof actions[i] === 'string' ? actions[i] : 'post',
-      accountId: opt(accountIds[i] ?? null),
-      documentId: opt(documentIds[i] ?? null),
-      ...(parseCounterpart(counterparts[i]).counterpartCompanyId === undefined ? {} : { counterpartCompanyId: parseCounterpart(counterparts[i]).counterpartCompanyId }),
-    })),
+    drafts: lineIds.map((lineId, i) => {
+      const { counterpartCompanyId } = parseCounterpart(counterparts[i]);
+      return {
+        lineId: typeof lineId === 'string' ? lineId : '',
+        action: typeof actions[i] === 'string' ? actions[i] : 'post',
+        accountId: opt(accountIds[i] ?? null),
+        documentId: opt(documentIds[i] ?? null),
+        ...(counterpartCompanyId === undefined ? {} : { counterpartCompanyId }),
+      };
+    }),
   });
   if (!parsed.success) return { ok: false };
   try {

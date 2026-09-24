@@ -219,8 +219,10 @@ export async function statementCounterpartFor(
   companyId: string,
   line: { amount: string; txnDate: string },
   statementLineId: string,
+  /** The members the actor may post in, when the caller already loaded them. */
+  known?: readonly MemberCompany[],
 ): Promise<string | null> {
-  const counterparts = await transferCounterparts(actorUserId, companyId);
+  const counterparts = known ?? (await transferCounterparts(actorUserId, companyId));
   if (counterparts.length === 0) return null;
   const rows = await getDb().execute<{ company_id: string }>(sql`
     select l2.company_id::text as company_id

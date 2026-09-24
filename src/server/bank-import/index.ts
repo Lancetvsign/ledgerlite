@@ -718,7 +718,7 @@ export async function postImportLines(
       if (d.counterpartStatementLineId === undefined && d.counterpartCompanyId === undefined) {
         throw new BankImportError('COUNTERPART_REQUIRED', `Line ${n}: still waiting for the other company's statement — nothing to match yet.`);
       }
-      const resolved = d.counterpartStatementLineId === undefined ? null : await statementCounterpartFor(actorUserId, companyId, line, d.counterpartStatementLineId);
+      const resolved = d.counterpartStatementLineId === undefined ? null : await statementCounterpartFor(actorUserId, companyId, line, d.counterpartStatementLineId, counterparts);
       if (d.counterpartStatementLineId !== undefined && resolved === null) {
         throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: that statement line is no longer the other side of this movement — check again.`);
       }

@@ -458,7 +458,7 @@ test('an intercompany bank transfer is marked in one company and matched from th
   await expect(page.getByTestId('intercompany-row').filter({ hasText: payer })).toContainText('0.00');
 });
 
-test('a card payment finds the paying company on its statement, waits while there is none, and both sides mirror (LL-106)', async ({ page }) => {
+test('a card payment finds the paying company on its statement, waits while there is none, and both sides mirror (LL-106)', async ({ page, browser }) => {
   test.slow();
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const holder = `Holder Co ${stamp}`; // the cardholder
@@ -499,19 +499,29 @@ test('a card payment finds the paying company on its statement, waits while ther
   await expect(page.getByTestId('import-action-2')).toHaveValue('intercompany_transfer'); // still staged, still waiting
   await expect(page.getByTestId('waiting-count')).toContainText('1 waiting');
 
-  // Payer Co: its bank statement (staged, not reviewed) carries the −2000 that paid the card.
-  await page.goto('/account');
-  await page.locator('li', { hasText: payer }).getByRole('button', { name: 'Switch' }).click();
-  await expect(page.locator('li', { hasText: payer }).getByTestId('active-badge')).toBeVisible();
-  await uploadStatement(page);
-  const payerReviewUrl = page.url();
+  // Payer Co, in a SECOND browser context (its own active-company cookie), uploads its bank
+  // statement — staged, not reviewed — which carries the −2000 that paid the card. Holder Co's
+  // review page stays open in the first context, still waiting.
+  const payerContext = await browser.newContext({ storageState: await page.context().storageState() });
+  const payerPage = await payerContext.newPage();
+  await payerPage.goto('/account');
+  await payerPage.locator('li', { hasText: payer }).getByRole('button', { name: 'Switch' }).click();
+  await expect(payerPage.locator('li', { hasText: payer }).getByTestId('active-badge')).toBeVisible();
+  await uploadStatement(payerPage);
+  const payerReviewUrl = payerPage.url();
 
-  // Back in Holder Co: "Check again" finds it on Payer Co's statement — no company was picked by hand.
-  await page.goto('/account');
-  await page.locator('li', { hasText: holder }).getByRole('button', { name: 'Switch' }).click();
-  await expect(page.locator('li', { hasText: holder }).getByTestId('active-badge')).toBeVisible();
+  // The live path: "Check again" re-reads the server and the waiting row adopts the match found
+  // on Payer Co's statement — no reload, no company picked by hand.
+  await expect(page.getByTestId('waiting-flag-2')).toBeVisible();
+  await page.getByTestId('check-again').click();
+  await expect(page.getByTestId('organization-match-flag')).toContainText(`on ${payer}'s Checking statement`, { timeout: 15_000 });
+  await expect(page.getByTestId('waiting-flag-2')).toHaveCount(0);
+  await expect(page.getByTestId('import-counterpart-2')).toHaveValue(/^line:/);
+  await expect(page.getByTestId('import-action-2')).toHaveValue('intercompany_transfer');
+  // A full reload preselects it the same way (the draft's company, the found line).
   await page.goto(holderReviewUrl);
-  await expect(page.getByTestId('organization-match-flag')).toContainText(`on ${payer}'s 1000 · Checking statement`);
+  await expect(page.getByTestId('import-counterpart-2')).toHaveValue(/^line:/);
+  await expect(page.getByTestId('waiting-flag-2')).toHaveCount(0);
   await expect(page.getByTestId('import-action-2')).toHaveValue('intercompany_transfer'); // the draft
   await expect(page.getByTestId('import-counterpart-2')).toHaveValue(/^line:/); // preselected: the statement line, not a guess
   await expect(page.getByTestId('waiting-flag-2')).toHaveCount(0);
@@ -519,19 +529,17 @@ test('a card payment finds the paying company on its statement, waits while ther
   await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
 
   // Payer Co's own review now offers Holder Co's posted side; matching it mirrors the pair.
-  await page.goto('/account');
-  await page.locator('li', { hasText: payer }).getByRole('button', { name: 'Switch' }).click();
-  await expect(page.locator('li', { hasText: payer }).getByTestId('active-badge')).toBeVisible();
-  await page.goto(payerReviewUrl);
-  await expect(page.getByTestId('intercompany-flag')).toContainText(`transfer posted by ${holder}`);
-  await expect(page.getByTestId('import-action-2')).toHaveValue('match_intercompany');
-  await page.getByTestId('import-action-0').selectOption('ignore');
-  await page.getByTestId('import-action-1').selectOption('ignore');
-  await page.getByTestId('post-import-lines').click();
-  await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
-  await page.goto('/reports/intercompany');
-  const row = page.getByTestId('intercompany-row').filter({ hasText: holder });
+  await payerPage.goto(payerReviewUrl);
+  await expect(payerPage.getByTestId('intercompany-flag')).toContainText(`transfer posted by ${holder}`);
+  await expect(payerPage.getByTestId('import-action-2')).toHaveValue('match_intercompany');
+  await payerPage.getByTestId('import-action-0').selectOption('ignore');
+  await payerPage.getByTestId('import-action-1').selectOption('ignore');
+  await payerPage.getByTestId('post-import-lines').click();
+  await expect(payerPage.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+  await payerPage.goto('/reports/intercompany');
+  const row = payerPage.getByTestId('intercompany-row').filter({ hasText: holder });
   await expect(row).toContainText('2,000.00');
   await expect(row).toHaveAttribute('data-mirrored', '1');
+  await payerContext.close();
 });
 
