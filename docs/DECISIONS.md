@@ -2473,3 +2473,13 @@ INTERCOMPANY group is legitimately "in transit", and today ANY such group of ANY
 (Gate 7 H2 — LL-101 tightens the definition and ages it); and `journal_lines` has no BEFORE INSERT guard, so
 raw balanced lines can be appended to a posted entry (Gate 7 M5 — LL-104, owner's decision). Until those
 land, the mirror is conventional and gate-proven, not structural. See `docs/GATE-7.md`.
+
+**Amendment (LL-101 — cash in transit done right, Gate 7 H2/M2/L7/L8):** "in transit" is defined narrowly —
+a single-sided INTERCOMPANY group whose entry is the posting of a POSTED bank-import line of that company
+onto its pair account (a MARK) and whose group has no other side AS OF the date. The report shows three
+states per pair — mirrored / in transit (amber, with the amount and the age of the oldest open mark) /
+MISMATCH — and never "Mirrored" while anything is in transit; `findIntercompanyMismatches` also reports a
+mark older than `DEFAULT_MAX_TRANSIT_DAYS` (33: the 3-day window plus a 30-day statement lag) as
+`stale:…`, so GL-T029 fails on transfers that never matched. A mark auto-joins the counterpart's open
+mark of the same |amount| in the window instead of opening a second group; candidates are allocated one
+entry per line per batch, and a submit that aims two lines at one entry is refused before anything posts.

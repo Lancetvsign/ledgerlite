@@ -15,6 +15,17 @@ import { requireReportContext, resolveAsOf } from '../report-context';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const STATE_CLASS = {
+  mirrored: 'rounded bg-green-50 px-2 py-0.5 text-green-700 dark:bg-green-950 dark:text-green-300',
+  in_transit: 'rounded bg-amber-50 px-2 py-0.5 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
+  mismatch: 'rounded bg-red-50 px-2 py-0.5 text-red-700 dark:bg-red-950 dark:text-red-300',
+} as const;
+const STATE_TEXT = {
+  mirrored: 'Mirrored: every balance agrees with the other company’s books',
+  in_transit: 'In transit: a transfer is marked on one statement and not yet matched on the other',
+  mismatch: 'MISMATCH: a balance disagrees with the other company’s books',
+} as const;
+
 export default async function IntercompanyPage({ searchParams }: { searchParams: Promise<{ asOf?: string }> }) {
   const ctx = await requireReportContext();
   const { asOf: raw } = await searchParams;
@@ -42,11 +53,8 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
         <>
           <p className="text-sm text-neutral-500" data-testid="intercompany-summary">
             Organization <strong>{report.organizationName}</strong> · as of {report.asOfDate} ·{' '}
-            <span
-              data-testid="intercompany-mirrored"
-              className={report.mirrored ? 'rounded bg-green-50 px-2 py-0.5 text-green-700 dark:bg-green-950 dark:text-green-300' : 'rounded bg-red-50 px-2 py-0.5 text-red-700 dark:bg-red-950 dark:text-red-300'}
-            >
-              {report.mirrored ? 'Mirrored: every balance agrees with the other company’s books' : 'MISMATCH: a balance disagrees with the other company’s books'}
+            <span data-testid="intercompany-mirrored" data-state={report.state} className={STATE_CLASS[report.state]}>
+              {STATE_TEXT[report.state]}
             </span>
           </p>
           <table className="w-full border-collapse text-sm" data-testid="intercompany-table">
@@ -72,12 +80,17 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                 </tr>
               ) : (
                 report.rows.map((r) => (
-                  <tr key={r.counterpartId} data-testid="intercompany-row" data-mirrored={r.mirrored ? '1' : '0'} className="border-b border-neutral-100 dark:border-neutral-800">
+                  <tr key={r.counterpartId} data-testid="intercompany-row" data-mirrored={r.mirrored ? '1' : '0'} data-state={r.state} className="border-b border-neutral-100 dark:border-neutral-800">
                     <td className="py-2 pr-2">{r.counterpartLegalName}</td>
                     <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.receivableDifference)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums text-neutral-500" data-testid="intercompany-receivable-in-transit">{formatMoney(r.receivableInTransit)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums text-neutral-500" data-testid="intercompany-receivable-in-transit">
+                      {formatMoney(r.receivableInTransit)}
+                      {r.inTransitOldestDays !== null && r.state === 'in_transit' && (
+                        <span className="ml-1 text-xs" data-testid="intercompany-transit-age">(oldest {String(r.inTransitOldestDays)} d)</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.payableDifference)}</td>
