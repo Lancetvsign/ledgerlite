@@ -61,7 +61,7 @@ async function postBalanced(
     return await rawPostedEntry(tx, {
       companyId, userId, sourceType: 'INVOICE', entryNumber: opts.entryNumber,
       sourceId: opts.sourceId ?? null, fingerprint: opts.fingerprint ?? null,
-      lines: [{ accountId: cashId, debit: 10, credit: 0 }, { accountId: revId, debit: 0, credit: 10 }],
+      lines: [{ accountId: cashId, debit: '10.0000', credit: '0.0000' }, { accountId: revId, debit: '0.0000', credit: '10.0000' }],
     });
   });
 }
@@ -141,7 +141,7 @@ describe('invariant 6 — balance at commit, POSTED only', () => {
     const { getDbTx } = await import('@/db');
     await rejects(
       getDbTx().transaction(async (tx) => {
-        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 20, lines: [{ accountId: f.cashId, debit: 100, credit: 0 }, { accountId: f.revId, debit: 0, credit: 99 }] });
+        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 20, lines: [{ accountId: f.cashId, debit: '100.0000', credit: '0.0000' }, { accountId: f.revId, debit: '0.0000', credit: '99.0000' }] });
       }),
       /UNBALANCED_JOURNAL_ENTRY|check_violation/i,
     );
@@ -152,7 +152,7 @@ describe('invariant 6 — balance at commit, POSTED only', () => {
     const { getDbTx } = await import('@/db');
     await rejects(
       getDbTx().transaction(async (tx) => {
-        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 21, lines: [{ accountId: f.cashId, debit: 50, credit: 0 }] });
+        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 21, lines: [{ accountId: f.cashId, debit: '50.0000', credit: '0.0000' }] });
       }),
       /at least 2|check_violation/i,
     );

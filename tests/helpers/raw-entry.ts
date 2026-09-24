@@ -19,8 +19,9 @@ import type { PoolDatabase } from '@/db';
  */
 export interface RawLine {
   readonly accountId: string;
-  readonly debit: string | number;
-  readonly credit: string | number;
+  /** Strings only — a JS number never holds money (AGENTS §3), fixtures included. */
+  readonly debit: string;
+  readonly credit: string;
   readonly customerId?: string;
   readonly vendorId?: string;
 }
