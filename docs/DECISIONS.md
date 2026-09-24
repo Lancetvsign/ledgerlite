@@ -2473,6 +2473,9 @@ INTERCOMPANY group is legitimately "in transit", and today ANY such group of ANY
 (Gate 7 H2 — LL-101 tightens the definition and ages it); and `journal_lines` has no BEFORE INSERT guard, so
 raw balanced lines can be appended to a posted entry (Gate 7 M5 — LL-104, owner's decision). Until those
 land, the mirror is conventional and gate-proven, not structural. See `docs/GATE-7.md`.
+*Resolved:* LL-101 (#108) tightened and aged the in-transit rule; LL-104 (ADR-044) closed the line-append gap
+with an unconditional BEFORE INSERT guard. With both on `main`, the mirror is structural again as amended:
+the only single-sided groups the database can hold are marks, and no line can join a posted entry.
 
 **Amendment (LL-101 — cash in transit done right, Gate 7 H2/M2/L7/L8):** "in transit" is defined narrowly —
 a single-sided INTERCOMPANY group whose entry is the posting of a POSTED bank-import line of that company
@@ -2492,3 +2495,59 @@ reduces (paying down what I owe before growing what I am owed, collecting what I
 what I owe), a deactivated pair is reactivated rather than the reverse direction created, and with no pair
 at all the payer holds the receivable — so a repayment settles instead of grossing up, and both companies
 can leave once the relationship nets to zero.
+
+## ADR-044 — Journal lines are frozen structurally; the engine posts by transition
+
+**Status** Accepted · **Added by** LL-104 · **Decided by** product owner ("start LL-104" on the Gate 7 §7 item 2 direction)
+
+### Context
+
+Invariant 3 says a posted entry is immutable. The database enforced it with `journal_lines_immutable`
+(0006, widened to REVERSED entries in 0020) — a trigger that fired on **UPDATE OR DELETE only**. A raw
+balanced pair of lines could therefore be *appended* to any POSTED or REVERSED entry: the deferred balance
+trigger asks only that the entry still balance, and on a POSTED `INTERCOMPANY` entry the Due-account
+allow-list (ADR-043) admits the append. Gate 7 rated the gap MEDIUM (M5) because ADR-043 calls the
+intercompany mirror structural. Two neighbours travelled with it: a raw `REVERSAL`-labelled entry was
+admitted on the Due accounts with no original (5c L4), and the closed-period guard (0010) fired on INSERT
+of a POSTED row only, so a DRAFT→POSTED UPDATE bypassed it (5c N4).
+
+The ticket stub proposed a BEFORE INSERT guard with a **session-local escape** (`set local
+ledgerlite.posting = on`) that only `postEntryCore` / `reverseEntryCore` would set.
+
+### Decision
+
+1. **The line guard fires on INSERT too, with no escape hatch.** `journal_lines_no_mutate_posted` is
+   `BEFORE INSERT OR UPDATE OR DELETE`; nothing — the engine included — can add a line under a POSTED
+   or REVERSED entry (migration 0042).
+2. **The engine posts by transition.** `postEntryCore` and `reverseEntryCore` insert the entry as a
+   `DRAFT`, insert its lines, and flip it to `POSTED` (stamping `posted_at`) as the last statement of the
+   same transaction (`markPosted` in `ledger/internal.ts`). The BEFORE UPDATE triggers judge the finished
+   entry on that flip; the deferred balance trigger judges it at commit; a failure anywhere rolls the
+   DRAFT back with everything else and the gapless number is reused.
+3. **The closed-period guard judges the transition as well** — a second trigger on
+   `UPDATE OF status` when the row becomes POSTED, same function, same `FOR SHARE` read (closes 5c N4).
+4. **`journal_entries_reversal_link_consistent`**: `(source_type = 'REVERSAL') = (reversal_of_id is not
+   null)` — only a reversal carries the link and every reversal does (closes 5c L4).
+
+### Why not the escape
+
+A GUC can be set by any SQL session, so a guard with an escape stays conventional — it would stop an
+accidental raw append but not a deliberate one, which is exactly the case the gate raised. And
+`SET LOCAL` lingers for the rest of the caller's transaction: a feature module inserting lines after
+`postEntryCore` returned would still have passed. Posting by transition needs no privilege, no
+setting, and no trust in the caller; it is the same shape the database already permitted for a DRAFT.
+
+### Consequences
+
+- **The only raw shape that produces a posted entry is DRAFT → lines → POSTED.** Test fixtures that
+  bypass the service use `tests/helpers/raw-entry.ts` (`rawPostedEntry` / `rawDraftEntry` / `rawPost`);
+  a fixture meant to be refused is refused by the same rule as before, on the transition or at commit.
+- One extra UPDATE per posted entry, on which the 0025/0037/0041 relabel guard (two small EXISTS
+  queries) and the period guard run. Negligible against the row locks a posting already takes.
+- The 0025 migration comment "postEntryCore INSERTs entries already POSTED" is historical from 0042 on;
+  migrations are immutable, so this ADR is the correction.
+- A DRAFT is still freely editable and still carries no ledger effect (ADR-011); the engine never leaves
+  one behind.
+- Not addressed: a structural "both sides" rule for intercompany groups (5c N5) — a one-member group is
+  legal at the database and is what "in transit" is.
+

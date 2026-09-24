@@ -24,6 +24,7 @@ import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 async function makeUser(): Promise<string> {
   const { response } = await getAuth().api.signUpEmail({
@@ -98,8 +99,7 @@ describe('intercompany report (LL-098)', () => {
     try {
       await db.transaction(async (tx) => {
         // Corrupt A's side only: +10 on Due from B with no B-side entry (source INTERCOMPANY passes the trigger).
-        const e = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number) values (${a}, '2026-06-10', '2026-06-10', 'INTERCOMPANY', ${owner}, 'POSTED', 95000) returning id`);
-        await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${e.rows[0]!.id}, ${a}, ${dueFromA}, 1, '10.0000', '0.0000'), (${e.rows[0]!.id}, ${a}, ${expenseA}, 2, '0.0000', '10.0000')`);
+        await rawPostedEntry(tx, { companyId: a, userId: owner, sourceType: 'INTERCOMPANY', entryNumber: 95000, transactionDate: '2026-06-10', lines: [{ accountId: dueFromA, debit: '10.0000', credit: '0.0000' }, { accountId: expenseA, debit: '0.0000', credit: '10.0000' }] });
         expect(await findIntercompanyMismatches(tx)).toEqual([`${a}->${b}`]);
         await expect(assertIntercompanyMirror(undefined, tx)).rejects.toBeInstanceOf(LedgerIntegrityError);
         throw new Error('ROLLBACK');

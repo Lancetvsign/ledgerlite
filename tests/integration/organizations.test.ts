@@ -52,6 +52,7 @@ import { receivePaymentInput } from '@/validation/payment';
 import { createVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 async function makeUser(): Promise<string> {
   const { response } = await getAuth().api.signUpEmail({
@@ -102,21 +103,12 @@ async function pair(owner: string, a: string, b: string) {
 async function anyExpense(owner: string, companyId: string): Promise<string> {
   return (await createAccount(owner, companyId, createAccountInput.parse({ name: 'Some Expense', accountType: 'EXPENSE' }))).id;
 }
-/** Raw POSTED entry with the given source and lines — the services entirely bypassed. */
-function rawEntry(companyId: string, userId: string, source: string, lines: { accountId: string; debit: string; credit: string }[], entryNumber = 95000): Promise<string> {
-  return getDbTx().transaction(async (tx) => {
-    const r = await tx.execute<{ id: string }>(sql`
-      insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, posted_at)
-      values (${companyId}, '2026-03-10', '2026-03-10', ${source}::journal_source_type, ${userId}, 'POSTED', ${entryNumber}, now()) returning id`);
-    const id = r.rows[0]!.id;
-    let n = 1;
-    for (const l of lines) {
-      await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-        values (${id}, ${companyId}, ${l.accountId}, ${n}, ${l.debit}, ${l.credit})`);
-      n += 1;
-    }
-    return id;
-  });
+/** Raw POSTED entry with the given source and lines — the services entirely bypassed (LL-104 shape: DRAFT → lines → POSTED). */
+function rawEntry(companyId: string, userId: string, source: string, lines: { accountId: string; debit: string; credit: string }[], entryNumber = 95000, reversalOfId?: string): Promise<string> {
+  // A REVERSAL must name its original (LL-104 CHECK) — the only legal shape of a reversal.
+  return getDbTx().transaction((tx) =>
+    rawPostedEntry(tx, { companyId, userId, sourceType: source, lines, entryNumber, transactionDate: '2026-03-10', reversalOfId: reversalOfId ?? null }),
+  );
 }
 async function auditActions(companyId: string): Promise<string[]> {
   const db = await getTestDb();
@@ -180,7 +172,7 @@ describe('the allow-list trigger: only INTERCOMPANY or REVERSAL moves a Due acco
       n += 1;
     }
     const ic = await rawEntry(a, owner, 'INTERCOMPANY', line('10.0000', '0.0000'), n);
-    const rv = await rawEntry(a, owner, 'REVERSAL', line('0.0000', '10.0000'), n + 1);
+    const rv = await rawEntry(a, owner, 'REVERSAL', line('0.0000', '10.0000'), n + 1, ic);
     expect(ic).toBeTruthy();
     expect(rv).toBeTruthy();
     // Relabel attack: an INTERCOMPANY entry cannot be flipped to a manual one after the fact.
@@ -273,11 +265,11 @@ describe('organization services', () => {
     // The manual reversal API refuses a non-manual root (ADR-025) — an intercompany entry is
     // undone by its own un-assign (LL-097/099). Here: a REVERSAL entry, which the trigger admits.
     expect(await codeOf(reverseJournalEntry(reverseJournalEntryInput.parse({ companyId: a, actorUserId: owner, entryId: icA, reversalDate: '2026-03-11' })), LedgerError)).toBe('DOCUMENT_REVERSAL_REQUIRES_VOID');
-    await rawEntry(a, owner, 'REVERSAL', [{ accountId: dueFrom.id, debit: '0.0000', credit: '25.0000' }, { accountId: expA, debit: '25.0000', credit: '0.0000' }], 95010);
+    await rawEntry(a, owner, 'REVERSAL', [{ accountId: dueFrom.id, debit: '0.0000', credit: '25.0000' }, { accountId: expA, debit: '25.0000', credit: '0.0000' }], 95010, icA);
     // B's side: a balance on "Due to A" blocks A too (either direction).
-    await rawEntry(b, owner, 'INTERCOMPANY', [{ accountId: expB, debit: '5.0000', credit: '0.0000' }, { accountId: dueTo.id, debit: '0.0000', credit: '5.0000' }]);
+    const icB = await rawEntry(b, owner, 'INTERCOMPANY', [{ accountId: expB, debit: '5.0000', credit: '0.0000' }, { accountId: dueTo.id, debit: '0.0000', credit: '5.0000' }]);
     expect(await codeOf(removeCompanyFromOrganization(owner, a), OrganizationError)).toBe('ORG_HAS_INTERCOMPANY_BALANCE');
-    await rawEntry(b, owner, 'REVERSAL', [{ accountId: expB, debit: '0.0000', credit: '5.0000' }, { accountId: dueTo.id, debit: '5.0000', credit: '0.0000' }], 95011);
+    await rawEntry(b, owner, 'REVERSAL', [{ accountId: expB, debit: '0.0000', credit: '5.0000' }, { accountId: dueTo.id, debit: '5.0000', credit: '0.0000' }], 95011, icB);
 
     await removeCompanyFromOrganization(owner, b);
     const db = await getTestDb();

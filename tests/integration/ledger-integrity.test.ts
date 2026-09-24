@@ -37,6 +37,7 @@ import { createCompanyInput } from '@/validation/company';
 import { postJournalEntryInput } from '@/validation/journal';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawDraftEntry, rawPost, rawPostedEntry } from '../helpers/raw-entry';
 
 interface Ctx {
   userId: string;
@@ -136,14 +137,9 @@ describe('each assertion detects its corruption', () => {
     const c = await setup();
     await expectDetected(
       async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-01-10', '2026-01-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 90001) returning id`);
-        const id = r.rows[0]!.id;
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${id}, ${c.companyId}, ${c.cashId}, 1, '100.0000', '0.0000'),
-                 (${id}, ${c.companyId}, ${c.revId}, 2, '0.0000', '90.0000')`);
+        // Unbalanced by design: the deferred balance trigger would refuse the COMMIT, but the
+        // assertion under test must catch it inside the transaction first.
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 90001, lines: [{ accountId: c.cashId, debit: '100.0000', credit: '0.0000' }, { accountId: c.revId, debit: '0.0000', credit: '90.0000' }] });
       },
       (tx) => assertLedgerBalanced(c.companyId, tx),
     );
@@ -153,14 +149,9 @@ describe('each assertion detects its corruption', () => {
     const c = await setup();
     await expectDetected(
       async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-01-10', '2026-01-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 90002) returning id`);
-        const id = r.rows[0]!.id;
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${id}, ${c.companyId}, ${c.cashId}, 1, '100.0000', '0.0000'),
-                 (${id}, ${c.companyId}, ${c.revId}, 2, '0.0000', '90.0000')`);
+        // Unbalanced by design: the deferred balance trigger would refuse the COMMIT, but the
+        // assertion under test must catch it inside the transaction first.
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 90002, lines: [{ accountId: c.cashId, debit: '100.0000', credit: '0.0000' }, { accountId: c.revId, debit: '0.0000', credit: '90.0000' }] });
       },
       (tx) => assertTrialBalanceBalanced(c.companyId, tx),
     );
@@ -197,15 +188,14 @@ describe('each assertion detects its corruption', () => {
     const b = await setup();
     await expectDetected(
       async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${a.companyId}, '2026-01-10', '2026-01-10', 'JOURNAL_ENTRY', ${a.userId}, 'POSTED', 90004) returning id`);
-        const entryId = r.rows[0]!.id;
-        // Lift the account FK; insert A's line pointing at B's account; rollback restores it.
+        // A DRAFT first: no line can be added under a POSTED entry (LL-104). Lift the account
+        // FK; insert A's line pointing at B's account; post; rollback restores everything.
+        const entryId = await rawDraftEntry(tx, { companyId: a.companyId, userId: a.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 90004, lines: [] });
         await tx.execute(sql`alter table journal_lines drop constraint journal_lines_account_same_company_fk`);
         await tx.execute(sql`
           insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
           values (${entryId}, ${a.companyId}, ${b.cashId}, 1, '5.0000', '0.0000')`);
+        await rawPost(tx, entryId);
       },
       (tx) => assertAccountOwnership(a.companyId, tx),
     );

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * Cash in transit done right — LL-101 (Gate 7 H2, M2, L7, L8, 5c L1). Against a real DB.
  * Three report states; "in transit" only for a mark (a POSTED statement line on the pair account)
@@ -21,6 +23,7 @@ import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 const EMPTY = new Uint8Array();
 async function makeUser(): Promise<string> {
@@ -95,8 +98,7 @@ describe('three states (Gate 7 H2)', () => {
     let caught: unknown;
     try {
       await db.transaction(async (tx) => {
-        const e = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, intercompany_group_id) values (${c.a}, '2026-07-02', '2026-07-02', 'INTERCOMPANY', ${c.owner}, 'POSTED', 95000, gen_random_uuid()) returning id`);
-        await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${e.rows[0]!.id}, ${c.a}, ${dueFromA}, 1, '99.0000', '0.0000'), (${e.rows[0]!.id}, ${c.a}, ${expenseA}, 2, '0.0000', '99.0000')`);
+        await rawPostedEntry(tx, { companyId: c.a, userId: c.owner, sourceType: 'INTERCOMPANY', entryNumber: 95000, transactionDate: '2026-07-02', intercompanyGroupId: randomUUID(), lines: [{ accountId: dueFromA, debit: '99.0000', credit: '0.0000' }, { accountId: expenseA, debit: '0.0000', credit: '99.0000' }] });
         expect(await findIntercompanyMismatches(tx, undefined, { asOf: '2026-07-05' })).toEqual([`${c.a}->${c.b}`]);
         throw new Error('ROLLBACK');
       });

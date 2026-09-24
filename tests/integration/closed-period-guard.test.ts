@@ -21,6 +21,7 @@ import { createCompanyInput } from '@/validation/company';
 import { postJournalEntryInput } from '@/validation/journal';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 interface Ctx {
   userId: string;
@@ -150,16 +151,7 @@ describe('closed-period guard is STRUCTURAL (database, service bypassed)', () =>
     // A balanced 2-line POSTED entry, service bypassed, in one tx so the deferred
     // balance trigger is satisfied at commit. The period guard must NOT block it.
     await db.transaction(async (tx) => {
-      const r = await tx.execute<{ id: string }>(sql`
-        insert into journal_entries
-          (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-        values (${c.companyId}, '2026-01-25', '2026-01-25', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 90200)
-        returning id`);
-      const id = r.rows[0]!.id;
-      await tx.execute(sql`
-        insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-        values (${id}, ${c.companyId}, ${c.cashId}, 1, '1.0000', '0.0000'),
-               (${id}, ${c.companyId}, ${c.revId}, 2, '0.0000', '1.0000')`);
+      await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 90200, transactionDate: '2026-01-25', lines: [{ accountId: c.cashId, debit: '1.0000', credit: '0.0000' }, { accountId: c.revId, debit: '0.0000', credit: '1.0000' }] });
     });
     const cnt = await db.execute<{ n: string }>(
       sql`select count(*)::text n from journal_entries where company_id = ${c.companyId} and entry_number = 90200`,

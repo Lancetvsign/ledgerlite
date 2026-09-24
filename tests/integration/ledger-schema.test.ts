@@ -15,6 +15,7 @@ import { createAccount } from '@/server/accounts';
 import { createCompanyInput } from '@/validation/company';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 async function fixture() {
   const { response } = await getAuth().api.signUpEmail({
@@ -55,15 +56,13 @@ async function postBalanced(
 ): Promise<string> {
   const { getDbTx } = await import('@/db');
   return await getDbTx().transaction(async (tx) => {
-    // idempotency_fingerprint can only be set at INSERT: the immutability trigger
+    // idempotency_fingerprint is set at the DRAFT insert: the immutability trigger
     // forbids changing it once the row is POSTED (that is the invariant under test).
-    const r = await tx.execute<{ id: string }>(sql`
-      insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, source_id, idempotency_fingerprint)
-      values (${companyId}, '2026-01-10', '2026-01-10', 'INVOICE', ${userId}, 'POSTED', ${opts.entryNumber}, ${opts.sourceId ?? null}, ${opts.fingerprint ?? null})
-      returning id`);
-    const id = r.rows[0]!.id;
-    await tx.execute(sql`insert into journal_lines (journal_entry_id,company_id,account_id,line_number,debit,credit) values (${id},${companyId},${cashId},1,10,0),(${id},${companyId},${revId},2,0,10)`);
-    return id;
+    return await rawPostedEntry(tx, {
+      companyId, userId, sourceType: 'INVOICE', entryNumber: opts.entryNumber,
+      sourceId: opts.sourceId ?? null, fingerprint: opts.fingerprint ?? null,
+      lines: [{ accountId: cashId, debit: '10.0000', credit: '0.0000' }, { accountId: revId, debit: '0.0000', credit: '10.0000' }],
+    });
   });
 }
 
@@ -142,9 +141,7 @@ describe('invariant 6 — balance at commit, POSTED only', () => {
     const { getDbTx } = await import('@/db');
     await rejects(
       getDbTx().transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id,transaction_date,posting_date,source_type,created_by,status,entry_number) values (${f.companyId},'2026-01-10','2026-01-10','JOURNAL_ENTRY',${f.userId},'POSTED',20) returning id`);
-        const id = r.rows[0]!.id;
-        await tx.execute(sql`insert into journal_lines (journal_entry_id,company_id,account_id,line_number,debit,credit) values (${id},${f.companyId},${f.cashId},1,100,0),(${id},${f.companyId},${f.revId},2,0,99)`);
+        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 20, lines: [{ accountId: f.cashId, debit: '100.0000', credit: '0.0000' }, { accountId: f.revId, debit: '0.0000', credit: '99.0000' }] });
       }),
       /UNBALANCED_JOURNAL_ENTRY|check_violation/i,
     );
@@ -155,9 +152,7 @@ describe('invariant 6 — balance at commit, POSTED only', () => {
     const { getDbTx } = await import('@/db');
     await rejects(
       getDbTx().transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id,transaction_date,posting_date,source_type,created_by,status,entry_number) values (${f.companyId},'2026-01-10','2026-01-10','JOURNAL_ENTRY',${f.userId},'POSTED',21) returning id`);
-        const id = r.rows[0]!.id;
-        await tx.execute(sql`insert into journal_lines (journal_entry_id,company_id,account_id,line_number,debit,credit) values (${id},${f.companyId},${f.cashId},1,50,0)`);
+        await rawPostedEntry(tx, { companyId: f.companyId, userId: f.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 21, lines: [{ accountId: f.cashId, debit: '50.0000', credit: '0.0000' }] });
       }),
       /at least 2|check_violation/i,
     );

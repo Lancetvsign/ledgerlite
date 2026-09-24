@@ -28,10 +28,12 @@ import { companies, users } from './identity';
  * migration 0005), not by application code. Application code can be wrong; a
  * future feature module can forget; the database cannot. Read the migration in
  * full before trusting anything here — the triggers (deferred balance check and
- * posted-immutability in 0006; the closed-period guard in 0010; the A/R
- * control-account guard in 0018, which blocks a manual journal entry from posting to
- * Accounts Receivable so the aging subsidiary always reconciles) are hand-written SQL
- * the schema file cannot express.
+ * posted-immutability in 0006; the closed-period guard in 0010, extended to the
+ * DRAFT→POSTED transition in 0042; the A/R control-account guard in 0018, which blocks
+ * a manual journal entry from posting to Accounts Receivable so the aging subsidiary
+ * always reconciles; the line guard widened to BEFORE INSERT in 0042 — no line can be
+ * added to a POSTED/REVERSED entry, which is why LedgerService posts by transition:
+ * DRAFT → lines → POSTED, ADR-044) are hand-written SQL the schema file cannot express.
  */
 
 /** DRAFT may be unbalanced/empty; POSTED is balanced and immutable; REVERSED is a posted entry undone by a reversal. */
@@ -142,6 +144,9 @@ export const journalEntries = pgTable(
       .where(sql`source_type = 'OPENING_BALANCE' and status = 'POSTED'`),
     unique('journal_entries_intercompany_group_company_unique').on(table.intercompanyGroupId, table.companyId),
     check('journal_entries_group_only_intercompany', sql`${table.intercompanyGroupId} is null or ${table.sourceType}::text = 'INTERCOMPANY'`),
+    // LL-104 (Gate 7 5c L4): only a REVERSAL carries reversal_of_id, and every REVERSAL does.
+    // A raw "REVERSAL"-labelled entry could otherwise pass the intercompany allow-list with no original.
+    check('journal_entries_reversal_link_consistent', sql`(${table.sourceType}::text = 'REVERSAL') = (${table.reversalOfId} is not null)`),
     // Reporting indexes (trial balance, GL).
     index('journal_entries_company_txn_date_idx').on(table.companyId, table.transactionDate),
     index('journal_entries_company_status_idx').on(table.companyId, table.status),
