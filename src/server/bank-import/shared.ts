@@ -461,12 +461,16 @@ export async function unassignSharedLine(
   if (line === undefined || line.status !== 'ASSIGNED' || line.assignedCompanyId !== viewerCompanyId || line.journalEntryId === null || line.assignedJournalEntryId === null) {
     throw new BankImportError('LINE_NOT_FOUND', 'That line is not assigned to this company.');
   }
-  const viewerRow = (await getDb().select({ legalName: schema.companies.legalName, timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, viewerCompanyId)).limit(1))[0];
-  const ownerToday = todayInTimeZone(visible.ownerTimezone);
-  const viewerToday = todayInTimeZone(viewerRow?.timezone ?? 'UTC');
+  const viewerRow = (await getDb().select({ legalName: schema.companies.legalName }).from(schema.companies).where(eq(schema.companies.id, viewerCompanyId)).limit(1))[0];
+  // ONE reversal date for both sides — the cardholder's today — open in both companies (Gate 7 L6:
+  // two dates around midnight across timezones made the pair differ for a day).
+  const reversalDate = todayInTimeZone(visible.ownerTimezone);
   const periodCache = new Map<string, boolean>();
-  await assertPeriodsOpen([{ id: ownerCompanyId, legalName: visible.ownerLegalName }], ownerToday, periodCache);
-  await assertPeriodsOpen([{ id: viewerCompanyId, legalName: viewerRow?.legalName ?? 'this company' }], viewerToday, periodCache);
+  await assertPeriodsOpen(
+    [{ id: ownerCompanyId, legalName: visible.ownerLegalName }, { id: viewerCompanyId, legalName: viewerRow?.legalName ?? 'this company' }],
+    reversalDate,
+    periodCache,
+  );
 
   const ownerEntryId = line.journalEntryId;
   const viewerEntryId = line.assignedJournalEntryId;
@@ -480,12 +484,13 @@ export async function unassignSharedLine(
           .for('update')
       )[0];
       if (locked?.status !== 'ASSIGNED' || locked.assignedCompanyId !== viewerCompanyId) return false;
-      for (const id of [ownerCompanyId, viewerCompanyId].sort()) {
-        await lockCompanyKeyShare(tx, id);
-      }
+      // KEY SHARE on both companies AND the pair reactivated if a past leave deactivated it
+      // (Gate 7 5c M1): a reversal onto an INACTIVE pair account would otherwise escape the
+      // leave rule. ensureIntercompanyPair is idempotent and takes the sorted KEY SHARE itself.
+      await ensureIntercompanyPair(tx, actorUserId, ownerCompanyId, viewerCompanyId);
       await lockEntryCounters(tx, [ownerCompanyId, viewerCompanyId]);
-      await reverseEntryCore(tx, { companyId: ownerCompanyId, actorUserId, entryId: ownerEntryId, description: 'Card line given back by the taking company' }, ownerToday);
-      await reverseEntryCore(tx, { companyId: viewerCompanyId, actorUserId, entryId: viewerEntryId, description: 'Card line given back to the cardholder' }, viewerToday);
+      await reverseEntryCore(tx, { companyId: ownerCompanyId, actorUserId, entryId: ownerEntryId, description: 'Card line given back by the taking company' }, reversalDate);
+      await reverseEntryCore(tx, { companyId: viewerCompanyId, actorUserId, entryId: viewerEntryId, description: 'Card line given back to the cardholder' }, reversalDate);
       await tx
         .update(schema.bankImportLines)
         .set({ status: 'STAGED', journalEntryId: null, assignedCompanyId: null, assignedJournalEntryId: null, updatedAt: sql`now()` })
@@ -518,7 +523,7 @@ export async function unassignSharedLine(
   }
 }
 
-async function lockCompanyKeyShare(tx: Tx, companyId: string): Promise<void> {
+export async function lockCompanyKeyShare(tx: Tx, companyId: string): Promise<void> {
   const rows = await tx
     .select({ id: schema.companies.id })
     .from(schema.companies)
