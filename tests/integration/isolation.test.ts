@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -40,7 +40,10 @@ import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
 import { insertMembership } from '@/server/companies/internal';
-import { changeMemberRole, inviteMember, listInvitations, removeMember, revokeInvitation } from '@/server/members';
+import { changeMemberRole, inviteMember, issueInvitationLink, listInvitations, removeMember, revokeInvitation } from '@/server/members';
+import { addCompanyToOrganization, createOrganization, listOrganizationCompanies, removeCompanyFromOrganization } from '@/server/organizations';
+import { getIntercompanyReport } from '@/server/reports';
+import { transferCounterparts } from '@/server/bank-import';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { attack, type IsolationContext, type IsolationDescriptor } from '../helpers/isolation';
@@ -94,6 +97,60 @@ const REGISTRY: IsolationDescriptor[] = [
         run: async (attacker, victim) => {
           const mine = await listCompaniesForUser(attacker);
           return mine.filter((entry) => entry.company.id === victim.companyId);
+        },
+      },
+      // Organizations (LL-096): every move is authorized in the victim company.
+      {
+        operation: 'create an organization around it',
+        expect: 'denied',
+        run: (attacker, victim) => createOrganization(attacker, victim.companyId, { name: 'Hostile Group' }),
+      },
+      {
+        operation: "add it to the attacker's own organization",
+        expect: 'denied',
+        run: async (attacker, victim) => {
+          const own = await createCompanyWithOwner(attacker, createCompanyInput.parse({ legalName: 'Attacker Org Co', timezone: 'UTC' }), 'system-only');
+          const org = await createOrganization(attacker, own.company.id, { name: 'Attacker Group' });
+          return await addCompanyToOrganization(attacker, victim.companyId, org.id);
+        },
+      },
+      {
+        operation: 'remove it from its organization',
+        expect: 'denied',
+        run: (attacker, victim) => removeCompanyFromOrganization(attacker, victim.companyId),
+      },
+      {
+        operation: 'list its organization members',
+        expect: 'denied',
+        run: (attacker, victim) => listOrganizationCompanies(attacker, victim.companyId),
+      },
+      // LL-098 / LL-099 (Gate 7 L4): the intercompany report and the transfer counterparts are company-scoped reads.
+      {
+        operation: 'read its intercompany balances report',
+        expect: 'denied',
+        run: (attacker, victim) => getIntercompanyReport(attacker, victim.companyId, '2026-12-31'),
+      },
+      {
+        operation: 'list the companies it may move money with',
+        expect: 'denied',
+        run: (attacker, victim) => transferCounterparts(attacker, victim.companyId),
+      },
+    ],
+  },
+  {
+    // LL-096: an organization is cross-tenant by design; joining a guessed one is the uniform denial.
+    table: 'organizations',
+    seed: async (victim) => {
+      const org = await createOrganization(victim.ownerUserId, victim.companyId, { name: 'Victim Group' });
+      return { recordId: org.id };
+    },
+    attempts: [
+      {
+        operation: "add the attacker's own company to the victim's organization by guessed id",
+        expect: 'denied',
+        run: async (attacker, _victim, recordId) => {
+          const own = await createCompanyWithOwner(attacker, createCompanyInput.parse({ legalName: 'Attacker Join Co', timezone: 'UTC' }), 'system-only');
+          return await addCompanyToOrganization(attacker, own.company.id, recordId);
         },
       },
     ],
@@ -152,6 +209,11 @@ const REGISTRY: IsolationDescriptor[] = [
         operation: 'revoke an invitation by direct id',
         expect: 'denied',
         run: (attacker, victim, recordId) => revokeInvitation(attacker, victim.companyId, recordId),
+      },
+      {
+        operation: 'issue a join link for an invitation by direct id',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => issueInvitationLink(attacker, victim.companyId, recordId),
       },
       {
         operation: 'invite someone into the victim company',
@@ -726,6 +788,56 @@ const REGISTRY: IsolationDescriptor[] = [
             () => Promise.resolve([{ date: '2026-06-01', description: 'X', amount: '1.00' }]));
         },
       },
+      // LL-097: sharing and the shared view. The attacker's own company is no member of the
+      // victim's organization (nor is the attacker a member of the victim), so every shared
+      // read is EMPTY / null and every write the uniform denial.
+      {
+        operation: 'share the batch with an organization',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => setBatchSharing(attacker, victim.companyId, recordId, true),
+      },
+      {
+        operation: 'list it as "shared with you" from the attacker company',
+        expect: 'empty',
+        run: async (attacker) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return await listSharedImports(attacker, own.rows[0]?.company_id ?? attacker);
+        },
+      },
+      {
+        operation: 'open it as a shared statement from the attacker company',
+        expect: 'empty',
+        run: async (attacker, _victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          return await getSharedImportBatch(attacker, own.rows[0]?.company_id ?? attacker, recordId);
+        },
+      },
+      {
+        operation: 'take a line of it into the attacker company',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
+          return await assignSharedLines(attacker, own.rows[0]?.company_id ?? attacker, recordId, { decisions: [{ lineId: line.rows[0]?.id ?? recordId, accountId: recordId }] });
+        },
+      },
+      {
+        operation: 'give a line of it back from the attacker company',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const db = await getTestDb();
+          const { sql: rawSql } = await import('drizzle-orm');
+          const own = await db.execute<{ company_id: string }>(rawSql`select company_id from company_memberships where user_id = ${attacker} limit 1`);
+          const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
+          return await unassignSharedLine(attacker, own.rows[0]?.company_id ?? attacker, recordId, line.rows[0]?.id ?? recordId);
+        },
+      },
     ],
   },
   {
@@ -750,6 +862,26 @@ const REGISTRY: IsolationDescriptor[] = [
             rawSql`select id from accounts where company_id = ${victim.companyId} and system_account_type is null limit 1`);
           return await postImportLines(attacker, victim.companyId, batchId ?? '', {
             decisions: [{ lineId: lineId ?? '', action: 'post', accountId: acct.rows[0]?.id ?? victim.companyId }],
+          });
+        },
+      },
+      {
+        operation: 'mark a staged line as an intercompany transfer (LL-099)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return await postImportLines(attacker, victim.companyId, batchId ?? '', {
+            decisions: [{ lineId: lineId ?? '', action: 'intercompany_transfer', counterpartCompanyId: victim.companyId }],
+          });
+        },
+      },
+      {
+        operation: 'match a staged line to an intercompany transfer (LL-099)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return await postImportLines(attacker, victim.companyId, batchId ?? '', {
+            decisions: [{ lineId: lineId ?? '', action: 'match_intercompany', counterpartEntryId: victim.companyId }],
           });
         },
       },

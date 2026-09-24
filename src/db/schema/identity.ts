@@ -1,8 +1,8 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
-  check,
   char,
+  check,
   index,
   integer,
   jsonb,
@@ -68,6 +68,28 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * An organization groups companies that belong to one owner (LL-096 / ADR-043) so a
+ * shared card statement or a bank transfer between them can be posted intercompany.
+ * CROSS-TENANT BY DESIGN: it holds no money and no ledger, so it carries no
+ * company_id and no (company_id, id) unique; a company points at it from
+ * `companies.organization_id`. Rows are never deleted (ADR-006) — an organization
+ * with no members is simply unreachable.
+ */
+export const organizations = pgTable(
+  'organizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check('organizations_name_nonempty', sql`length(trim(${table.name})) > 0`)],
+);
+
 export const companies = pgTable(
   'companies',
   {
@@ -95,6 +117,8 @@ export const companies = pgTable(
      * partial unique index below is the arbiter, not a service check.
      */
     isTemplate: boolean('is_template').notNull().default(false),
+    /** The organization this company belongs to, if any (LL-096). At most one. */
+    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'restrict' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -106,6 +130,14 @@ export const companies = pgTable(
     // At most one template company exists; a second designation is a unique
     // violation, which the service maps to TEMPLATE_EXISTS.
     uniqueIndex('companies_one_template').on(table.isTemplate).where(sql`${table.isTemplate} = true`),
+    // The template slot is released on archive (LL-083); the database now holds that too (LL-095).
+    check('companies_template_is_active', sql`not ${table.isTemplate} or ${table.status} = 'ACTIVE'`),
+    // LL-096: the template seeds new companies and must never carry intercompany
+    // accounts, so it cannot be an organization member; and a member must be
+    // ACTIVE — an archived member could never leave, nor could its counterparts.
+    index('companies_organization_idx').on(table.organizationId),
+    check('companies_template_not_in_organization', sql`not ${table.isTemplate} or ${table.organizationId} is null`),
+    check('companies_organization_member_is_active', sql`${table.organizationId} is null or ${table.status} = 'ACTIVE'`),
   ],
 );
 
@@ -174,12 +206,20 @@ export const companyInvitations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
     acceptedUserId: uuid('accepted_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    /**
+     * LL-090: the invitation's secret, stored as a SHA-256 hex hash — the link the
+     * inviter hands over IS the authorization to join. Nullable only for rows created
+     * before LL-090, which can never be claimed (revoke and re-invite).
+     */
+    tokenHash: text('token_hash'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   },
   (table) => [
     // The standing tenancy constraint.
     unique('company_invitations_company_id_id_unique').on(table.companyId, table.id),
+    uniqueIndex('company_invitations_token_hash_unique').on(table.tokenHash).where(sql`${table.tokenHash} is not null`),
     check('company_invitations_email_lowercase', sql`${table.email} = lower(btrim(${table.email}))`),
     check('company_invitations_accepted_stamp', sql`(${table.status} = 'ACCEPTED') = (${table.acceptedUserId} is not null)`),
     check('company_invitations_resolved_stamp', sql`(${table.status} <> 'PENDING') = (${table.resolvedAt} is not null)`),

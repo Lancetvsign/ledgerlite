@@ -154,3 +154,11 @@ test('an invalid as-of date is rejected', async ({ page }) => {
   await expect(page.getByTestId('notice')).toBeVisible();
   await expect(page.getByTestId('trial-balance-table')).toHaveCount(0); // no results for a bad date
 });
+
+test('the Intercompany Balances report is listed and explains itself for a company outside any organization (LL-098)', async ({ page }) => {
+  await freshCompany(page);
+  await page.goto('/reports');
+  await page.getByTestId('intercompany-link').click();
+  await expect(page).toHaveURL(/\/reports\/intercompany$/);
+  await expect(page.getByTestId('intercompany-empty')).toContainText('not in an organization');
+});

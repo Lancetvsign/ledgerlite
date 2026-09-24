@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { toMoney } from '@/lib/decimal';
 import { formatMoney, toInputAmount } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
@@ -64,7 +65,7 @@ export default async function ReconciliationPage({
   const inProgress = rec.status === 'IN_PROGRESS';
   const editable = inProgress && canWrite;
   const nothingSavedYet = view.lines.every((l) => !l.cleared);
-  const balanced = view.difference === '0.0000';
+  const balanced = toMoney(view.difference).isZero(); // never a string compare on money (ADR-004)
   const inputClass = 'rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
   return (
@@ -95,6 +96,9 @@ export default async function ReconciliationPage({
       {editable && (
         <form action={updateReconciliationAction} data-testid="recon-update-form" className="flex flex-wrap items-end gap-3 text-sm">
           <input type="hidden" name="reconciliationId" value={rec.id} />
+          {/* What the inputs showed: an untouched field is not sent back (LL-093). */}
+          <input type="hidden" name="shownStatementDate" value={rec.statementDate} />
+          <input type="hidden" name="shownStatementEndingAmount" value={toInputAmount(rec.statementEndingAmount)} />
           <label className="flex flex-col gap-1">
             <span>Statement date</span>
             <input type="date" name="statementDate" defaultValue={rec.statementDate} data-testid="recon-edit-date" className={inputClass} />

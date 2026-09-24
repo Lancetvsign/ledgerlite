@@ -17,6 +17,7 @@
 import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { getDbTx } from '@/db';
 import { getAuth } from '@/lib/auth';
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { toMoney } from '@/lib/decimal';
@@ -32,14 +33,16 @@ import { issueCreditMemo, voidCreditMemo } from '@/server/credit-memos';
 import { receivePayment, voidPayment } from '@/server/payments';
 import { voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import {
+  assertIntercompanyMirror,
   assertLedgerIntegrity,
   getJournalEntry,
   LedgerError,
   postJournalEntry,
   reverseJournalEntry,
 } from '@/server/ledger';
+import { addCompanyToOrganization, createOrganization } from '@/server/organizations';
 import { closePeriod } from '@/server/periods';
-import { getApAging, getArAging, getCustomerStatement, getTrialBalance, getVendorStatement } from '@/server/reports';
+import { getApAging, getArAging, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -53,6 +56,9 @@ import { createBillInput, voidBillInput } from '@/validation/bill';
 import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 import { createVendorInput } from '@/validation/vendor';
+
+import { assignSharedLines, getImportBatch, getSharedImportBatch, postImportLines, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { cannedExtractor } from '@/server/bank-import/extract';
 
 import { getTestDb, truncateAll } from '../helpers/database';
 import { assertReversalNetsToZero } from '../helpers/ledger-invariants';
@@ -108,6 +114,18 @@ function post(
 }
 
 /** Runs a promise expected to throw a LedgerError; returns its code. */
+const chainText = (err: unknown): string => {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  let acc = '';
+  while (cur instanceof Error && !seen.has(cur)) {
+    seen.add(cur);
+    acc += ' ' + cur.message;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return acc;
+};
+
 async function codeOf(p: Promise<unknown>): Promise<string> {
   try {
     await p;
@@ -859,6 +877,125 @@ describe('GL regression suite (release-blocking)', () => {
     expect(await reconciles()).toBe('300.0000');
 
     await assertLedgerIntegrity(company.id);
+  });
+
+  it('GL-T028 — no non-document source can move A/R, even by raw SQL or a mislabelled statement account (LL-091)', async () => {
+    const userId = await makeUser();
+    const { company } = await createCompanyWithOwner(
+      userId,
+      createCompanyInput.parse({ legalName: 'GL Control Source Co', timezone: 'America/Chicago' }),
+      'standard',
+    );
+    const db = await getTestDb();
+    const arId = (await db.execute<{ id: string }>(sql`
+      select id from accounts where company_id = ${company.id} and system_account_type = 'ACCOUNTS_RECEIVABLE'`)).rows[0]!.id;
+    const arNow = async (): Promise<string> =>
+      (await getTrialBalance(userId, company.id, '2026-12-31')).rows.find((r) => r.accountId === arId)?.balance ?? '0.0000';
+
+    // Raw SQL flags A/R as a cash account; the import and reconciliation front doors still refuse it.
+    await db.execute(sql`update accounts set cash_flow_category = 'CASH' where id = ${arId}`);
+    const staged = await stageImport(userId, company.id, { bankAccountId: arId, filename: 'x.pdf', fileBytes: new Uint8Array() }, cannedExtractor)
+      .then(() => 'STAGED', (e: unknown) => (e as { code?: string }).code ?? 'unknown');
+    expect(staged).toBe('INVALID_BANK_ACCOUNT');
+
+    // Raw BANK_IMPORT and OPENING_BALANCE lines into A/R are refused by the database itself.
+    for (const source of ['BANK_IMPORT', 'OPENING_BALANCE']) {
+      let refused = false;
+      try {
+        await db.transaction(async (tx) => {
+          const e = await tx.execute<{ id: string }>(sql`
+            insert into journal_entries (company_id, transaction_date, posting_date, status, source_type, created_by)
+            values (${company.id}, '2026-03-01', '2026-03-01', 'DRAFT', ${source}::journal_source_type, ${userId}) returning id`);
+          await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${e.rows[0]!.id}, ${company.id}, ${arId}, 1, 10, 0)`);
+        });
+      } catch (err) {
+        refused = /CONTROL_ACCOUNT_MANUAL_POST/.test(chainText(err));
+      }
+      expect(refused, source).toBe(true);
+    }
+    expect(await arNow()).toBe('0.0000');
+    expect((await getArAging(userId, company.id, '2026-12-31')).totals.total).toBe('0.0000');
+  });
+
+  it('GL-T029 — every intercompany pair mirrors to the cent across the organization, in each company\'s report and by the invariant (LL-098)', async () => {
+    const userId = await makeUser();
+    const a = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Card Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const b = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Taker Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const c = (await createCompanyWithOwner(userId, createCompanyInput.parse({ legalName: 'GL Other Co', timezone: 'America/Chicago' }), 'standard')).company.id;
+    const org = await createOrganization(userId, a, { name: 'GL Group' });
+    await addCompanyToOrganization(userId, b, org.id);
+    await addCompanyToOrganization(userId, c, org.id);
+    const card = await createAccount(userId, a, createAccountInput.parse({ accountNumber: '2150', name: 'Visa', accountType: 'LIABILITY', accountSubtype: 'credit_card', cashFlowCategory: 'FINANCING' }));
+    const db = await getTestDb();
+    const expenseOf = async (companyId: string): Promise<string> =>
+      (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${companyId} and account_type = 'EXPENSE' and status = 'ACTIVE' order by account_number limit 1`)).rows[0]!.id;
+
+    // A shared card statement (−120.50, −45.00, +2000 PAYMENT, +30 REFUND). A's own bank statement carries
+    // the −2000 card payment and is posted first, so the card's +2000 is the cardholder's to MATCH (LL-094),
+    // never another company's to take (LL-102). B takes two charges and gives one back; C takes the refund.
+    const bankA0 = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${a} and account_number = '1000'`)).rows[0]!.id;
+    const bankBatch = await stageImport(userId, a, { bankAccountId: bankA0, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-06-05', description: 'CARD PAYMENT', amount: '-2000.00' }]));
+    const bankLine = (await getImportBatch(userId, a, bankBatch.id))!.lines[0]!;
+    await postImportLines(userId, a, bankBatch.id, { decisions: [{ lineId: bankLine.id, action: 'post', accountId: card.id }] });
+    const cardRows = () => Promise.resolve([
+      { date: '2026-06-02', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+      { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
+      { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
+      { date: '2026-06-06', description: 'REFUND OFFICE DEPOT', amount: '30.00', category: 'Office Supplies' },
+    ]);
+    const batch = await stageImport(userId, a, { bankAccountId: card.id, filename: 'visa.pdf', fileBytes: new Uint8Array(), shareWithOrganization: true }, cardRows);
+    const lines = (await getImportBatch(userId, a, batch.id))!.lines;
+    expect(lines[2]!.transferCandidate?.status).toBe('POSTED');
+    const seenByC = (await getSharedImportBatch(userId, c, batch.id))!.lines.map((l) => l.lineNumber);
+    expect(seenByC).toEqual([1, 2, 4]); // the payment is not on offer
+    await assignSharedLines(userId, b, batch.id, { decisions: [{ lineId: lines[0]!.id, accountId: await expenseOf(b) }, { lineId: lines[1]!.id, accountId: await expenseOf(b) }] });
+    expect(await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[2]!.id, accountId: await expenseOf(c) }] }).then(() => 'OK', (e: unknown) => (e as { code?: string }).code)).toBe('CARD_PAYMENT_NOT_TAKEABLE');
+    await assignSharedLines(userId, c, batch.id, { decisions: [{ lineId: lines[3]!.id, accountId: await expenseOf(c) }] });
+    await postImportLines(userId, a, batch.id, { decisions: [{ lineId: lines[2]!.id, action: 'match_transfer', counterpartLineId: bankLine.id }] });
+    await unassignSharedLine(userId, b, batch.id, lines[1]!.id);
+    // C's P&L carries only the refund (a negative expense); A's card equals its statement.
+    const expC = await expenseOf(c);
+    const cExpense = (await getTrialBalance(userId, c, '2026-12-31')).rows.find((r) => r.accountId === expC)?.balance ?? '0.0000';
+    expect(cExpense).toBe('-30.0000');
+    const cardBalance = (await getTrialBalance(userId, a, '2026-12-31')).rows.find((r) => r.accountId === card.id)?.balance ?? '0.0000';
+    // 120.50 (B's take) − 2000 (payment) − 30 (C's refund), credit-natural. The −45 line was given
+    // back, so its card posting is reversed and the line waits to be decided again.
+    expect(cardBalance).toBe('-1909.5000');
+
+    // The refund C took is a NEGATIVE receivable in A (A owes C 30) mirrored by a negative payable in C.
+    for (const [companyId, expectDueFrom, expectDueTo] of [[a, '90.5000', '0.0000'], [b, '0.0000', '120.5000'], [c, '0.0000', '-30.0000']] as const) {
+      const report = await getIntercompanyReport(userId, companyId, '2026-12-31');
+      expect(report.mirrored, companyId).toBe(true);
+      for (const row of report.rows) {
+        expect(row.receivableDifference).toBe('0.0000');
+        expect(row.payableDifference).toBe('0.0000');
+        expect(toMoney(row.dueFrom).eq(toMoney(row.counterpartDueTo))).toBe(true);
+        expect(toMoney(row.dueTo).eq(toMoney(row.counterpartDueFrom))).toBe(true);
+      }
+      expect(report.totalDueFrom).toBe(expectDueFrom);
+      expect(report.totalDueTo).toBe(expectDueTo);
+    }
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    // Cash in transit (LL-099): A marks a bank transfer to B before B imports its statement — the
+    // pair differs by exactly that amount and is still considered mirrored; after B matches, it is 0.
+    const bankA = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${a} and account_number = '1000'`)).rows[0]!.id;
+    const bankB = (await db.execute<{ id: string }>(sql`select id from accounts where company_id = ${b} and account_number = '1000'`)).rows[0]!.id;
+    const outA = await stageImport(userId, a, { bankAccountId: bankA, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-07-01', description: 'TFR TO TAKER', amount: '-300.00' }]));
+    const outLine = (await getImportBatch(userId, a, outA.id))!.lines[0]!;
+    await postImportLines(userId, a, outA.id, { decisions: [{ lineId: outLine.id, action: 'intercompany_transfer', counterpartCompanyId: b }] });
+    const pendingRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
+    expect(pendingRow).toMatchObject({ receivableDifference: '300.0000', receivableInTransit: '300.0000', state: 'in_transit', mirrored: false });
+    // Fresh as of the fixture's own dates; the same mark is STALE by the gate's real today (LL-101).
+    await expect(assertIntercompanyMirror(undefined, getDbTx(), { asOf: '2026-07-02' })).resolves.toBeUndefined();
+    await expect(assertIntercompanyMirror()).rejects.toMatchObject({ check: 'intercompany-mirror' });
+    const inB = await stageImport(userId, b, { bankAccountId: bankB, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-07-02', description: 'FROM CARD CO', amount: '300.00' }]));
+    const inLine = (await getImportBatch(userId, b, inB.id))!.lines[0]!;
+    expect(inLine.intercompanyCandidate?.counterpartCompanyId).toBe(a);
+    await postImportLines(userId, b, inB.id, { decisions: [{ lineId: inLine.id, action: 'match_intercompany', counterpartEntryId: inLine.intercompanyCandidate!.entryId }] });
+    const settledRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
+    expect(settledRow).toMatchObject({ receivableDifference: '0.0000', receivableInTransit: '0.0000', state: 'mirrored', mirrored: true });
+    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    await assertLedgerIntegrity();
   });
 
   it('GL-T027 — neither manual bypass can move A/P without its subsidiary (LL-066)', async () => {

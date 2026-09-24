@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   date,
   foreignKey,
@@ -32,7 +33,12 @@ import { payments } from './payments';
  * batch, its suggested/chosen accounts, and its posted entry — all within one company.
  */
 
-export const bankImportLineStatus = pgEnum('bank_import_line_status', ['STAGED', 'POSTED', 'IGNORED']);
+/**
+ * STAGED → POSTED (categorised in this company) | IGNORED | PERSONAL (posted to an owner
+ * equity/asset account, LL-097) | ASSIGNED (posted INTERCOMPANY: this company's side against the
+ * card, the other company's side against its expense — LL-097 / ADR-043).
+ */
+export const bankImportLineStatus = pgEnum('bank_import_line_status', ['STAGED', 'POSTED', 'IGNORED', 'ASSIGNED', 'PERSONAL']);
 
 export const bankImportBatches = pgTable(
   'bank_import_batches',
@@ -45,6 +51,8 @@ export const bankImportBatches = pgTable(
     bankAccountId: uuid('bank_account_id').notNull(),
     /** The uploaded file's name — for the user's reference. The file itself is NOT stored. */
     filename: text('filename'),
+    /** LL-097: a CARD statement the other companies of the organization may take lines from. */
+    sharedWithOrganization: boolean('shared_with_organization').notNull().default(false),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
@@ -83,6 +91,16 @@ export const bankImportLines = pgTable(
     dedupHash: text('dedup_hash').notNull(),
     /** The posted entry, once this line is confirmed. Composite-FK'd, nullable. */
     journalEntryId: uuid('journal_entry_id'),
+    /** The POSTED line on the OTHER statement account this line is the mirror of (LL-094/095). */
+    mirrorOfLineId: uuid('mirror_of_line_id'),
+    /**
+     * LL-097: when ASSIGNED, the organization member that took the line and ITS entry
+     * (Dr expense / Cr Due to <this company>). A by-design cross-company reference —
+     * composite-FK'd to (company_id, id) of journal_entries so the entry provably belongs
+     * to the assigned company. `journalEntryId` above stays THIS company's side.
+     */
+    assignedCompanyId: uuid('assigned_company_id').references(() => companies.id, { onDelete: 'restrict' }),
+    assignedJournalEntryId: uuid('assigned_journal_entry_id'),
     /**
      * LL-077 (ADR-035): a line applied to an open invoice creates a real customer payment
      * (this is it) instead of a categorised entry; `journalEntryId` is that payment's entry.
@@ -94,11 +112,38 @@ export const bankImportLines = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    // RESTRICT (LL-095): a batch with lines can only go through deleteImportBatch /
+    // the company purge, which delete the lines first. A raw parent delete can no
+    // longer take POSTED lines (and the dedup/reconciliation links they carry) with it.
     foreignKey({
       columns: [table.companyId, table.batchId],
       foreignColumns: [bankImportBatches.companyId, bankImportBatches.id],
       name: 'bank_import_lines_batch_same_company_fk',
-    }).onDelete('cascade'),
+    }).onDelete('restrict'),
+    // One mirror per posted transfer line, structurally (LL-094 follow-up).
+    foreignKey({
+      columns: [table.companyId, table.mirrorOfLineId],
+      foreignColumns: [table.companyId, table.id],
+      name: 'bank_import_lines_mirror_same_company_fk',
+    }).onDelete('restrict'),
+    unique('bank_import_lines_mirror_of_line_id_unique').on(table.mirrorOfLineId),
+    // Shape invariants the service always wrote; now the database holds them too (LL-095,
+    // extended for PERSONAL / ASSIGNED in LL-097). Status compared as text: the enum values
+    // arrive in the same migration transaction.
+    check('bank_import_lines_posted_has_entry', sql`(${table.status}::text in ('POSTED', 'PERSONAL', 'ASSIGNED')) = (${table.journalEntryId} is not null)`),
+    check('bank_import_lines_targets_only_when_posted', sql`${table.status}::text in ('POSTED', 'PERSONAL') or num_nonnulls(${table.chosenAccountId}, ${table.paymentId}, ${table.billPaymentId}, ${table.mirrorOfLineId}) = 0`),
+    check('bank_import_lines_amount_nonzero', sql`${table.amount} <> 0`),
+    check(
+      'bank_import_lines_assigned_shape',
+      sql`num_nonnulls(${table.assignedCompanyId}, ${table.assignedJournalEntryId}) = (case when ${table.status}::text = 'ASSIGNED' then 2 else 0 end) and (${table.assignedCompanyId} is null or ${table.assignedCompanyId} <> ${table.companyId}) and (${table.assignedJournalEntryId} is null or ${table.assignedJournalEntryId} <> ${table.journalEntryId})`,
+    ),
+    check('bank_import_lines_personal_has_account', sql`${table.status}::text <> 'PERSONAL' or ${table.chosenAccountId} is not null`),
+    foreignKey({
+      columns: [table.assignedCompanyId, table.assignedJournalEntryId],
+      foreignColumns: [journalEntries.companyId, journalEntries.id],
+      name: 'bank_import_lines_assigned_entry_same_assigned_company_fk',
+    }).onDelete('restrict'),
+    unique('bank_import_lines_assigned_journal_entry_id_unique').on(table.assignedJournalEntryId),
     // Nullable composite FKs (MATCH SIMPLE: unchecked while the account id is null).
     foreignKey({
       columns: [table.companyId, table.suggestedAccountId],

@@ -13,7 +13,11 @@ import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
-import { createAccount } from '@/server/accounts';
+import { createAccount, updateAccount } from '@/server/accounts';
+import { AccountError } from '@/server/accounts/errors';
+import { BankImportError, stageImport } from '@/server/bank-import';
+import { cannedExtractor } from '@/server/bank-import/extract';
+import { ReconciliationError, startReconciliation } from '@/server/reconciliation';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
@@ -21,7 +25,7 @@ import { assertLedgerIntegrity, LedgerError, postJournalEntry } from '@/server/l
 import { receivePayment } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
 import { writeOffInvoice } from '@/server/writeoffs';
-import { createAccountInput } from '@/validation/account';
+import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
 import { createCustomerInput } from '@/validation/customer';
 import { createInvoiceInput } from '@/validation/invoice';
@@ -30,6 +34,7 @@ import { receivePaymentInput } from '@/validation/payment';
 import { writeOffInvoiceInput } from '@/validation/writeoff';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 interface Ctx {
   userId: string;
@@ -131,14 +136,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // A/R. The BEFORE INSERT trigger must refuse the line before it can commit.
     await expectRejectsOnChain(
       db.transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries
-            (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95000)
-          returning id`);
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${r.rows[0]!.id}, ${c.companyId}, ${arId}, 1, '1.0000', '0.0000')`);
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 95000, transactionDate: '2026-02-10', lines: [{ accountId: arId, debit: '1.0000', credit: '0.0000' }] });
       }),
       /CONTROL_ACCOUNT_MANUAL_POST/,
     );
@@ -152,16 +150,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // Same raw insert, but source_type INVOICE — a document path the subsidiary sees.
     // The trigger allows it; the balanced pair commits.
     await db.transaction(async (tx) => {
-      const r = await tx.execute<{ id: string }>(sql`
-        insert into journal_entries
-          (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-        values (${c.companyId}, '2026-02-10', '2026-02-10', 'INVOICE', ${c.userId}, 'POSTED', 95100)
-        returning id`);
-      const id = r.rows[0]!.id;
-      await tx.execute(sql`
-        insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-        values (${id}, ${c.companyId}, ${arId}, 1, '1.0000', '0.0000'),
-               (${id}, ${c.companyId}, ${c.revId}, 2, '0.0000', '1.0000')`);
+      await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'INVOICE', entryNumber: 95100, transactionDate: '2026-02-10', lines: [{ accountId: arId, debit: '1.0000', credit: '0.0000' }, { accountId: c.revId, debit: '0.0000', credit: '1.0000' }] });
     });
     const cnt = await db.execute<{ n: string }>(
       sql`select count(*)::text n from journal_entries where company_id = ${c.companyId} and entry_number = 95100`,
@@ -178,14 +167,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // structurally, exactly like A/R.
     await expectRejectsOnChain(
       db.transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries
-            (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95200)
-          returning id`);
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${r.rows[0]!.id}, ${c.companyId}, ${apId}, 1, '1.0000', '0.0000')`);
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 95200, transactionDate: '2026-02-10', lines: [{ accountId: apId, debit: '1.0000', credit: '0.0000' }] });
       }),
       /CONTROL_ACCOUNT_MANUAL_POST/,
     );
@@ -245,5 +227,95 @@ describe('A/R control-account guard through the service (typed error; A/R-only s
     }));
     expect(writeoff.status).toBe('POSTED'); // all three A/R movements succeeded despite the guard
     await assertLedgerIntegrity(c.companyId);
+  });
+});
+
+describe('system accounts can never be statement accounts (LL-091 / Gate 6 H2)', () => {
+  const chainText = (err: unknown): string => {
+    const seen = new Set<unknown>();
+    let cur: unknown = err;
+    let acc = '';
+    while (cur instanceof Error && !seen.has(cur)) {
+      seen.add(cur);
+      acc += ' ' + cur.message;
+      cur = (cur as { cause?: unknown }).cause;
+    }
+    return acc;
+  };
+
+  async function flagAsCash(companyId: string, accountId: string): Promise<void> {
+    const db = await getTestDb();
+    await db.execute(sql`update accounts set cash_flow_category = 'CASH' where company_id = ${companyId} and id = ${accountId}`);
+  }
+  async function flagAsCard(companyId: string, accountId: string): Promise<void> {
+    const db = await getTestDb();
+    await db.execute(sql`update accounts set account_subtype = 'credit_card' where company_id = ${companyId} and id = ${accountId}`);
+  }
+  const codeOf = async (p: Promise<unknown>): Promise<string> => {
+    try {
+      await p;
+      return 'OK';
+    } catch (e) {
+      return (e as { code?: string }).code ?? (e as Error).message;
+    }
+  };
+
+  it('A/R flagged as cash and A/P flagged as a card are refused by import and reconciliation', async () => {
+    const c = await setup();
+    const ar = await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE');
+    const ap = await sysAccount(c.companyId, 'ACCOUNTS_PAYABLE');
+    await flagAsCash(c.companyId, ar);
+    await flagAsCard(c.companyId, ap);
+    for (const id of [ar, ap]) {
+      const staged = await codeOf(stageImport(c.userId, c.companyId, { bankAccountId: id, filename: 'x.pdf', fileBytes: new Uint8Array() }, cannedExtractor));
+      expect(staged).toBe('INVALID_BANK_ACCOUNT');
+      const recon = await codeOf(startReconciliation(c.userId, c.companyId, { bankAccountId: id, statementDate: '2026-06-30', statementEndingAmount: '0.00' }));
+      expect(recon).toBe('NOT_A_BANK_ACCOUNT');
+    }
+    expect(BankImportError.name).toBe('BankImportError');
+    expect(ReconciliationError.name).toBe('ReconciliationError');
+  });
+
+  it('the database refuses BANK_IMPORT and OPENING_BALANCE lines into a control account, but not document lines', async () => {
+    const c = await setup();
+    const ar = await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE');
+    const db = await getTestDb();
+    const attempt = async (source: string): Promise<string> => {
+      try {
+        await db.transaction(async (tx) => {
+          const e = await tx.execute<{ id: string }>(sql`
+            insert into journal_entries (company_id, transaction_date, posting_date, status, source_type, created_by)
+            values (${c.companyId}, '2026-03-01', '2026-03-01', 'DRAFT', ${source}::journal_source_type, ${c.userId}) returning id`);
+          await tx.execute(sql`
+            insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
+            values (${e.rows[0]!.id}, ${c.companyId}, ${ar}, 1, 10, 0)`);
+          throw new Error('ROLLBACK'); // never leave the probe behind
+        });
+        return 'unreachable';
+      } catch (err) {
+        const text = chainText(err);
+        if (/CONTROL_ACCOUNT_MANUAL_POST/.test(text)) return 'REFUSED';
+        if (/ROLLBACK/.test(text)) return 'INSERTED';
+        throw err;
+      }
+    };
+    expect(await attempt('JOURNAL_ENTRY')).toBe('REFUSED');
+    expect(await attempt('BANK_IMPORT')).toBe('REFUSED');
+    expect(await attempt('OPENING_BALANCE')).toBe('REFUSED');
+    expect(await attempt('CUSTOMER_PAYMENT')).toBe('INSERTED'); // documents move the control account
+    expect(await attempt('INVOICE')).toBe('INSERTED');
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a system account keeps its subtype and cash-flow section; renaming it still works', async () => {
+    const c = await setup();
+    const ar = await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE');
+    await expect(updateAccount(c.userId, c.companyId, ar, updateAccountInput.parse({ cashFlowCategory: 'CASH' }))).rejects.toMatchObject({ name: 'AccountError', code: 'SYSTEM_ACCOUNT_PROTECTED' });
+    await expect(updateAccount(c.userId, c.companyId, ar, updateAccountInput.parse({ accountSubtype: 'credit_card' }))).rejects.toMatchObject({ name: 'AccountError', code: 'SYSTEM_ACCOUNT_PROTECTED' });
+    // The row form submits every field: unchanged values pass, the rename lands.
+    const renamed = await updateAccount(c.userId, c.companyId, ar, updateAccountInput.parse({ name: 'Trade Receivables', accountSubtype: 'accounts_receivable', cashFlowCategory: 'OPERATING' }));
+    expect(renamed.name).toBe('Trade Receivables');
+    expect(renamed.cashFlowCategory).toBe('OPERATING');
+    expect(AccountError.name).toBe('AccountError');
   });
 });

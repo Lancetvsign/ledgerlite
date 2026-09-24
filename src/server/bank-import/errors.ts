@@ -1,3 +1,5 @@
+import { LedgerError } from '@/server/ledger/errors';
+
 /**
  * Bank-import domain errors — LL-076. Stable, machine-readable codes; tests and the UI
  * notice map assert on the CODE, never message text.
@@ -27,10 +29,26 @@ export type BankImportErrorCode =
   | 'WRONG_DIRECTION'
   /** A credit-card statement line can only be posted to an account, not applied to a document (LL-088). */
   | 'CARD_CANNOT_APPLY'
+  /** match_transfer named a counterpart that is not this line's posted mirror on another statement account (LL-094). */
+  | 'TRANSFER_MISMATCH'
+  /** The transfer's other side already posted this movement; posting it again would double-count (LL-094). */
+  | 'TRANSFER_ALREADY_POSTED'
   /** The document is not an OPEN invoice / bill of this company (missing, closed, or foreign — one message). */
   | 'DOCUMENT_NOT_OPEN'
   /** The line's amount (cumulatively, within one submit) exceeds the document's open balance. */
-  | 'OVERAPPLIED';
+  | 'OVERAPPLIED'
+  /** Sharing needs the company to be in an organization (LL-097). */
+  | 'NOT_IN_ORGANIZATION'
+  /** Only a credit-card statement can be shared with the organization (LL-097). */
+  | 'ONLY_CARDS_SHAREABLE'
+  /** The named counterpart is not an organization member the actor may act in (LL-099). */
+  | 'COUNTERPART_INVALID'
+  /** This company already posted its side of that intercompany movement (LL-099). */
+  | 'TRANSFER_ALREADY_MATCHED'
+  /** A card CHARGE cannot be an intercompany bank transfer — only a card payment/refund can (LL-102). */
+  | 'CARD_CHARGE_NOT_TRANSFER'
+  /** A card PAYMENT (mirrored by the cardholder's own bank) cannot be taken by another company (LL-102). */
+  | 'CARD_PAYMENT_NOT_TAKEABLE';
 
 export class BankImportError extends Error {
   public override readonly name = 'BankImportError';
@@ -39,5 +57,19 @@ export class BankImportError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+/**
+ * A two-company posting found a CLOSED period in one of them (LL-097/099). Carries the company
+ * id so a page can name the company it resolves itself — never a free-text message reflected
+ * from the URL (Gate 7 L1). A `LedgerError` with code PERIOD_CLOSED for every existing handler.
+ */
+export class PeriodClosedInCompanyError extends LedgerError {
+  constructor(
+    public readonly companyId: string,
+    message: string,
+  ) {
+    super('PERIOD_CLOSED', message);
   }
 }

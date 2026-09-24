@@ -260,6 +260,48 @@
       "when": 1789306244574,
       "tag": "0036_members_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789409557964,
+      "tag": "0037_control_lock_covers_imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789413268199,
+      "tag": "0038_invitation_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789430913984,
+      "tag": "0039_gate6_housekeeping",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790170922474,
+      "tag": "0040_organizations_intercompany",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790175950628,
+      "tag": "0041_shared_card_statements",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790253049299,
+      "tag": "0042_line_immutability",
+      "breakpoints": true
     }
   ]
 }

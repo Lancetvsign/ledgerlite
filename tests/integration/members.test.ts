@@ -14,8 +14,10 @@ import { createCompanyWithOwner, deleteCompany, listCompaniesForUser } from '@/s
 import { insertMembership } from '@/server/companies/internal';
 import {
   changeMemberRole,
-  claimPendingInvitations,
+  claimInvitation,
+  describeInvitation,
   inviteMember,
+  issueInvitationLink,
   listInvitations,
   listMembers,
   MemberError,
@@ -130,51 +132,128 @@ describe('inviteMember', () => {
   });
 });
 
-describe('claim on first entry', () => {
-  it('a mixed-case sign-up claims the invitation: ACTIVE membership, ACCEPTED row, inviter as audit actor; later entries claim nothing', async () => {
+describe('join links (LL-090): the secret is the authorization, the email is a label', () => {
+  const tokenOf = (r: Awaited<ReturnType<typeof inviteMember>>): string => (r.mode === 'invited' ? r.token : '');
+
+  it('a link is claimed by whoever holds it — even an account with a different email — and is then spent', async () => {
     const owner = await makeUser();
     const companyId = await makeCompany(owner);
     const r = await invite(owner, companyId, 'newbie@synthetic.test', 'ACCOUNTANT');
-    const invitationId = r.mode === 'invited' ? r.invitationId : '';
+    const token = tokenOf(r);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await describeInvitation(token))).toMatchObject({ companyName: 'Team Co', role: 'ACCOUNTANT', email: 'newbie@synthetic.test' });
 
-    const auth = await signUp('Newbie@Synthetic.Test');
-    const newbie = await ensureAppUser(auth); // first entry
-    expect((await requireCompanyMembership(newbie.id, companyId)).role).toBe('ACCOUNTANT');
-    expect((await listCompaniesForUser(newbie.id)).map((c) => c.company.id)).toEqual([companyId]);
-    const row = await invitationRow(invitationId);
-    expect(row).toMatchObject({ status: 'ACCEPTED', accepted: newbie.id });
-    expect(row.resolved).not.toBeNull();
-    const added = (await audits(companyId)).filter((a) => a.action === 'MEMBER_ADDED');
-    expect(added).toHaveLength(1);
-    expect(added[0]!.actor).toBe(owner.id);
-
-    expect(await claimPendingInvitations(newbie)).toBe(0);
-    await ensureAppUser(auth);
-    expect((await audits(companyId)).filter((a) => a.action === 'MEMBER_ADDED')).toHaveLength(1);
+    const someoneElse = await ensureAppUser(await signUp('Other.Person@Synthetic.Test'));
+    const claimed = await claimInvitation(someoneElse.id, token);
+    expect(claimed).toMatchObject({ companyId, role: 'ACCOUNTANT', alreadyMember: false });
+    expect((await requireCompanyMembership(someoneElse.id, companyId)).role).toBe('ACCOUNTANT');
+    expect((await listCompaniesForUser(someoneElse.id)).map((c) => c.company.id)).toEqual([companyId]);
+    const row = await invitationRow(r.mode === 'invited' ? r.invitationId : '');
+    expect(row).toMatchObject({ status: 'ACCEPTED', accepted: someoneElse.id });
+    expect(await describeInvitation(token)).toBeNull(); // spent
+    expect((await errOf(claimInvitation(someoneElse.id, token))).code).toBe('INVITATION_INVALID');
+    // Two rows written in one transaction share a timestamp; compare as a set.
+    const acts = (await audits(companyId)).map((a) => a.action).sort();
+    expect(acts).toEqual(['INVITATION_CLAIMED', 'MEMBER_ADDED', 'MEMBER_INVITED']);
+    expect((await audits(companyId)).find((a) => a.action === 'MEMBER_ADDED')!.actor).toBe(owner.id); // the inviter is the actor of record
   });
 
-  it('three concurrent first entries yield exactly one membership and one audit row', async () => {
+  it('registering the invited email grants nothing without the link', async () => {
     const owner = await makeUser();
     const companyId = await makeCompany(owner);
-    await invite(owner, companyId, 'racer@synthetic.test');
-    const auth = await signUp('racer@synthetic.test');
-    await Promise.all([ensureAppUser(auth), ensureAppUser(auth), ensureAppUser(auth)]);
+    await invite(owner, companyId, 'target@synthetic.test');
+    const impostor = await ensureAppUser(await signUp('target@synthetic.test'));
+    await ensureAppUser(await signUp('another@synthetic.test')); // any further entries change nothing either
+    await denialOf(requireCompanyMembership(impostor.id, companyId));
+    expect(await listCompaniesForUser(impostor.id)).toEqual([]);
+    expect((await listInvitations(owner.id, companyId)).map((i) => [i.email, i.hasLink])).toEqual([['target@synthetic.test', true]]);
+  });
 
+  it('expired, revoked, malformed and rotated-away links are all INVITATION_INVALID', async () => {
+    const owner = await makeUser();
+    const companyId = await makeCompany(owner);
+    const joiner = await makeUser('joiner@synthetic.test');
+    const r = await invite(owner, companyId, 'x@synthetic.test');
+    const id = r.mode === 'invited' ? r.invitationId : '';
+    const first = tokenOf(r);
+
+    // Rotation: the previous link stops working, the new one works.
+    const { token: second } = await issueInvitationLink(owner.id, companyId, id);
+    expect((await errOf(claimInvitation(joiner.id, first))).code).toBe('INVITATION_INVALID');
+    expect(await describeInvitation(second)).not.toBeNull();
+
+    // Expiry (raw SQL moves the clock).
+    const db = await getTestDb();
+    await db.execute(sql`update company_invitations set expires_at = now() - interval '1 minute' where id = ${id}`);
+    expect(await describeInvitation(second)).toBeNull();
+    expect((await errOf(claimInvitation(joiner.id, second))).code).toBe('INVITATION_INVALID');
+
+    // A fresh link, then revoked.
+    const { token: third } = await issueInvitationLink(owner.id, companyId, id);
+    await revokeInvitation(owner.id, companyId, id);
+    expect((await errOf(claimInvitation(joiner.id, third))).code).toBe('INVITATION_INVALID');
+    expect((await errOf(claimInvitation(joiner.id, 'not-a-token'))).code).toBe('INVITATION_INVALID');
+    expect(await describeInvitation('not-a-token')).toBeNull();
+    // Issuing a link for a resolved or foreign invitation is the uniform miss.
+    await denialOf(issueInvitationLink(owner.id, companyId, id));
+    await denialOf(issueInvitationLink(joiner.id, companyId, id));
+  });
+
+  it('a claim never rewrites an ACTIVE membership; a removed member is reactivated with the invited role', async () => {
+    const owner = await makeUser();
+    const companyId = await makeCompany(owner);
+    const keeper = await makeUser('keeper@synthetic.test');
+    const k = await invite(owner, companyId, keeper.email, 'BOOKKEEPER'); // direct add
+    const membershipId = k.mode === 'added' ? k.membershipId : '';
+
+    // A link for a different label, claimed by an existing ACTIVE member: spent, role untouched.
+    const r = await invite(owner, companyId, 'label@synthetic.test', 'OWNER');
+    const res = await claimInvitation(keeper.id, tokenOf(r));
+    expect(res).toMatchObject({ membershipId, role: 'BOOKKEEPER', alreadyMember: true });
+    expect((await requireCompanyMembership(keeper.id, companyId)).role).toBe('BOOKKEEPER');
+    expect((await invitationRow(r.mode === 'invited' ? r.invitationId : '')).status).toBe('ACCEPTED');
+
+    // Removed, then a link reactivates the same membership with the invited role.
+    await removeMember(owner.id, companyId, membershipId);
+    const r2 = await invite(owner, companyId, 'back@synthetic.test', 'ACCOUNTANT');
+    const res2 = await claimInvitation(keeper.id, tokenOf(r2));
+    expect(res2).toMatchObject({ membershipId, role: 'ACCOUNTANT', alreadyMember: false });
+    expect((await requireCompanyMembership(keeper.id, companyId)).role).toBe('ACCOUNTANT');
+  });
+
+  it('a direct add resolves the pending invitation for that email', async () => {
+    const owner = await makeUser();
+    const companyId = await makeCompany(owner);
+    const r = await invite(owner, companyId, 'soon@synthetic.test', 'READ_ONLY');
+    const id = r.mode === 'invited' ? r.invitationId : '';
+    const soon = await makeUser('soon@synthetic.test');
+    expect((await invite(owner, companyId, soon.email, 'OWNER')).mode).toBe('added');
+    expect((await invitationRow(id)).status).toBe('REVOKED');
+    expect((await errOf(claimInvitation(soon.id, tokenOf(r)))).code).toBe('INVITATION_INVALID');
+    expect((await requireCompanyMembership(soon.id, companyId)).role).toBe('OWNER');
+  });
+
+  it('three concurrent claims of one link yield one membership and one MEMBER_ADDED', async () => {
+    const owner = await makeUser();
+    const companyId = await makeCompany(owner);
+    const r = await invite(owner, companyId, 'racer@synthetic.test');
+    const racer = await makeUser('racer@synthetic.test');
+    const results = await Promise.allSettled([1, 2, 3].map(() => claimInvitation(racer.id, tokenOf(r))));
+    expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
     const db = await getTestDb();
     const m = await db.execute<{ n: string }>(sql`select count(*)::text as n from company_memberships where company_id = ${companyId}`);
-    expect(Number(m.rows[0]!.n)).toBe(2); // owner + racer
+    expect(Number(m.rows[0]!.n)).toBe(2);
     expect((await audits(companyId)).filter((a) => a.action === 'MEMBER_ADDED')).toHaveLength(1);
   });
 
-  it('an invitation to an archived company stays PENDING and grants nothing', async () => {
+  it('an invitation to an archived company cannot be claimed', async () => {
     const owner = await makeUser();
     const companyId = await makeCompany(owner, 'Gone Co');
     const r = await invite(owner, companyId, 'late@synthetic.test');
-    const invitationId = r.mode === 'invited' ? r.invitationId : '';
     await expect(deleteCompany(owner.id, companyId, { confirmLegalName: 'Gone Co' })).resolves.toEqual({ mode: 'archived' });
-
-    const late = await ensureAppUser(await signUp('late@synthetic.test'));
-    expect((await invitationRow(invitationId)).status).toBe('PENDING');
+    const late = await makeUser('late@synthetic.test');
+    expect(await describeInvitation(tokenOf(r))).toBeNull();
+    expect((await errOf(claimInvitation(late.id, tokenOf(r)))).code).toBe('INVITATION_INVALID');
     expect(await listCompaniesForUser(late.id)).toEqual([]);
   });
 });

@@ -104,6 +104,7 @@ export async function startReconciliation(
       accountType: schema.accounts.accountType,
       cashFlowCategory: schema.accounts.cashFlowCategory,
       accountSubtype: schema.accounts.accountSubtype,
+      systemAccountType: schema.accounts.systemAccountType,
     })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))
@@ -113,13 +114,21 @@ export async function startReconciliation(
     throw new ReconciliationError('NOT_A_BANK_ACCOUNT', 'Choose an active cash/bank asset account or a credit-card account to reconcile.');
   }
 
-  const last = await lastCompletedStatementDate(getDbTx(), companyId, input.bankAccountId);
-  if (last !== null && input.statementDate <= last) {
-    throw new ReconciliationError('STATEMENT_DATE_NOT_AFTER_LAST', `The statement date must be after the last completed statement (${last}).`);
-  }
-
   try {
     return await getDbTx().transaction(async (tx) => {
+      // The sequence rule is decided under the account row lock (LL-095 / Gate 6 L4): a
+      // completion committing concurrently holds the same lock, so a backdated statement
+      // cannot slip in between the check and the insert.
+      await tx
+        .select({ id: schema.accounts.id })
+        .from(schema.accounts)
+        .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, input.bankAccountId)))
+        .for('update');
+      const last = await lastCompletedStatementDate(tx, companyId, input.bankAccountId);
+      if (last !== null && input.statementDate <= last) {
+        throw new ReconciliationError('STATEMENT_DATE_NOT_AFTER_LAST', `The statement date must be after the last completed statement (${last}).`);
+      }
+
       const rows = await tx
         .insert(schema.bankReconciliations)
         .values({
@@ -357,6 +366,14 @@ export async function completeReconciliation(actorUserId: string, companyId: str
   await requirePermission(actorUserId, companyId, 'reconciliation.complete');
   return await getDbTx().transaction(async (tx) => {
     const rec = await loadHeader(tx, companyId, id, true);
+    if (rec !== undefined) {
+      // Same lock startReconciliation takes (LL-095): completion and a new start serialise per account.
+      await tx
+        .select({ id: schema.accounts.id })
+        .from(schema.accounts)
+        .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, rec.bankAccountId)))
+        .for('update');
+    }
     if (rec === undefined) throw new ReconciliationError('NOT_FOUND', 'Reconciliation not found.');
     if (rec.status !== 'IN_PROGRESS') throw new ReconciliationError('NOT_IN_PROGRESS', 'A completed reconciliation is final.');
 

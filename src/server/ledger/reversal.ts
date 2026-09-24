@@ -11,7 +11,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
+import { allocateEntryNumber, loadEntry, markPosted, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { JournalLine } from '@/db/schema';
 import type { ReverseJournalEntryInput } from '@/validation/journal';
@@ -104,6 +104,19 @@ export async function reverseEntryCore(
    */
   manualOnly = false,
 ): Promise<PostedEntry> {
+  // ---- Company is ACTIVE, held FOR KEY SHARE for the rest of the transaction
+  // (LL-092): archiving takes the row FOR UPDATE, so a reversal in flight and an
+  // archive serialise the same way postings do (see postEntryCore step 2). ----
+  const companyRows = await tx
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')))
+    .limit(1)
+    .for('key share');
+  if (companyRows[0] === undefined) {
+    throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
+
   // ---- Load and LOCK the original, scoped to this company. ------------------
   // FOR UPDATE serialises concurrent reversals of the same entry: the second
   // waits, then re-reads the now-REVERSED row and is rejected below — exactly
@@ -252,7 +265,7 @@ export async function reverseEntryCore(
       transactionDate: reversalDate,
       postingDate: reversalDate,
       description,
-      status: 'POSTED',
+      status: 'DRAFT',
       // A distinct source keeps the reversal from colliding with the original
       // on the "one POSTED per source" index (invariant 6): the original may
       // carry an invoice/payment source, and copying it verbatim would be a
@@ -262,15 +275,18 @@ export async function reverseEntryCore(
       sourceId: original.id,
       reversalOfId: original.id,
       createdBy: input.actorUserId,
-      postedAt: sql`now()`,
     })
-    .returning();
+    .returning({ id: schema.journalEntries.id });
   const reversal = insertedRows[0];
   if (reversal === undefined) throw new Error('reversal entry insert returned no row');
 
   await tx.insert(schema.journalLines).values(
     reversalLines.map((line) => ({ ...line, journalEntryId: reversal.id })),
   );
+
+  // Post by transition (LL-104 / ADR-044) — see postEntryCore: the line guard admits
+  // no INSERT under a POSTED entry, so the reversal is a DRAFT until its lines are in.
+  await markPosted(tx, input.companyId, reversal.id);
 
   // ---- Drive the original through the ONE permitted transition. -------------
   // Setting ONLY status and reversed_by_id is exactly what the LL-030 trigger

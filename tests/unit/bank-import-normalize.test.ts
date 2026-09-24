@@ -46,6 +46,12 @@ describe('normalizeDate', () => {
     expect(normalizeDate(input)).toBe(expected);
   });
 
+  it('does not swap day and month: an impossible US date passes through for the validator to reject (LL-095)', () => {
+    expect(normalizeDate('13/06/2026')).toBe('13/06/2026');
+    expect(normalizeDate('06/31/2026')).toBe('2026-06-31'); // shape only; the validator decides calendar validity
+    expect(normalizeDate('00/10/2026')).toBe('00/10/2026');
+  });
+
   it('passes through what it cannot interpret', () => {
     expect(normalizeDate('June 3')).toBe('June 3');
     expect(normalizeDate('03/06/26')).toBe('03/06/26');

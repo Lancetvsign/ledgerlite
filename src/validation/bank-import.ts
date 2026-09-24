@@ -32,6 +32,8 @@ export const stageImportInput = z.object({
   filename: z.string().trim().max(255).optional(),
   /** The uploaded statement's bytes, in memory — what the extractor reads. Never persisted. */
   fileBytes: z.instanceof(Uint8Array),
+  /** LL-097: a card statement the other companies of the organization may take lines from. */
+  shareWithOrganization: z.boolean().optional(),
 });
 export type StageImportInput = z.infer<typeof stageImportInput>;
 
@@ -43,11 +45,25 @@ const decisionSchema = z.object({
    * customer payment / bill payment. Direction is enforced by the service: money in may
    * only apply to an invoice, money out only to a bill.
    */
-  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill']),
-  /** Required when action is 'post' (enforced by the service). */
+  action: z.enum(['post', 'ignore', 'apply_invoice', 'apply_bill', 'match_transfer', 'personal', 'intercompany_transfer', 'match_intercompany']),
+  /**
+   * Required when action is 'post' or 'personal' (enforced by the service). For 'personal'
+   * (LL-097) it is the owner-equity (or asset) account the charge is NOT this company's
+   * expense against — typically Owner Distributions.
+   */
   accountId: z.uuid().optional(),
   /** The open invoice / bill id; required for apply_* (enforced by the service). */
   documentId: z.uuid().optional(),
+  /**
+   * match_transfer (LL-094): the already-POSTED import line on the OTHER statement account
+   * that is the mirror of this one; this line is marked posted against that entry and no
+   * second entry is created. Required for match_transfer (enforced by the service).
+   */
+  counterpartLineId: z.uuid().optional(),
+  /** intercompany_transfer (LL-099): the other company of the organization this money moved to/from. */
+  counterpartCompanyId: z.uuid().optional(),
+  /** match_intercompany (LL-099): the other company's already-posted INTERCOMPANY entry for this movement. */
+  counterpartEntryId: z.uuid().optional(),
 });
 
 export const postImportLinesInput = z.object({
@@ -55,3 +71,9 @@ export const postImportLinesInput = z.object({
 });
 export type PostImportLinesInput = z.infer<typeof postImportLinesInput>;
 export type ImportLineDecision = z.infer<typeof decisionSchema>;
+
+/** LL-097: from a member company, take STAGED lines of a shared card statement as its own expenses. */
+export const assignSharedLinesInput = z.object({
+  decisions: z.array(z.object({ lineId: z.uuid(), accountId: z.uuid() })).min(1, 'Nothing to assign.'),
+});
+export type AssignSharedLinesInput = z.infer<typeof assignSharedLinesInput>;

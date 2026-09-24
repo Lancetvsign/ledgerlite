@@ -38,6 +38,8 @@ export const postJournalEntryInput = z.object({
   sourceType: z.enum(journalSourceType.enumValues),
   sourceId: z.string().max(200).optional(),
   idempotencyKey: z.string().max(200).optional(),
+  /** LL-097 / ADR-043: the two sides of one intercompany movement share this id. INTERCOMPANY source only. */
+  intercompanyGroupId: z.uuid().optional(),
   lines: z.array(journalLineInput).min(2, 'A journal entry needs at least two lines.'),
 }).refine(
   // A source-backed posting (an invoice, payment, …) comes from a machine call

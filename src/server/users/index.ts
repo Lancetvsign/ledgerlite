@@ -3,7 +3,6 @@ import 'server-only';
 import { eq, sql } from 'drizzle-orm';
 
 import { getDbTx, schema } from '@/db';
-import { claimPendingInvitations } from '@/server/members/claim';
 
 import type { AppUser } from '@/db/schema';
 
@@ -41,11 +40,6 @@ export async function ensureAppUser(authUser: {
 
   const row = rows[0];
   if (row === undefined) throw new Error('ensureAppUser returned no row');
-
-  // Team invitations addressed to this email become memberships here, on every
-  // entry (LL-086 / ADR-041). Grants nothing by itself: the invitation row is the
-  // authorization, created by a manager.
-  await claimPendingInvitations(row);
   return row;
 }
 

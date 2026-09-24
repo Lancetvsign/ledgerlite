@@ -153,7 +153,7 @@ export async function getAccountRegister(
     from journal_lines l
     join journal_entries e on e.id = l.journal_entry_id
     left join bank_import_lines bil
-      on e.source_type = 'BANK_IMPORT'
+      on e.source_type in ('BANK_IMPORT', 'INTERCOMPANY')
      and bil.company_id = l.company_id
      and bil.id::text = e.source_id
     where l.company_id = ${companyId}

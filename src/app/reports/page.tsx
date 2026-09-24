@@ -20,6 +20,7 @@ const REPORTS = [
   { href: '/reports/statement', testid: 'statement-link', title: 'Customer Statement', blurb: 'One customer’s opening balance, activity, and closing balance over a period.' },
   { href: '/reports/ap-aging', testid: 'ap-aging-link', title: 'A/P Aging', blurb: 'Open payables per vendor, bucketed by age, reconciling to the A/P control.' },
   { href: '/reports/vendor-statement', testid: 'vendor-statement-link', title: 'Vendor Statement', blurb: 'One vendor’s opening balance, activity, and closing balance over a period.' },
+  { href: '/reports/intercompany', testid: 'intercompany-link', title: 'Intercompany Balances', blurb: 'What each company of your organization owes this one and is owed by it, checked against the other company’s books.' },
 ] as const;
 
 export default async function ReportsPage() {

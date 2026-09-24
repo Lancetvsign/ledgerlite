@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { hasTemplateCompany, listCompaniesForUser } from '@/server/companies';
+import { organizationsActorCanAddTo } from '@/server/organizations';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
@@ -39,11 +40,12 @@ export default async function AccountPage({
   // Controlled provisioning (LL-011): the application user comes into being on
   // first authenticated entry. Idempotent; grants no company access.
   const appUser = await ensureAppUser(session.user);
-  const [companies, active, sp, templateExists] = await Promise.all([
+  const [companies, active, sp, templateExists, joinableOrganizations] = await Promise.all([
     listCompaniesForUser(appUser.id),
     getActiveCompanyMembership(appUser.id),
     searchParams,
     hasTemplateCompany(),
+    organizationsActorCanAddTo(appUser.id),
   ]);
   const notice = noticeFrom(sp);
 
@@ -128,7 +130,7 @@ export default async function AccountPage({
           {appUser.email}
         </dd>
       </dl>
-      <CompanyPanel companies={companies} active={active} templateExists={templateExists} />
+      <CompanyPanel companies={companies} active={active} templateExists={templateExists} joinableOrganizations={joinableOrganizations} />
       <SignOutButton />
     </main>
   );
@@ -143,6 +145,11 @@ function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'
   if (sp.ok === 'template-released') return { tone: 'ok', text: 'This company is no longer the master template.' };
   if (sp.ok === 'settings-saved') return { tone: 'ok', text: 'Settings saved.' };
   if (sp.ok === 'you-left') return { tone: 'ok', text: 'You left the company.' };
+  if (sp.ok === 'joined') return { tone: 'ok', text: 'Welcome — you have joined the company.' };
+  if (sp.ok === 'already-member') return { tone: 'ok', text: 'You were already a member of that company; nothing changed.' };
+  if (sp.ok === 'organization-created') return { tone: 'ok', text: 'Organization created. Add your other companies to it to post between them.' };
+  if (sp.ok === 'joined-organization') return { tone: 'ok', text: 'The company joined the organization.' };
+  if (sp.ok === 'left-organization') return { tone: 'ok', text: 'The company left the organization. Its Due from / Due to accounts are now inactive.' };
   if (sp.error === undefined) return null;
   if (sp.error === 'NAME_MISMATCH') return { tone: 'error', text: 'The name you typed does not match the company name. Nothing was deleted.' };
   if (sp.error === 'TEMPLATE_EXISTS') return { tone: 'error', text: 'Another company is already the master template. Release it first.' };
@@ -151,6 +158,13 @@ function noticeFrom(sp: { ok?: string; error?: string }): { tone: 'ok' | 'error'
   if (sp.error === 'SETTINGS_LOCKED') return { tone: 'error', text: 'Settings cannot change once a company has posted entries.' };
   if (sp.error === 'invalid-settings') return { tone: 'error', text: 'Enter a month from 1 to 12, a three-letter uppercase currency code, and a valid timezone.' };
   if (sp.error === 'invalid-company') return { tone: 'error', text: 'Enter a legal name for the new company.' };
+  if (sp.error === 'invalid-organization') return { tone: 'error', text: 'Enter a name for the organization.' };
+  if (sp.error === 'ALREADY_IN_ORGANIZATION') return { tone: 'error', text: 'That company is already in an organization.' };
+  if (sp.error === 'NOT_IN_ORGANIZATION') return { tone: 'error', text: 'That company is not in an organization.' };
+  if (sp.error === 'TEMPLATE_IN_ORGANIZATION') return { tone: 'error', text: 'The master template cannot be in an organization, and a member cannot become the template.' };
+  if (sp.error === 'CURRENCY_MISMATCH') return { tone: 'error', text: 'Every company in an organization must use the same currency.' };
+  if (sp.error === 'ORG_HAS_INTERCOMPANY_BALANCE') return { tone: 'error', text: 'Settle the Due from / Due to balances with the other companies before leaving.' };
+  if (sp.error === 'COMPANY_IN_ORGANIZATION') return { tone: 'error', text: 'Remove the company from its organization before deleting it.' };
   if (sp.error === 'denied') return { tone: 'error', text: 'You do not have permission for that.' };
   return { tone: 'error', text: 'That action could not be completed.' };
 }

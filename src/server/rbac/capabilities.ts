@@ -15,6 +15,7 @@ export const CAPABILITIES = [
   'company.manage',
   'company.delete',
   'company.template',
+  'company.organization',
   'user.manage',
   'account.view',
   'account.manage',
@@ -96,6 +97,9 @@ export const CAPABILITY_GRANTS: Record<Capability, readonly Role[]> = {
   // Designating (or releasing) the master template company changes what every future
   // company in the instance receives — OWNER only, like deletion (LL-083 / ADR-039).
   'company.template': OWNERS,
+  // Grouping the company into an organization — and leaving one — opens intercompany
+  // postings between it and the other members; OWNER only (LL-096 / ADR-043).
+  'company.organization': OWNERS,
   'user.manage': MANAGERS,
   'account.view': EVERYONE,
   'account.manage': LEDGER_WRITERS,

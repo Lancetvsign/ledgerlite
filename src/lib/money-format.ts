@@ -16,8 +16,10 @@ const DISPLAY_SCALE = 2;
 export function formatMoney(value: string | Decimal): string {
   const d = typeof value === 'string' ? toMoney(value) : value;
   const fixed = d.toFixed(DISPLAY_SCALE); // half-even at cents
-  const negative = fixed.startsWith('-');
-  const [whole = '0', frac = '00'] = (negative ? fixed.slice(1) : fixed).split('.');
+  // A value that rounds to zero is shown as 0.00, never -0.00 (LL-095).
+  const unsigned = fixed.startsWith('-') ? fixed.slice(1) : fixed;
+  const negative = unsigned !== fixed && /[1-9]/.test(unsigned);
+  const [whole = '0', frac = '00'] = unsigned.split('.');
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return `${negative ? '-' : ''}${grouped}.${frac}`;
 }

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { errorChainText } from '@/lib/error-chain';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
@@ -11,7 +12,7 @@ import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
 import { fingerprintPosting } from './fingerprint';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
+import { allocateEntryNumber, loadEntry, markPosted, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { PostJournalEntryInput } from '@/validation/journal';
 
@@ -39,7 +40,7 @@ export async function postJournalEntry(input: PostJournalEntryInput): Promise<Po
   // post a control-account line under a non-`JOURNAL_ENTRY` source and dodge the 0023
   // guard, moving A/R or A/P without its subsidiary (LL-066 / ADR-025). Documents are
   // unaffected: they never call this function.
-  if (input.sourceType !== 'JOURNAL_ENTRY') {
+  if (input.sourceType !== 'JOURNAL_ENTRY' || input.intercompanyGroupId !== undefined) {
     throw new LedgerError(
       'MANUAL_SOURCE_TYPE_REQUIRED',
       'A manual journal entry must have source type JOURNAL_ENTRY; documents post through their own service.',
@@ -111,13 +112,21 @@ export async function postEntryCore(
   fingerprint: string | undefined,
 ): Promise<PostedEntry> {
   // ---- 2. Company exists and is active --------------------------------------
+  // FOR KEY SHARE (LL-092 / Gate 6 H3): the company services that decide "this
+  // company has no posted entries" — designate as template, archive — take the
+  // row FOR UPDATE, which conflicts with KEY SHARE. A posting that reaches here
+  // therefore either sees the row BEFORE such a change (and holds the share lock
+  // until it commits, so the change waits and then counts this entry) or waits
+  // for the change and sees its result. Never both passing. Lock order everywhere
+  // is company row → counter row, so no deadlock.
   const company = await tx
     .select({ id: schema.companies.id, isTemplate: schema.companies.isTemplate })
     .from(schema.companies)
     .where(
       and(eq(schema.companies.id, input.companyId), eq(schema.companies.status, 'ACTIVE')),
     )
-    .limit(1);
+    .limit(1)
+    .for('key share');
   if (company[0] === undefined) {
     throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
   }
@@ -179,7 +188,13 @@ export async function postEntryCore(
   // THIS company only.
   const entryNumber = await allocateEntryNumber(tx, input.companyId);
 
-  // ---- Insert the posted entry and its lines --------------------------------
+  // ---- Insert the entry as a DRAFT, then its lines, then post it -------------
+  // Posting is a TRANSITION (LL-104 / ADR-044): the journal_lines guard refuses any
+  // INSERT under a POSTED or REVERSED entry, with no escape for the engine — so the
+  // lines go in while the entry is still a DRAFT and the flip to POSTED is the last
+  // step. The BEFORE UPDATE triggers then judge the finished entry (closed period,
+  // control-account relabel) and the deferred balance trigger judges it at commit.
+  // All three statements share this transaction: a DRAFT never survives a failure.
   const entryRows = await tx
     .insert(schema.journalEntries)
     .values({
@@ -188,15 +203,15 @@ export async function postEntryCore(
       transactionDate: input.transactionDate,
       postingDate,
       description: input.description,
-      status: 'POSTED',
+      status: 'DRAFT',
       sourceType: input.sourceType,
       sourceId: input.sourceId,
       idempotencyKey: input.idempotencyKey,
       idempotencyFingerprint: fingerprint,
+      intercompanyGroupId: input.intercompanyGroupId,
       createdBy: input.actorUserId,
-      postedAt: sql`now()`,
     })
-    .returning();
+    .returning({ id: schema.journalEntries.id });
   const entry = entryRows[0];
   if (entry === undefined) throw new Error('journal entry insert returned no row');
 
@@ -213,6 +228,8 @@ export async function postEntryCore(
       vendorId: line.vendorId,
     })),
   );
+
+  await markPosted(tx, input.companyId, entry.id);
 
   // ---- Audit, INSIDE the transaction ----------------------------------------
   // A record written in a separate transaction could survive a rolled-back
@@ -273,8 +290,11 @@ function validateBalance(input: PostJournalEntryInput): void {
 
 /** True when an error is the idempotency-key partial-unique violation. */
 export function isIdempotencyViolation(error: unknown): boolean {
-  const message = String((error as { cause?: unknown }).cause ?? error);
-  return /journal_entries_idempotency_unique|duplicate key/i.test(message);
+  // Only the once-only partial indexes on journal_entries count (LL-095): idempotency key,
+  // one POSTED entry per source, one POSTED opening balance. Any other duplicate key is a
+  // real defect and must surface, not read as "a concurrent posting won".
+  const text = errorChainText(error) || String(error);
+  return /journal_entries_idempotency_unique|journal_entries_source_posted_once|journal_entries_one_opening_balance/.test(text);
 }
 
 /**
@@ -366,11 +386,34 @@ export { fingerprintRequest } from './fingerprint';
 export { getJournalEntry, listRecentEntries } from './queries';
 export type { JournalEntryView, JournalEntryLineView, RecentEntry } from './queries';
 export type { PostedEntry } from './internal';
+export { toLedgerDomainError } from './internal';
+
+/**
+ * Locks the entry-number counter rows of several companies FOR UPDATE, in id order —
+ * the prologue of every posting that spans two companies (LL-097 / ADR-043). One
+ * statement per company so acquisition order never depends on the planner. A later
+ * `postEntryCore` / `reverseEntryCore` in the same transaction then finds its counter
+ * already held and cannot deadlock against another two-company posting taking the
+ * same rows in the opposite order.
+ */
+export async function lockEntryCounters(tx: Tx, companyIds: readonly string[]): Promise<void> {
+  for (const id of [...new Set(companyIds)].sort()) {
+    const rows = await tx
+      .select({ companyId: schema.companyCounters.companyId })
+      .from(schema.companyCounters)
+      .where(eq(schema.companyCounters.companyId, id))
+      .for('update');
+    if (rows[0] === undefined) throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+  }
+}
 export { LedgerError } from './errors';
 export type { LedgerErrorCode } from './errors';
 
 // LL-034 integrity assertions — the audit every gate and later ticket leans on.
 export {
+  assertIntercompanyMirror,
+  DEFAULT_MAX_TRANSIT_DAYS,
+  findIntercompanyMismatches,
   assertLedgerBalanced,
   assertNoOrphanedLines,
   assertAccountOwnership,

@@ -1496,6 +1496,13 @@ change here).
 
 ---
 
+**Amendment (LL-091 / Gate 6 H2):** the control-account lock now refuses every NON-DOCUMENT source —
+`JOURNAL_ENTRY`, `BANK_IMPORT` and `OPENING_BALANCE` — into Accounts Receivable and Accounts Payable
+(migration 0037 replaces both trigger functions in place). Alongside it, a system account can never be a
+statement account (`isStatementAccount` ignores subtype/cash-flow for any `system_account_type`) and
+`updateAccount` refuses to change a system account's subtype or cash-flow section. Retained Earnings is no
+longer offered as an import category. Gate 6 found that an ADMIN could flag A/R as CASH and import into it.
+
 ## ADR-026 — Document submit-once idempotency reuses the journal key, fingerprinting the REQUEST
 
 **Status** Accepted · **Added by** LL-067 · **Decided by** product owner
@@ -1945,6 +1952,22 @@ credit card so it signs purchases as money OUT whatever the statement prints. Ca
 accounts only: applying to an invoice or bill is refused (`CARD_CANNOT_APPLY`) because bill payments
 draw on cash assets. Paying the card is the checking-statement line categorised to the card account.
 
+**Amendment (LL-094 — transfers between two statement accounts, Gate 6 M1):** when both sides of a
+transfer are imported (the checking statement's "payment to card" and the card statement's "payment
+received"), staging flags the mirror line — same company, another statement account, opposite amount,
+within three days — and, if that mirror already POSTED, the review defaults to a new decision
+**match_transfer**: the line is marked POSTED against the SAME journal entry (no second entry; the entry's
+line on this account is verified first), so the transfer posts once and both statements reconcile through
+`from_import`. Posting the exact mirror to the other statement account is refused
+(`TRANSFER_ALREADY_POSTED`); a wrong, staged or already-mirrored counterpart is `TRANSFER_MISMATCH`; one
+mirror per entry. When both sides are only staged, the flag says so and one side must post first.
+
+**Amendment (LL-095):** `bank_import_lines → bank_import_batches` is `ON DELETE RESTRICT`; the table
+carries CHECKs (POSTED ⇔ journal entry; targets only when POSTED; non-zero amount) and `mirror_of_line_id`
+(unique, same-company FK) makes one-mirror-per-transfer structural. Duplicate detection also flags a twin
+STAGED in another batch. Statement dates are read as US month/day (a locale assumption); an impossible month
+is rejected rather than swapped.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner
@@ -2056,6 +2079,10 @@ update, invariant 3), and **no table stores a balance** (invariant 2; the Gate-2
 Reopening a completed reconciliation, auto-matching candidates
 to imported statement lines, a printable reconciliation report, or coupling to period close is wanted.
 
+**Amendment (LL-095):** `bank_reconciliation_lines → bank_reconciliations` is `ON DELETE RESTRICT`;
+`startReconciliation` decides the statement-sequence rule under the bank account's row lock, which
+`completeReconciliation` also takes, so a backdated statement cannot slip past a concurrent completion.
+
 ## ADR-037 — Money is displayed at two decimals with thousands separators; stored and computed at four
 
 **Status** Accepted · **Added by** LL-079 · **Decided by** product owner
@@ -2133,6 +2160,10 @@ while a single `audit_events` row exists for the company.
 Reactivating an archived company, purging archived companies under a retention policy (a reviewed
 migration that lifts the audit trigger), or transferring ownership before deletion is wanted.
 
+**Amendment (LL-095):** `journal_entries_immutable` now returns the applicable row for a DRAFT on
+DELETE (it returned NEW, i.e. NULL, which cancelled the delete); the purge path could otherwise stall on a
+DRAFT entry. `companies` carries `CHECK (not is_template or status = 'ACTIVE')`.
+
 ## ADR-039 — A master company is the template every new company is seeded from
 
 **Status** Accepted · **Added by** LL-083 · **Decided by** product owner ("create a master company where
@@ -2190,6 +2221,12 @@ membership (AGENTS.md §6). The owner wants to edit the defaults like any other 
 
 Multi-operator hosting (an instance-admin role for the slot), multiple or per-user templates,
 re-syncing existing companies to a changed template, or copying customers/vendors is wanted.
+
+**Amendment (LL-092 / Gate 6 H3):** `postEntryCore` reads the company row `FOR KEY SHARE`. The company
+services that decide on "no posted entries" (`setCompanyTemplate`, `deleteCompany`, `updateCompanySettings`)
+take the row `FOR UPDATE`, so a posting and such a decision serialise: the posting either commits first
+(and the decision then counts it) or waits and sees the decision's result. The zero-entries and
+no-post-after-archive claims are lock-ordered, not timing-dependent.
 
 ## ADR-040 — The account register is the ledger-derived detail behind every balance
 
@@ -2278,6 +2315,18 @@ membership. The app sends no email.
 Email delivery, invitation expiry or resend, an ownership-transfer wizard, or reactivating an
 archived company's memberships is wanted.
 
+**Amendment (LL-090 / Gate 6 H1, M2, M3):** the trust model changed. **The join link's secret is the
+authorization**, not the email: an invitation carries a 32-byte random token (stored as a SHA-256 hash,
+14-day expiry, re-issuable — each issue invalidates the previous link); `claimInvitation` grants the
+membership to whichever signed-in account presents it, and the email on the invitation is a label only.
+The email-based claim-on-entry is gone. **Production sign-up is invitation-only**: in `'invitation'` mode
+(always in production; `AUTH_SIGNUP_MODE=invitation` elsewhere) the sign-up endpoint admits only a
+request carrying the short-lived join cookie the `/join/<token>` page sets after validating the link; dev,
+CI and e2e run `'open'` mode for their fixture users. A claim never rewrites an ACTIVE membership's role
+(the link is spent; a removed member is reactivated with the invited role), and a direct add resolves any
+pending invitation for that email. Closing sign-up also closes the template-slot exposure (M2). Links are
+handed over by the owner; no mail is sent.
+
 ## ADR-042 — An unposted bank-statement import is a staging artifact and may be deleted outright
 
 **Status** Accepted · **Added by** LL-087 · **Decided by** product owner ("add delete a download")
@@ -2310,3 +2359,197 @@ staging data (after ADR-038's untouched company). No schema change.
 ### Revisit if
 
 An import should be archivable with its content retained, or per-line un-staging is wanted.
+
+---
+
+## ADR-043 — Organizations and the intercompany model
+
+**Status** Accepted · **Added by** LL-096 · **Decided by** product owner ("I want to create a hierarchy that allows multiple companies in an organization … split up a credit card bill to the appropriate company"; "make sure this will work for intercompany bank transfers … reconcile it in another company based on their bank statements and timing")
+
+### Context
+
+One owner runs several companies, pays for all of them with one card, and moves cash between
+their bank accounts. Each company is an island today: a charge or a transfer that belongs to
+another company can only be ignored (LL-089), which leaves the cardholder company's card — or the
+sending company's bank — short of its statement and unable to reconcile. Giving each company "its
+share" of the card as its own liability was rejected: no company's card account could then ever
+be reconciled to the bank's statement.
+
+### Decision
+
+- **Organization** — a grouping of companies (`organizations`; `companies.organization_id`, at
+  most one). It holds no money and no ledger, so it is cross-tenant by design: no `company_id`,
+  no `(company_id, id)` unique. Rows are never deleted (ADR-006); an organization with no members
+  is unreachable. **Company membership stays the unit of authorization** (AGENTS.md §6); the new
+  capability `company.organization` (OWNER) creates, joins and leaves. Joining needs it in the
+  joining company AND in at least one ACTIVE member of the target — an organization the actor
+  cannot prove a stake in is, to them, one that does not exist (uniform denial). Members share one
+  currency; the master template cannot be a member; a member must be ACTIVE (both CHECKs).
+- **Intercompany model** — the company whose statement shows a movement always posts it against
+  its OWN statement account, so every company still reconciles to its own statements. The other
+  side lands in a per-pair system account: *Due from <B>* (ASSET, `INTERCOMPANY_RECEIVABLE`) in A
+  and *Due to <A>* (LIABILITY, `INTERCOMPANY_PAYABLE`) in B, both carrying
+  `accounts.intercompany_company_id` (a by-design cross-company reference; invariant 4 concerns
+  journal lines and is untouched). One pair per direction per company pair (partial unique);
+  created on first use by `ensureIntercompanyPair` inside the posting transaction (idempotent,
+  race-safe, KEY SHARE on both company rows); deactivated — never deleted — when a company leaves
+  at zero balance, and reactivated on rejoin.
+- **The mirror is structural.** Only a posting of source `INTERCOMPANY`, or its `REVERSAL`, may
+  move an intercompany account — the control-account triggers (0018/0023/0025/0037) now carry an
+  allow-list for the two roles. No manual journal, bank-import category, deposit, bill payment,
+  write-off or memo can touch them (the services refuse too, via `system-roles.ts`), so
+  Σ Due-from-B in A = Σ Due-to-A in B can only be broken by an intercompany posting that fails
+  to post both sides, which invariant 7 forbids.
+- **Leaving** an organization is refused while any pair the company is in carries a non-zero
+  balance in either direction; a member cannot be archived or purged until it leaves.
+
+**How the later tickets post on this foundation** (LL-097 card charges, LL-099 bank transfers and
+settlement): a two-company posting locks both `company_counters` rows FOR UPDATE in id order
+before the first `postEntryCore`, posts A's and B's entries in one transaction with one
+`intercompany_group_id` (column + `UNIQUE (intercompany_group_id, company_id)` arrive with
+LL-097), source `INTERCOMPANY`, `source_id` = the statement line. A bank transfer is symmetric:
+whichever company imports first marks its line (`Dr Due from B / Cr Bank A`, or
+`Dr Bank B / Cr Due to A`); the other company's review offers the unmatched group as a candidate
+by amount and date window and posts its own side against its own statement. Enum values added in
+a migration are compared as `::text` in that migration's CHECKs and triggers (the migrator runs
+all pending files in one transaction).
+
+### Consequences
+
+Migration 0040: `organizations`; `companies.organization_id` + two CHECKs; `accounts.
+intercompany_company_id` + pairing/self CHECKs; the single-role partial unique now excludes pair
+rows and a per-pair unique joins it; `INTERCOMPANY` source; three audit actions; both trigger
+functions replaced. Expand-only. Existing companies start with no organization. Consolidated
+statements are a later sprint (they require eliminating these balances; GL-T029 in LL-098 is the
+prerequisite).
+
+### Revisit if
+
+Organization-level roles or invitations are wanted; a bank account (as opposed to a card) is
+shared across companies (which company owns the cash?); multi-currency groups appear.
+
+**Amendment (LL-097 — shared card statements):** `bank_import_batches.shared_with_organization`;
+`bank_import_line_status` += `PERSONAL` (posted like `post`, to an owner equity/asset account the
+reviewer picks — Owner Distributions by default — so the card still reconciles and the P&L never
+carries it; **owner decision, Gate 7 §7 item 3, 2026-09-24: kept as is — any equity or asset account,
+a bank account included (a personal charge the owner later repays from their own account lands there)**)
+and `ASSIGNED` (taken by another member: `assigned_company_id` +
+`assigned_journal_entry_id`, composite-FK'd to that company's entry; this company's side stays in
+`journal_entry_id`). `journal_entries.intercompany_group_id` (unique per company, INTERCOMPANY only,
+immutable once posted) links the two sides. Only a CARD statement can be shared. Visibility from
+another member B is one predicate for every reader and writer: `journal.post` in B, A an ACTIVE member
+of B's organization, the actor a member of A with a `journal.post` role (visible ⇔ assignable), and
+the batch shared OR already carrying a line assigned to B (un-sharing never strands B's undo). Taking
+a line posts both sides in one transaction — line FOR UPDATE → companies KEY SHARE (id order) →
+`lockEntryCounters` (id order) → `postEntryCore` ×2 — and giving it back reverses both the same way.
+An INTERCOMPANY posting may never touch A/R or A/P (trigger). Assigning FROM the cardholder's page
+is deliberately not offered: the taking company chooses its own expense account.
+
+**Amendment (LL-098 — intercompany report and GL-T029):** `/reports/intercompany` shows, per counterpart,
+this company's Due from / Due to, the counterpart's mirror figure (a cross-company read by design: the
+other side of postings this company took part in, nothing else) and the difference. `findIntercompanyMismatches`
+/ `assertIntercompanyMirror` (ledger invariants) state the rule; GL-T029 in the release gate proves it over
+a three-company split with a give-back. The mirror check is deliberately NOT in `assertLedgerIntegrity`'s
+per-test teardown: integration fixtures seed one-sided intercompany rows on purpose (the leave rule).
+**Amendment (LL-099 — intercompany bank transfers and settlement):** a transfer between two members
+appears on both bank statements. Whichever company reviews first marks its line
+(`intercompany_transfer` + the counterpart) and posts its own side — `Dr its pair account / Cr Bank` for
+money out, the reverse for money in — source `INTERCOMPANY` with a fresh group id; the other company's
+review offers that entry as a candidate (opposite side of |amount| on the pair account facing it, within
+3 days, no entry of its own in the group, in a company the actor holds a `journal.post` role in) and
+matches it, posting its own side into the same group. **One relationship per company pair:** a transfer
+moves the pair that already exists between the two (so repaying card charges taken under LL-097 drives
+both Due accounts back to zero — settlement IS this flow, there is no separate one); with none, a pair is
+created with the payer holding the receivable; with both directions present, the payer's receivable.
+Balances are signed. Both companies marking independently is harmless (two groups, the same balances),
+so the "Link" step once sketched is not needed: nothing structural depends on the group beyond one side
+per company (`journal_entries_intercompany_group_company_unique`, mapped to `TRANSFER_ALREADY_MATCHED`).
+**Cash in transit:** between a mark and its match the pair legitimately differs by that amount; the
+mirror invariant and the report (LL-098) are therefore stated NET of single-sided INTERCOMPANY groups
+("in transit" is shown per row), and any other gap — or a one-sided entry with no group — is corruption.
+No schema change.
+
+**Gate 7 correction (2026-09-23):** the LL-096 statement that the mirror "can only be broken by an
+intercompany posting that fails to post both sides" no longer holds as written: with LL-099 a single-sided
+INTERCOMPANY group is legitimately "in transit", and today ANY such group of ANY amount is netted out
+(Gate 7 H2 — LL-101 tightens the definition and ages it); and `journal_lines` has no BEFORE INSERT guard, so
+raw balanced lines can be appended to a posted entry (Gate 7 M5 — LL-104, owner's decision). Until those
+land, the mirror is conventional and gate-proven, not structural. See `docs/GATE-7.md`.
+*Resolved:* LL-101 (#108) tightened and aged the in-transit rule; LL-104 (ADR-044) closed the line-append gap
+with an unconditional BEFORE INSERT guard. With both on `main`, the mirror is structural again as amended:
+the only single-sided groups the database can hold are marks, and no line can join a posted entry.
+
+**Amendment (LL-101 — cash in transit done right, Gate 7 H2/M2/L7/L8):** "in transit" is defined narrowly —
+a single-sided INTERCOMPANY group whose entry is the posting of a POSTED bank-import line of that company
+onto its pair account (a MARK) and whose group has no other side AS OF the date. The report shows three
+states per pair — mirrored / in transit (amber, with the amount and the age of the oldest open mark) /
+MISMATCH — and never "Mirrored" while anything is in transit; `findIntercompanyMismatches` also reports a
+mark older than `DEFAULT_MAX_TRANSIT_DAYS` (33: the 3-day window plus a 30-day statement lag) as
+`stale:…`, so GL-T029 fails on transfers that never matched. A mark auto-joins the counterpart's open
+mark of the same |amount| in the window instead of opening a second group; candidates are allocated one
+entry per line per batch, and a submit that aims two lines at one entry is refused before anything posts.
+**Amendment (LL-102 — shared-path hygiene, Gate 7 M3/M4/L9):** a positive card line mirrored by the
+cardholder's OWN bank statement (a card payment, posted or still staged) is never on offer to another
+company and is refused if requested — it stays with the cardholder, who matches it (LL-094); a refund is
+takeable. A card CHARGE cannot be marked as an intercompany bank transfer (only a payment or refund can be
+the other side of a bank movement). The pair a transfer moves is the one whose OPEN balance the movement
+reduces (paying down what I owe before growing what I am owed, collecting what I am owed before growing
+what I owe), a deactivated pair is reactivated rather than the reverse direction created, and with no pair
+at all the payer holds the receivable — so a repayment settles instead of grossing up, and both companies
+can leave once the relationship nets to zero.
+
+## ADR-044 — Journal lines are frozen structurally; the engine posts by transition
+
+**Status** Accepted · **Added by** LL-104 · **Decided by** product owner ("start LL-104" on the Gate 7 §7 item 2 direction)
+
+### Context
+
+Invariant 3 says a posted entry is immutable. The database enforced it with `journal_lines_immutable`
+(0006, widened to REVERSED entries in 0020) — a trigger that fired on **UPDATE OR DELETE only**. A raw
+balanced pair of lines could therefore be *appended* to any POSTED or REVERSED entry: the deferred balance
+trigger asks only that the entry still balance, and on a POSTED `INTERCOMPANY` entry the Due-account
+allow-list (ADR-043) admits the append. Gate 7 rated the gap MEDIUM (M5) because ADR-043 calls the
+intercompany mirror structural. Two neighbours travelled with it: a raw `REVERSAL`-labelled entry was
+admitted on the Due accounts with no original (5c L4), and the closed-period guard (0010) fired on INSERT
+of a POSTED row only, so a DRAFT→POSTED UPDATE bypassed it (5c N4).
+
+The ticket stub proposed a BEFORE INSERT guard with a **session-local escape** (`set local
+ledgerlite.posting = on`) that only `postEntryCore` / `reverseEntryCore` would set.
+
+### Decision
+
+1. **The line guard fires on INSERT too, with no escape hatch.** `journal_lines_no_mutate_posted` is
+   `BEFORE INSERT OR UPDATE OR DELETE`; nothing — the engine included — can add a line under a POSTED
+   or REVERSED entry (migration 0042).
+2. **The engine posts by transition.** `postEntryCore` and `reverseEntryCore` insert the entry as a
+   `DRAFT`, insert its lines, and flip it to `POSTED` (stamping `posted_at`) as the last statement of the
+   same transaction (`markPosted` in `ledger/internal.ts`). The BEFORE UPDATE triggers judge the finished
+   entry on that flip; the deferred balance trigger judges it at commit; a failure anywhere rolls the
+   DRAFT back with everything else and the gapless number is reused.
+3. **The closed-period guard judges the transition as well** — a second trigger on
+   `UPDATE OF status` when the row becomes POSTED, same function, same `FOR SHARE` read (closes 5c N4).
+4. **`journal_entries_reversal_link_consistent`**: `(source_type = 'REVERSAL') = (reversal_of_id is not
+   null)` — only a reversal carries the link and every reversal does (closes 5c L4).
+
+### Why not the escape
+
+A GUC can be set by any SQL session, so a guard with an escape stays conventional — it would stop an
+accidental raw append but not a deliberate one, which is exactly the case the gate raised. And
+`SET LOCAL` lingers for the rest of the caller's transaction: a feature module inserting lines after
+`postEntryCore` returned would still have passed. Posting by transition needs no privilege, no
+setting, and no trust in the caller; it is the same shape the database already permitted for a DRAFT.
+
+### Consequences
+
+- **The only raw shape that produces a posted entry is DRAFT → lines → POSTED.** Test fixtures that
+  bypass the service use `tests/helpers/raw-entry.ts` (`rawPostedEntry` / `rawDraftEntry` / `rawPost`);
+  a fixture meant to be refused is refused by the same rule as before, on the transition or at commit.
+- One extra UPDATE per posted entry, on which the 0025/0037/0041 relabel guard (two small EXISTS
+  queries) and the period guard run. Negligible against the row locks a posting already takes.
+- The 0025 migration comment "postEntryCore INSERTs entries already POSTED" is historical from 0042 on;
+  migrations are immutable, so this ADR is the correction.
+- A DRAFT is still freely editable and still carries no ledger effect (ADR-011); the engine never leaves
+  one behind.
+- Not addressed: a structural "both sides" rule for intercompany groups (5c N5) — a one-member group is
+  legal at the database and is what "in transit" is.
+

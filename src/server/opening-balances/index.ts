@@ -4,6 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDbTx, schema } from '@/db';
+import { isOpeningBalanceTarget } from '@/server/accounts/system-roles';
 import { todayInTimeZone } from '@/lib/dates';
 import { moneyEquals, sumMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
@@ -45,7 +46,6 @@ type Tx = Parameters<Parameters<PoolDatabase['transaction']>[0]>[0];
  *     `journal_entries_one_opening_balance`). Correct a mistake by voiding and re-setting.
  */
 
-const CONTROL_SYSTEM_TYPES = new Set(['ACCOUNTS_RECEIVABLE', 'ACCOUNTS_PAYABLE']);
 
 /** The company's single POSTED opening-balance entry with its lines, or null. */
 async function loadOpeningBalanceEntry(
@@ -146,7 +146,7 @@ export async function setOpeningBalances(
         .from(schema.accounts)
         .where(and(eq(schema.accounts.companyId, companyId), inArray(schema.accounts.id, referencedIds)));
       for (const a of referenced) {
-        if (a.systemAccountType !== null && CONTROL_SYSTEM_TYPES.has(a.systemAccountType)) {
+        if (!isOpeningBalanceTarget(a.systemAccountType) && a.systemAccountType !== 'OPENING_BALANCE_EQUITY') {
           throw new OpeningBalanceError(
             'CONTROL_ACCOUNT_NOT_ALLOWED',
             'Opening balances cannot post to the Accounts Receivable or Accounts Payable control account. Enter the outstanding invoices and bills instead.',

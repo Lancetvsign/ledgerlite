@@ -203,12 +203,218 @@ test('a credit-card statement imports into the card account and increases what i
   await expect(page.getByTestId('import-document-0')).toHaveCount(0); // no apply-to-document on a card
   await expect(page.getByTestId('import-action-0').locator('option[value="apply_invoice"]')).toHaveCount(0);
 
-  // Canned statement: +1500 (Sales Revenue), −120.50 (Office Supplies), −2000 (Rent) — post all.
+  // Canned CARD statement: −120.50 (Office Supplies), −45 (Travel & Meals), +2000 payment (no
+  // category — it came from Checking, which is not imported in this test). Post all.
+  await page.getByTestId('import-account-2').selectOption({ label: '1000 · Checking' });
   await page.getByTestId('post-import-lines').click();
   await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
 
-  // Card (credit-normal) = 120.50 + 2000 − 1500 = 620.50 owed.
+  // Card (credit-normal) = 120.50 + 45 − 2000 = −1,834.50 (paid ahead); books balance.
   await page.goto('/reports/trial-balance');
-  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('620.50');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('-1,834.50');
   await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+});
+
+test('a transfer imported from both statements posts once — the card side is matched, not re-posted (LL-094)', async ({ page }) => {
+  await freshCompany(page);
+  // Bank statement: the −2000 "rent" line is the card payment → categorise it to the card and post all.
+  await uploadStatement(page);
+  await page.getByTestId('import-account-2').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+
+  // Card statement: the +2000 payment is flagged as the already-posted transfer and defaults to Match.
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('transfer-flag')).toHaveCount(1);
+  await expect(page.getByTestId('transfer-flag')).toContainText('transfer already posted from 1000 · Checking');
+  await expect(page.getByTestId('import-action-2')).toHaveValue('match_transfer');
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 0. 1 matched to a transfer', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-2')).toHaveText('POSTED');
+
+  // One movement, not two: Checking 1500 − 120.50 − 2000 = −620.50; Card 120.50 + 45 − 2000 = −1,834.50.
+  await page.goto('/reports/trial-balance');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Checking' })).toContainText('-620.50');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Credit Card' })).toContainText('-1,834.50');
+  await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('dashboard-recent-row')).toHaveCount(5); // 3 bank + 2 card purchases
+});
+
+test('ignore all remaining, undo one, and post only that line (LL-089)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('ignore-all').click();
+  await expect(page.getByTestId('review-counts')).toHaveText('0 to post · 3 to ignore');
+  for (const i of [0, 1, 2]) await expect(page.getByTestId(`import-action-${String(i)}`)).toHaveValue('ignore');
+
+  await page.getByTestId('reset-all').click();
+  await expect(page.getByTestId('review-counts')).toHaveText('3 to post · 0 to ignore');
+
+  await page.getByTestId('ignore-all').click();
+  await page.getByTestId('ignore-line-1').click(); // Undo: back to the suggestion for line 2
+  await expect(page.getByTestId('review-counts')).toHaveText('1 to post · 2 to ignore');
+  await expect(page.getByTestId('import-action-1')).toHaveValue('post');
+
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-0')).toHaveText('IGNORED');
+  await expect(page.getByTestId('import-status-1')).toHaveText('POSTED');
+  await expect(page.getByTestId('import-status-2')).toHaveText('IGNORED');
+});
+
+test('a shared card statement is split: one line posted here, one marked personal, one taken by the other company (LL-097)', async ({ page }) => {
+  test.slow();
+  // Two fresh companies in one organization; the second (Card Co) holds the card.
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const taker = `Taker Co ${stamp}`;
+  const cardCo = `Card Co ${stamp}`;
+  await page.goto('/account');
+  for (const name of [taker, cardCo]) {
+    await page.getByPlaceholder('New company legal name').fill(name);
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+  }
+  const takerRow = page.locator('li', { hasText: taker });
+  await takerRow.getByTestId('organization-menu').click();
+  await takerRow.getByPlaceholder('Organization name').fill(`Group ${stamp}`);
+  await takerRow.getByTestId('create-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('Organization created');
+  const cardRow = page.locator('li', { hasText: cardCo });
+  await cardRow.getByTestId('organization-menu').click();
+  await cardRow.getByTestId('organization-select').selectOption({ label: `Group ${stamp}` });
+  await cardRow.getByTestId('add-to-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('joined the organization');
+  await expect(page.locator('li', { hasText: cardCo }).getByTestId('active-badge')).toBeVisible(); // created last → active
+
+  // Card Co: upload the canned card statement, shared. Post OFFICE DEPOT, mark SHELL FUEL personal.
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-share').check();
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('sharing-status')).toContainText('Shared with your organization');
+  await page.getByTestId('import-action-1').selectOption('personal');
+  await expect(page.getByTestId('import-account-1')).toHaveValue(/./);
+  await expect(page.getByTestId('import-account-1').locator('option:checked')).toHaveText(/Owner Distributions/);
+  await page.getByTestId('import-action-2').selectOption('ignore'); // the card payment is not taken here
+  await expect(page.getByTestId('review-counts')).toHaveText('1 to post · 1 to ignore · 1 personal');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 1. 1 marked personal.', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-1')).toHaveText('PERSONAL');
+  await expect(page.getByTestId('delete-import-batch')).toHaveCount(0);
+
+  // Taker Co: the statement is "shared with you"; the untaken lines are the ignored payment? No — ignored lines
+  // are not offered; nothing is left to take, so make the card owner un-ignore by re-uploading… simpler: use a
+  // second statement upload that stays fully staged.
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa2.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 y') });
+  await page.getByTestId('upload-share').check();
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+
+  await page.goto('/account');
+  await page.locator('li', { hasText: taker }).getByRole('button', { name: 'Switch' }).click();
+  await expect(page.locator('li', { hasText: taker }).getByTestId('active-badge')).toBeVisible();
+  await page.goto('/bank-import');
+  await expect(page.getByTestId('shared-list')).toContainText(cardCo);
+  await page.getByTestId('shared-link').first().click(); // newest first: the fully staged second statement
+  await expect(page).toHaveURL(/\/bank-import\/shared\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('shared-line-row')).toHaveCount(3);
+  await page.getByTestId('shared-take-1').check(); // SHELL FUEL −45.00
+  const suppliesOption = await page.getByTestId('shared-account-1').locator('option', { hasText: 'Office Supplies' }).first().getAttribute('value');
+  await page.getByTestId('shared-account-1').selectOption(suppliesOption ?? '');
+  await page.getByTestId('assign-shared-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Took 1 line(s)', { timeout: 15_000 });
+  await expect(page.getByTestId('shared-taken-1')).toBeVisible();
+
+  // Taker Co's books: the expense and Due to Card Co; balanced.
+  await page.goto('/reports/trial-balance');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Due to' })).toContainText('45.00');
+  await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+
+  // Give it back: both entries reversed, the line is available again.
+  await page.goto('/bank-import');
+  await page.getByTestId('shared-link').first().click(); // newest first: the fully staged second statement
+  await page.getByTestId('shared-undo-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Line given back', { timeout: 15_000 });
+  await expect(page.getByTestId('shared-taken-1')).toHaveCount(0);
+  await expect(page.getByTestId('shared-take-1')).toBeVisible();
+});
+
+test('an intercompany bank transfer is marked in one company and matched from the other (LL-099)', async ({ page }) => {
+  test.slow();
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const payee = `Payee Co ${stamp}`;
+  const payer = `Payer Co ${stamp}`;
+  await page.goto('/account');
+  for (const name of [payee, payer]) {
+    await page.getByPlaceholder('New company legal name').fill(name);
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByTestId('company-list')).toContainText(name, { timeout: 15_000 });
+  }
+  const payeeRow = page.locator('li', { hasText: payee });
+  await payeeRow.getByTestId('organization-menu').click();
+  await payeeRow.getByPlaceholder('Organization name').fill(`Group ${stamp}`);
+  await payeeRow.getByTestId('create-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('Organization created');
+  const payerRow = page.locator('li', { hasText: payer });
+  await payerRow.getByTestId('organization-menu').click();
+  await payerRow.getByTestId('organization-select').selectOption({ label: `Group ${stamp}` });
+  await payerRow.getByTestId('add-to-organization').click();
+  await expect(page.getByTestId('notice')).toContainText('joined the organization');
+
+  // Payer Co (active): the canned bank statement's −2000 "rent" line is really a transfer to Payee Co.
+  await uploadStatement(page);
+  await page.getByTestId('import-action-2').selectOption('intercompany_transfer');
+  await expect(page.getByTestId('import-counterpart-2')).toBeVisible();
+  await page.getByTestId('import-counterpart-2').selectOption({ label: payee });
+  await page.getByTestId('import-action-0').selectOption('ignore');
+  await page.getByTestId('import-action-1').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+  await page.goto('/reports/intercompany');
+  await expect(page.getByTestId('intercompany-row').filter({ hasText: payee })).toContainText('2,000.00');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('In transit'); // LL-101: never "Mirrored" while a mark awaits its match
+
+  // Payee Co: its card statement's +2000 PAYMENT line is the other side; it is flagged and defaults to Match.
+  await page.goto('/account');
+  await page.locator('li', { hasText: payee }).getByRole('button', { name: 'Switch' }).click();
+  await expect(page.locator('li', { hasText: payee }).getByTestId('active-badge')).toBeVisible();
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '2100 · Credit Card' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'visa.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('intercompany-flag')).toContainText(`transfer posted by ${payer}`);
+  await expect(page.getByTestId('import-action-2')).toHaveValue('match_intercompany');
+  await page.getByTestId('import-action-0').selectOption('ignore');
+  await page.getByTestId('import-action-1').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
+  const payeeReviewUrl = page.url().split('?')[0] ?? page.url();
+
+  await page.goto('/reports/intercompany');
+  const row = page.getByTestId('intercompany-row').filter({ hasText: payer });
+  await expect(row).toContainText('2,000.00');
+  await expect(row).toHaveAttribute('data-mirrored', '1');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+
+  // Undo from the payee (LL-100): both sides reversed, the line is back for review here.
+  await page.goto(payeeReviewUrl);
+  await page.getByTestId('unmark-transfer-2').click();
+  await expect(page.getByTestId('notice')).toContainText('Transfer un-marked', { timeout: 15_000 });
+  await expect(page.getByTestId('import-action-2')).toBeVisible();
+  await page.goto('/reports/intercompany');
+  await expect(page.getByTestId('intercompany-row').filter({ hasText: payer })).toContainText('0.00');
 });

@@ -5,7 +5,9 @@ export type MemberErrorCode =
   /** A PENDING invitation for that email already exists in this company. */
   | 'ALREADY_INVITED'
   /** The change would leave nobody who still covers the affected member's role. */
-  | 'LAST_OWNER';
+  | 'LAST_OWNER'
+  /** The invitation link is unknown, expired, already used, revoked, or its company is archived (LL-090). */
+  | 'INVITATION_INVALID';
 
 export class MemberError extends Error {
   public override readonly name = 'MemberError';
