@@ -250,13 +250,16 @@ Verified in production (2026-09-11):
 - REST git-source deployment builds the exact `main` commit with the Production environment and
   aliases `ledgerlite-omega.vercel.app`; sign-up, company creation and the dashboard work.
 - Preview database provisioning end to end and the branch-scoped Preview variables (every PR).
+- The root-branch-cap path in `preview-database.yml`: on 2026-09-24, with #106 and #107
+  holding the two slots, PR #110 (run 35938851383) got the warning, every database step
+  skipped, and a green job.
 - Vercel Node version is 24.x, matching `.nvmrc`; all workflow files parse as valid YAML.
 
 **Not yet exercised:**
 
-- The root-branch-cap path in `preview-database.yml` (warning, skipped wiring, green job)
-  and the `preview/*` step of the reaper — both new on 2026-09-24. The first exercises
-  itself the next time a PR opens while two preview branches exist.
+- The `preview/*` step of the reaper (new on 2026-09-24). Run it by hand via
+  `workflow_dispatch` once merged; it should delete nothing while every preview PR is open
+  and younger than 14 days.
 - A failed production migration blocking promotion (only the success path has run).
 - A real statement extraction end to end — the pipeline reaches the model; first successful run
   pending the direct-Anthropic route (#78).
