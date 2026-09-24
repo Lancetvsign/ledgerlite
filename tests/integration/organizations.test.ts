@@ -52,6 +52,7 @@ import { receivePaymentInput } from '@/validation/payment';
 import { createVendorInput } from '@/validation/vendor';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 async function makeUser(): Promise<string> {
   const { response } = await getAuth().api.signUpEmail({
@@ -102,21 +103,11 @@ async function pair(owner: string, a: string, b: string) {
 async function anyExpense(owner: string, companyId: string): Promise<string> {
   return (await createAccount(owner, companyId, createAccountInput.parse({ name: 'Some Expense', accountType: 'EXPENSE' }))).id;
 }
-/** Raw POSTED entry with the given source and lines — the services entirely bypassed. */
+/** Raw POSTED entry with the given source and lines — the services entirely bypassed (LL-104 shape: DRAFT → lines → POSTED). */
 function rawEntry(companyId: string, userId: string, source: string, lines: { accountId: string; debit: string; credit: string }[], entryNumber = 95000): Promise<string> {
-  return getDbTx().transaction(async (tx) => {
-    const r = await tx.execute<{ id: string }>(sql`
-      insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number, posted_at)
-      values (${companyId}, '2026-03-10', '2026-03-10', ${source}::journal_source_type, ${userId}, 'POSTED', ${entryNumber}, now()) returning id`);
-    const id = r.rows[0]!.id;
-    let n = 1;
-    for (const l of lines) {
-      await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-        values (${id}, ${companyId}, ${l.accountId}, ${n}, ${l.debit}, ${l.credit})`);
-      n += 1;
-    }
-    return id;
-  });
+  return getDbTx().transaction((tx) =>
+    rawPostedEntry(tx, { companyId, userId, sourceType: source, lines, entryNumber, transactionDate: '2026-03-10' }),
+  );
 }
 async function auditActions(companyId: string): Promise<string[]> {
   const db = await getTestDb();

@@ -21,7 +21,7 @@ enforced only by a test is a rule a future change can quietly remove.
 |---|---|---|---|---|
 | 1 | Debits equal credits on every posted entry | DB — deferred constraint trigger | LL-030 | **enforced (LL-030)** — deferred trigger; rejection proven in raw SQL |
 | 2 | No table stores an account balance | schema review + derivation | LL-020 / LL-034 | **accounts table has no balance column (LL-020)**; full derivation LL-034 |
-| 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 | **DB enforced (LL-030)**; service layer LL-033 |
+| 3 | Posted entries are immutable | DB trigger + service layer | LL-030 / LL-033 / LL-104 | **DB enforced (LL-030; lines frozen on INSERT too, LL-104)**; service layer LL-033 |
 | 4 | No cross-company journal line | DB — composite foreign keys | LL-030 | **enforced (LL-030)** — composite FKs on journal_lines; proven in raw SQL |
 | 5 | No posting into a closed period | service — `assertPeriodOpen` | LL-022 / LL-031 | **`assertPeriodOpen` built and tested (LL-022)**; wired into posting LL-031 |
 | 6 | A source transaction posts exactly once | DB — partial unique index | LL-030 | **enforced (LL-030)** — partial unique index; proven in raw SQL |
@@ -80,8 +80,13 @@ A `BEFORE UPDATE OR DELETE` trigger on `journal_entries` allows, on a `POSTED` r
 **exactly one** change: `status` POSTED→REVERSED **with** `reversed_by_id` going NULL→set
 and **every other column identical** (`IS NOT DISTINCT FROM` across all sixteen columns).
 Any other update, and any delete, raises `POSTED_ENTRY_IMMUTABLE`. A parallel trigger on
-`journal_lines` freezes a posted entry's lines entirely. Drafts remain editable. Proven in
-raw SQL, pinned by `tests/integration/ledger-schema.test.ts`.
+`journal_lines` freezes a posted entry's lines entirely — since LL-104 (ADR-044) on **INSERT** as
+well as UPDATE and DELETE, with no escape hatch: no line can be added to a POSTED or REVERSED
+entry by anyone. LedgerService therefore posts by *transition* — the entry is inserted as a
+DRAFT, its lines are added, and the last statement flips it to POSTED — and the closed-period
+guard judges that flip too (a second trigger on the DRAFT→POSTED update). A `REVERSAL` must
+carry `reversal_of_id`, and only a `REVERSAL` may (CHECK). Drafts remain editable. Proven in raw
+SQL, pinned by `tests/integration/ledger-schema.test.ts` and `line-immutability.test.ts`.
 
 ### 4. No cross-company journal line
 

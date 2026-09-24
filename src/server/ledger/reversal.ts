@@ -11,7 +11,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
+import { allocateEntryNumber, loadEntry, markPosted, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { JournalLine } from '@/db/schema';
 import type { ReverseJournalEntryInput } from '@/validation/journal';
@@ -265,7 +265,7 @@ export async function reverseEntryCore(
       transactionDate: reversalDate,
       postingDate: reversalDate,
       description,
-      status: 'POSTED',
+      status: 'DRAFT',
       // A distinct source keeps the reversal from colliding with the original
       // on the "one POSTED per source" index (invariant 6): the original may
       // carry an invoice/payment source, and copying it verbatim would be a
@@ -275,15 +275,18 @@ export async function reverseEntryCore(
       sourceId: original.id,
       reversalOfId: original.id,
       createdBy: input.actorUserId,
-      postedAt: sql`now()`,
     })
-    .returning();
+    .returning({ id: schema.journalEntries.id });
   const reversal = insertedRows[0];
   if (reversal === undefined) throw new Error('reversal entry insert returned no row');
 
   await tx.insert(schema.journalLines).values(
     reversalLines.map((line) => ({ ...line, journalEntryId: reversal.id })),
   );
+
+  // Post by transition (LL-104 / ADR-044) — see postEntryCore: the line guard admits
+  // no INSERT under a POSTED entry, so the reversal is a DRAFT until its lines are in.
+  await markPosted(tx, input.companyId, reversal.id);
 
   // ---- Drive the original through the ONE permitted transition. -------------
   // Setting ONLY status and reversed_by_id is exactly what the LL-030 trigger

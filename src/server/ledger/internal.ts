@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { schema } from '@/db';
 
@@ -42,6 +42,29 @@ export async function allocateEntryNumber(tx: Tx, companyId: string): Promise<nu
     throw new LedgerError('COMPANY_NOT_FOUND', 'No entry-number counter for this company.');
   }
   return Number(value);
+}
+
+/**
+ * The posting transition (LL-104 / ADR-044): DRAFT → POSTED, stamping posted_at.
+ * The journal_lines guard admits no INSERT under a POSTED or REVERSED entry and has
+ * no escape hatch, so the engine inserts the entry as a DRAFT, adds its lines, and
+ * flips it here as the last step. The BEFORE UPDATE triggers judge the finished entry
+ * on this statement (closed period — 0042; control-account relabel — 0025/0037/0041)
+ * and raise with their usual messages, which `toLedgerDomainError` maps.
+ */
+export async function markPosted(tx: Tx, companyId: string, entryId: string): Promise<void> {
+  const rows = await tx
+    .update(schema.journalEntries)
+    .set({ status: 'POSTED', postedAt: sql`now()` })
+    .where(
+      and(
+        eq(schema.journalEntries.companyId, companyId),
+        eq(schema.journalEntries.id, entryId),
+        eq(schema.journalEntries.status, 'DRAFT'),
+      ),
+    )
+    .returning({ id: schema.journalEntries.id });
+  if (rows[0] === undefined) throw new Error('journal entry vanished before it could be posted');
 }
 
 /** Loads an entry and its lines (ordered), for the caller to return. */
