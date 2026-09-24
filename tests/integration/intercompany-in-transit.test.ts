@@ -128,7 +128,7 @@ describe('auto-link and per-submit allocation (L7, L8)', () => {
     const inB = await stage(c.owner, c.b, c.bankB, [{ date: '2026-07-02', description: 'IN 1', amount: '100.00' }, { date: '2026-07-02', description: 'IN 2', amount: '100.00' }]);
     const offered = inB.lines.map((l) => l.intercompanyCandidate?.entryId ?? null);
     expect(new Set(offered).size).toBe(2);
-    expect(offered.sort()).toEqual([...entriesA].sort());
+    expect([...offered].sort()).toEqual([...entriesA].sort()); // copy: `offered` is indexed by line below
     // Aiming both lines at the same entry is refused up front (the second line's offered
     // candidate is the other entry, so it is a mismatch; a same-candidate pair would be
     // TRANSFER_ALREADY_MATCHED), and nothing posts.
