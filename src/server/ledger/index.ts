@@ -12,7 +12,7 @@ import { getAccountingPeriod } from '@/server/periods';
 
 import { LedgerError } from './errors';
 import { fingerprintPosting } from './fingerprint';
-import { allocateEntryNumber, loadEntry, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
+import { allocateEntryNumber, loadEntry, markPosted, toLedgerDomainError, type PostedEntry, type Tx } from './internal';
 
 import type { PostJournalEntryInput } from '@/validation/journal';
 
@@ -188,7 +188,13 @@ export async function postEntryCore(
   // THIS company only.
   const entryNumber = await allocateEntryNumber(tx, input.companyId);
 
-  // ---- Insert the posted entry and its lines --------------------------------
+  // ---- Insert the entry as a DRAFT, then its lines, then post it -------------
+  // Posting is a TRANSITION (LL-104 / ADR-044): the journal_lines guard refuses any
+  // INSERT under a POSTED or REVERSED entry, with no escape for the engine — so the
+  // lines go in while the entry is still a DRAFT and the flip to POSTED is the last
+  // step. The BEFORE UPDATE triggers then judge the finished entry (closed period,
+  // control-account relabel) and the deferred balance trigger judges it at commit.
+  // All three statements share this transaction: a DRAFT never survives a failure.
   const entryRows = await tx
     .insert(schema.journalEntries)
     .values({
@@ -197,16 +203,15 @@ export async function postEntryCore(
       transactionDate: input.transactionDate,
       postingDate,
       description: input.description,
-      status: 'POSTED',
+      status: 'DRAFT',
       sourceType: input.sourceType,
       sourceId: input.sourceId,
       idempotencyKey: input.idempotencyKey,
       idempotencyFingerprint: fingerprint,
       intercompanyGroupId: input.intercompanyGroupId,
       createdBy: input.actorUserId,
-      postedAt: sql`now()`,
     })
-    .returning();
+    .returning({ id: schema.journalEntries.id });
   const entry = entryRows[0];
   if (entry === undefined) throw new Error('journal entry insert returned no row');
 
@@ -223,6 +228,8 @@ export async function postEntryCore(
       vendorId: line.vendorId,
     })),
   );
+
+  await markPosted(tx, input.companyId, entry.id);
 
   // ---- Audit, INSIDE the transaction ----------------------------------------
   // A record written in a separate transaction could survive a rolled-back

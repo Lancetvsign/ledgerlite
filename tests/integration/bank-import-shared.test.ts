@@ -44,6 +44,7 @@ import { createCompanyInput } from '@/validation/company';
 import { postJournalEntryInput } from '@/validation/journal';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 const EMPTY = new Uint8Array();
 const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -183,8 +184,7 @@ describe('structural rules (migration 0041)', () => {
     const ar = (await resolveSystemAccount(getDbTx(), c.b, 'ACCOUNTS_RECEIVABLE'))!;
     const db = await getTestDb();
     expect(await rejection(db.transaction(async (tx) => {
-      const r = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number) values (${c.b}, '2026-06-02', '2026-06-02', 'INTERCOMPANY', ${c.owner}, 'POSTED', 95000) returning id`);
-      await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${r.rows[0]!.id}, ${c.b}, ${ar}, 1, '1.0000', '0.0000')`);
+      await rawPostedEntry(tx, { companyId: c.b, userId: c.owner, sourceType: 'INTERCOMPANY', entryNumber: 95000, transactionDate: '2026-06-02', lines: [{ accountId: ar, debit: '1.0000', credit: '0.0000' }] });
     }))).toMatch(/CONTROL_ACCOUNT_MANUAL_POST/);
   });
 });

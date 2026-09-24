@@ -34,6 +34,7 @@ import { receivePaymentInput } from '@/validation/payment';
 import { writeOffInvoiceInput } from '@/validation/writeoff';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 interface Ctx {
   userId: string;
@@ -135,14 +136,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // A/R. The BEFORE INSERT trigger must refuse the line before it can commit.
     await expectRejectsOnChain(
       db.transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries
-            (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95000)
-          returning id`);
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${r.rows[0]!.id}, ${c.companyId}, ${arId}, 1, '1.0000', '0.0000')`);
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 95000, transactionDate: '2026-02-10', lines: [{ accountId: arId, debit: '1.0000', credit: '0.0000' }] });
       }),
       /CONTROL_ACCOUNT_MANUAL_POST/,
     );
@@ -156,16 +150,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // Same raw insert, but source_type INVOICE — a document path the subsidiary sees.
     // The trigger allows it; the balanced pair commits.
     await db.transaction(async (tx) => {
-      const r = await tx.execute<{ id: string }>(sql`
-        insert into journal_entries
-          (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-        values (${c.companyId}, '2026-02-10', '2026-02-10', 'INVOICE', ${c.userId}, 'POSTED', 95100)
-        returning id`);
-      const id = r.rows[0]!.id;
-      await tx.execute(sql`
-        insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-        values (${id}, ${c.companyId}, ${arId}, 1, '1.0000', '0.0000'),
-               (${id}, ${c.companyId}, ${c.revId}, 2, '0.0000', '1.0000')`);
+      await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'INVOICE', entryNumber: 95100, transactionDate: '2026-02-10', lines: [{ accountId: arId, debit: '1.0000', credit: '0.0000' }, { accountId: c.revId, debit: '0.0000', credit: '1.0000' }] });
     });
     const cnt = await db.execute<{ n: string }>(
       sql`select count(*)::text n from journal_entries where company_id = ${c.companyId} and entry_number = 95100`,
@@ -182,14 +167,7 @@ describe('A/R control-account guard is STRUCTURAL (database, service bypassed)',
     // structurally, exactly like A/R.
     await expectRejectsOnChain(
       db.transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries
-            (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95200)
-          returning id`);
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${r.rows[0]!.id}, ${c.companyId}, ${apId}, 1, '1.0000', '0.0000')`);
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 95200, transactionDate: '2026-02-10', lines: [{ accountId: apId, debit: '1.0000', credit: '0.0000' }] });
       }),
       /CONTROL_ACCOUNT_MANUAL_POST/,
     );

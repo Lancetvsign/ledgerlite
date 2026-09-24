@@ -31,6 +31,7 @@ enforced only by application code.
 | 6 | Independent data-integrity review | ✓ §5c |
 | 7 | Findings consolidated, deduplicated and re-verified by the author | ✓ §6 |
 | 8 | Blocking fixes (LL-100 … LL-103) merged and deployed | ✓ (#107, #108, #109, #111) |
+| 8a | M5 structural line immutability (LL-104, owner's direction decision) | ✓ (ADR-044, migration 0042) |
 | 9 | Human sign-off | ☐ §7 |
 
 ## 2. What was reviewed and how
@@ -229,7 +230,7 @@ owner's decisions.
 | M2 | MEDIUM | Report as-of ignores the date when deciding single-sidedness → false MISMATCH between the two statement dates (5b M1) | **Fix now — LL-101** (date-bound `not exists`; as-of test between the dates). | FIXED #108 (LL-101) |
 | M3 | MEDIUM | A card PAYMENT line can be taken through the shared path; GL-T029 codifies a negative expense in the taker (5b M2) | **Fix now — LL-102**: refuse/hide positive lines that have a same-company transfer candidate in the cardholder; GL-T029 matches the payment in A instead; assert the taker's P&L. | FIXED #109 (LL-102) |
 | M4 | MEDIUM | With pairs in both directions a repayment grosses up instead of settling (5b M3, 5b L4) | **LL-102**: prefer the pair whose balance the movement reduces; `pairAccountsFor` sees INACTIVE pairs (reactivate rather than create the reverse direction). | FIXED #109 (LL-102) |
-| M5 | MEDIUM | `journal_lines` accepts INSERT into a POSTED entry; the mirror is not structural against raw SQL (5c M2, 5c L4) | **Decide in §7 — LL-104** (migration): BEFORE INSERT `journal_lines_immutable` with a session-local escape (`set local ledgerlite.posting = on`) set only by `postEntryCore` / `reverseEntryCore`; `CHECK (source_type <> 'REVERSAL' or reversal_of_id is not null)`. Pre-existing invariant-3 gap, now load-bearing. | OPEN — owner decision (§7 item 2, LL-104) |
+| M5 | MEDIUM | `journal_lines` accepts INSERT into a POSTED entry; the mirror is not structural against raw SQL (5c M2, 5c L4) | **Decide in §7 — LL-104** (migration): BEFORE INSERT `journal_lines_immutable` with a session-local escape (`set local ledgerlite.posting = on`) set only by `postEntryCore` / `reverseEntryCore`; `CHECK (source_type <> 'REVERSAL' or reversal_of_id is not null)`. Pre-existing invariant-3 gap, now load-bearing. | FIXED #113 (LL-104, ADR-044): guard on INSERT with NO escape; the engine posts DRAFT→lines→POSTED; period guard on the transition (N4); reversal-link CHECK (L4) |
 | M6 | MEDIUM | `transferCounterparts` unauthorized at the module root; the lint fence does not cover `shared` / `intercompany` (5a M1) | **Fix now — LL-103**: `requireCompanyMembership` inside; fence pattern extended. | FIXED #111 (LL-103) |
 | L1 | LOW | `?detail=` free text reflected into the shared-page notice (5a L1) | LL-103: structured `closedIn` discriminator; name resolved on render. | FIXED #111 (LL-103) |
 | L2 | LOW | Report keeps reading a former member's live legal name and pair account (5a L2) | LL-103: ACTIVE-pair / same-organization filter, or a "former member" label. | FIXED #111 (LL-103) |
@@ -256,6 +257,8 @@ Decisions requested of the product owner:
 2. **M5 — make line immutability structural** (`journal_lines` BEFORE INSERT guard with a session-local
    escape, LL-104). This touches the ledger engine's posting mechanics and needs plan mode; approve the
    direction or accept the gap as documented.
+   **Decided 2026-09-24 ("start LL-104"):** built without the escape — the engine posts by transition
+   instead (ADR-044); 5c L4 and 5c N4 closed with it.
 3. **PERSONAL account rule** — keep "any equity or asset account the reviewer picks" (today), or restrict
    to equity plus an explicit owner-loan asset subtype.
 4. **Manual acceptance (§4)** — the real card statement split and the real bank transfer across two of

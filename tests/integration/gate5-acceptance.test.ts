@@ -42,6 +42,7 @@ import { createVendorInput } from '@/validation/vendor';
 import { issueVendorCreditInput, voidVendorCreditInput } from '@/validation/vendor-credit';
 
 import { getTestDb, truncateAll } from '../helpers/database';
+import { rawPostedEntry } from '../helpers/raw-entry';
 
 const ASOF = '2026-12-31';
 const PERIOD = { from: '2026-01-01', to: '2026-12-31' } as const;
@@ -204,13 +205,7 @@ describe('Gate 5 — Sprint 6 A/P lifecycle reconciles control ⇔ subsidiary �
     let rejected = false;
     try {
       await db.transaction(async (tx) => {
-        const r = await tx.execute<{ id: string }>(sql`
-          insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status, entry_number)
-          values (${c.companyId}, '2026-02-10', '2026-02-10', 'JOURNAL_ENTRY', ${c.userId}, 'POSTED', 95500)
-          returning id`);
-        await tx.execute(sql`
-          insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit)
-          values (${r.rows[0]!.id}, ${c.companyId}, ${apId}, 1, '1.0000', '0.0000')`);
+        await rawPostedEntry(tx, { companyId: c.companyId, userId: c.userId, sourceType: 'JOURNAL_ENTRY', entryNumber: 95500, transactionDate: '2026-02-10', lines: [{ accountId: apId, debit: '1.0000', credit: '0.0000' }] });
       });
     } catch (e) {
       rejected = true;
