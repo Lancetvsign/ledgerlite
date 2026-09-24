@@ -17,6 +17,7 @@
 import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { getDbTx } from '@/db';
 import { getAuth } from '@/lib/auth';
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { toMoney } from '@/lib/decimal';
@@ -960,7 +961,9 @@ describe('GL regression suite (release-blocking)', () => {
     await postImportLines(userId, a, outA.id, { decisions: [{ lineId: outLine.id, action: 'intercompany_transfer', counterpartCompanyId: b }] });
     const pendingRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
     expect(pendingRow).toMatchObject({ receivableDifference: '300.0000', receivableInTransit: '300.0000', state: 'in_transit', mirrored: false });
-    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    // Fresh as of the fixture's own dates; the same mark is STALE by the gate's real today (LL-101).
+    await expect(assertIntercompanyMirror(undefined, getDbTx(), { asOf: '2026-07-02' })).resolves.toBeUndefined();
+    await expect(assertIntercompanyMirror()).rejects.toMatchObject({ check: 'intercompany-mirror' });
     const inB = await stageImport(userId, b, { bankAccountId: bankB, fileBytes: new Uint8Array() }, () => Promise.resolve([{ date: '2026-07-02', description: 'FROM CARD CO', amount: '300.00' }]));
     const inLine = (await getImportBatch(userId, b, inB.id))!.lines[0]!;
     expect(inLine.intercompanyCandidate?.counterpartCompanyId).toBe(a);

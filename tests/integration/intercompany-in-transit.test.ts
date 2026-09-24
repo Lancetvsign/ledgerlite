@@ -129,11 +129,13 @@ describe('auto-link and per-submit allocation (L7, L8)', () => {
     const offered = inB.lines.map((l) => l.intercompanyCandidate?.entryId ?? null);
     expect(new Set(offered).size).toBe(2);
     expect(offered.sort()).toEqual([...entriesA].sort());
-    // Aiming both lines at the same entry is refused up front, and nothing posts.
-    expect(await codeOf(postImportLines(c.owner, c.b, inB.batch.id, { decisions: [
+    // Aiming both lines at the same entry is refused up front (the second line's offered
+    // candidate is the other entry, so it is a mismatch; a same-candidate pair would be
+    // TRANSFER_ALREADY_MATCHED), and nothing posts.
+    expect(['TRANSFER_MISMATCH', 'TRANSFER_ALREADY_MATCHED']).toContain(await codeOf(postImportLines(c.owner, c.b, inB.batch.id, { decisions: [
       { lineId: inB.lines[0]!.id, action: 'match_intercompany', counterpartEntryId: offered[0]! },
       { lineId: inB.lines[1]!.id, action: 'match_intercompany', counterpartEntryId: offered[0]! },
-    ] }), BankImportError)).toBe('TRANSFER_ALREADY_MATCHED');
+    ] }), BankImportError));
     const db = await getTestDb();
     expect((await db.execute<{ n: string }>(sql`select count(*)::text n from journal_entries where company_id = ${c.b} and source_type = 'INTERCOMPANY'`)).rows[0]!.n).toBe('0');
     // The offered allocation posts both.

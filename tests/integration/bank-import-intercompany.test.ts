@@ -104,7 +104,7 @@ describe('mark, then match from the other company', () => {
     // Between the mark and the match the mirror holds NET OF CASH IN TRANSIT (LL-099).
     const pending = (await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]!;
     expect(pending).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '0.0000', receivableDifference: '5000.0000', receivableInTransit: '5000.0000', state: 'in_transit', mirrored: false, inTransitOldestDays: 183 });
-    await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+    await expect(assertIntercompanyMirror(undefined, getDbTx(), { asOf: '2026-07-02' })).resolves.toBeUndefined();
     // B's statement two days later: the candidate is offered and the default is to match it.
     const inB = await stageOne(c.owner, c.b, c.bankB, '2026-07-03', 'DEPOSIT FROM ALPHA', '5000.00');
     expect(inB.line.intercompanyCandidate).toMatchObject({ entryId: markedA.journalEntryId, counterpartCompanyId: c.a, counterpartLegalName: 'Alpha Co', txnDate: '2026-07-01' });

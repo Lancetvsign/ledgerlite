@@ -179,7 +179,7 @@ export async function findIntercompanyMismatches(
 }
 
 /** Every intercompany pair mirrors net of fresh cash in transit — GL-T029. Explicit, not part of assertLedgerIntegrity (see above). */
-export async function assertIntercompanyMirror(companyId?: string, exec: Executor = getDbTx(), options: { readonly maxTransitDays?: number } = {}): Promise<void> {
+export async function assertIntercompanyMirror(companyId?: string, exec: Executor = getDbTx(), options: { readonly maxTransitDays?: number; readonly asOf?: string } = {}): Promise<void> {
   const v = await findIntercompanyMismatches(exec, companyId, options);
   if (v.length > 0) throw new LedgerIntegrityError('intercompany-mirror', v);
 }
