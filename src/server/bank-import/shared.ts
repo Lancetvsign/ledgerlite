@@ -21,8 +21,8 @@ import {
 import { getAccountingPeriod } from '@/server/periods';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
-import { BankImportError } from './errors';
-import { lockStagedLine, pickableAccounts, suggestForCompany, type PickableAccount } from './index';
+import { BankImportError, PeriodClosedInCompanyError } from './errors';
+import { findTransferCandidates, lockStagedLine, pickableAccounts, suggestForCompany, type PickableAccount } from './index';
 
 import type { PoolDatabase } from '@/db';
 import type { BankImportLine } from '@/db/schema';
@@ -218,7 +218,7 @@ export async function getSharedImportBatch(
   if (visible === undefined) return null;
   const db = getDb();
 
-  const lines = await db
+  const allLines = await db
     .select()
     .from(schema.bankImportLines)
     .where(
@@ -232,6 +232,10 @@ export async function getSharedImportBatch(
       ),
     )
     .orderBy(schema.bankImportLines.lineNumber);
+  // LL-102 (Gate 7 M3): a positive card line mirrored by the cardholder's OWN bank (a card
+  // payment) is never on offer — it belongs to the cardholder, who matches it (LL-094).
+  const payments = await cardPaymentLines(visible.ownerCompanyId, visible.bankAccountId, allLines);
+  const lines = allLines.filter((x) => !payments.has(x.id));
 
   const { pickable, suggestions } = await suggestForCompany(
     viewerCompanyId,
@@ -283,7 +287,7 @@ async function assertPeriodsOpen(
       open = (await getAccountingPeriod(c.id, date)).status === 'OPEN';
       cache.set(key, open);
     }
-    if (!open) throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${date} is closed in ${c.legalName}.`);
+    if (!open) throw new PeriodClosedInCompanyError(c.id, `The accounting period for ${date} is closed in ${c.legalName}.`);
   }
 }
 
@@ -347,6 +351,12 @@ export async function assignSharedLines(
     }
     await assertPeriodsOpen(both, line.txnDate, periodCache);
     plans.push({ line, accountId: d.accountId });
+  }
+  // LL-102: a card payment mirrored by the cardholder's own bank is never takeable.
+  const payments = await cardPaymentLines(ownerCompanyId, visible.bankAccountId, plans.map((p) => p.line));
+  const paid = plans.find((p) => payments.has(p.line.id));
+  if (paid !== undefined) {
+    throw new BankImportError('CARD_PAYMENT_NOT_TAKEABLE', `Line ${String(paid.line.lineNumber)}: that is a payment to the card from the cardholder's own bank, not a charge — it stays with the cardholder.`);
   }
 
   let assigned = 0;
@@ -531,4 +541,12 @@ export async function lockCompanyKeyShare(tx: Tx, companyId: string): Promise<vo
     .limit(1)
     .for('key share');
   if (rows[0] === undefined) throw new LedgerError('COMPANY_NOT_FOUND', 'Company not found or inactive.');
+}
+
+/** The positive (money-in) lines of a card batch that a same-company statement mirrors: card payments, not refunds. */
+async function cardPaymentLines(ownerCompanyId: string, bankAccountId: string, lines: readonly BankImportLine[]): Promise<Set<string>> {
+  const positive = lines.filter((x) => x.status === 'STAGED' && toMoney(x.amount).isPositive()).map((x) => x.id);
+  if (positive.length === 0) return new Set();
+  const candidates = await findTransferCandidates(ownerCompanyId, bankAccountId, positive);
+  return new Set(positive.filter((id) => candidates.has(id)));
 }

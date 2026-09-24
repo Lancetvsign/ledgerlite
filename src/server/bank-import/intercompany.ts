@@ -6,7 +6,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import { getDb, getDbTx, schema } from '@/db';
 import { todayInTimeZone } from '@/lib/dates';
-import { AuthorizationDenied, requirePermission } from '@/server/authorization';
+import { AuthorizationDenied, requireCompanyMembership, requirePermission } from '@/server/authorization';
 import { getAccountingPeriod } from '@/server/periods';
 import { LedgerError, toLedgerDomainError } from '@/server/ledger';
 import { toMoney } from '@/lib/decimal';
@@ -15,7 +15,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { lockEntryCounters, postEntryCore, reverseEntryCore } from '@/server/ledger';
 import { CAPABILITY_GRANTS } from '@/server/rbac';
 
-import { BankImportError } from './errors';
+import { BankImportError, PeriodClosedInCompanyError } from './errors';
 
 import type { PoolDatabase } from '@/db';
 import type { BankImportLine } from '@/db/schema';
@@ -68,6 +68,8 @@ export interface MemberCompany {
  * (visible ⇔ actionable, as for shared statements). Empty outside an organization.
  */
 export async function transferCounterparts(actorUserId: string, companyId: string): Promise<MemberCompany[]> {
+  // Company-scoped, so it authorizes itself (AGENTS §6 / Gate 7 M6) even though its output is self-scoped.
+  await requireCompanyMembership(actorUserId, companyId);
   const db = getDb();
   const me = (await db.select({ organizationId: schema.companies.organizationId }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
   const organizationId = me?.organizationId ?? null;
@@ -133,16 +135,36 @@ export async function findIntercompanyCandidates(
   return out;
 }
 
-/** The pair to move for a transfer between `me` and `other`; created payer-holds-receivable when absent. */
+/**
+ * The pair to move for a transfer between `me` and `other` (LL-102 / Gate 7 M4): the pair whose
+ * OPEN balance the movement reduces — money out of me pays down what I owe (my payable) if any,
+ * else raises what I am owed (my receivable); money in collects what I am owed if any, else raises
+ * what I owe. A deactivated pair counts (and is reactivated) rather than creating the reverse
+ * direction; with no pair at all, the payer holds the receivable.
+ */
 async function pairAccountsFor(tx: Tx, actorUserId: string, me: string, other: string, moneyOut: boolean): Promise<{ mine: string; theirs: string }> {
-  const existing = await tx
-    .select({ companyId: schema.accounts.companyId, counterpart: schema.accounts.intercompanyCompanyId, role: schema.accounts.systemAccountType })
-    .from(schema.accounts)
-    .where(and(eq(schema.accounts.status, 'ACTIVE'), sql`((${schema.accounts.companyId} = ${me} and ${schema.accounts.intercompanyCompanyId} = ${other}) or (${schema.accounts.companyId} = ${other} and ${schema.accounts.intercompanyCompanyId} = ${me}))`));
-  const iHoldReceivable = existing.some((a) => a.companyId === me && a.role === 'INTERCOMPANY_RECEIVABLE');
-  const theyHoldReceivable = existing.some((a) => a.companyId === other && a.role === 'INTERCOMPANY_RECEIVABLE');
-  // Prefer an existing pair; with both, the payer's receivable; with none, create payer-holds-receivable.
-  const useMineAsReceivable = iHoldReceivable && theyHoldReceivable ? moneyOut : iHoldReceivable ? true : theyHoldReceivable ? false : moneyOut;
+  const existing = await tx.execute<{ role: string; balance: string }>(sql`
+    select a.system_account_type as role,
+           coalesce(sum(case when e.status in ('POSTED','REVERSED') then (case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end) else 0 end), 0)::numeric(19,4)::text as balance
+    from accounts a
+    left join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+    left join journal_entries e on e.id = l.journal_entry_id
+    where a.company_id = ${me} and a.intercompany_company_id = ${other}
+    group by a.id, a.system_account_type`);
+  const receivable = existing.rows.find((r) => r.role === 'INTERCOMPANY_RECEIVABLE');
+  const payable = existing.rows.find((r) => r.role === 'INTERCOMPANY_PAYABLE');
+  const owed = payable !== undefined && toMoney(payable.balance).isPositive();
+  const owing = receivable !== undefined && toMoney(receivable.balance).isPositive();
+  const onlyReceivable = receivable !== undefined && payable === undefined;
+  const onlyPayable = payable !== undefined && receivable === undefined;
+  let useMineAsReceivable: boolean;
+  if (moneyOut) {
+    // Paying: reduce what I owe if I owe; else grow what I am owed (or the only existing pair; else payer = me).
+    useMineAsReceivable = owed ? false : owing ? true : onlyReceivable ? true : onlyPayable ? false : true;
+  } else {
+    // Collecting: reduce what I am owed if any; else grow what I owe (or the only existing pair; else payer = them).
+    useMineAsReceivable = owing ? true : owed ? false : onlyReceivable ? true : onlyPayable ? false : false;
+  }
   if (useMineAsReceivable) {
     const p = await ensureIntercompanyPair(tx, actorUserId, me, other);
     return { mine: p.dueFrom.id, theirs: p.dueTo.id };
@@ -345,7 +367,7 @@ export async function unmarkIntercompanyTransfer(
   const reversalDate = todayInTimeZone(me.timezone);
   for (const c of companies) {
     if ((await getAccountingPeriod(c.id, reversalDate)).status !== 'OPEN') {
-      throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${reversalDate} is closed in ${c.legalName}.`);
+      throw new PeriodClosedInCompanyError(c.id, `The accounting period for ${reversalDate} is closed in ${c.legalName}.`);
     }
   }
 

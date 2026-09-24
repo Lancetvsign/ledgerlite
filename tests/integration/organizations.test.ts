@@ -186,6 +186,14 @@ describe('the allow-list trigger: only INTERCOMPANY or REVERSAL moves a Due acco
     // Relabel attack: an INTERCOMPANY entry cannot be flipped to a manual one after the fact.
     const db = await getTestDb();
     expect(await rejection(db.execute(sql`update journal_entries set source_type = 'JOURNAL_ENTRY' where id = ${ic}`))).toMatch(/CONTROL_ACCOUNT_MANUAL_POST|POSTED_ENTRY_IMMUTABLE/);
+    // Relabel while DRAFT, then post (Gate 7 L10): the immutability trigger allows both updates, so
+    // ONLY the relabel trigger's intercompany branch stands between a Due line and a manual posting.
+    expect(await rejection(db.transaction(async (tx) => {
+      const d = await tx.execute<{ id: string }>(sql`insert into journal_entries (company_id, transaction_date, posting_date, source_type, created_by, status) values (${a}, '2026-03-10', '2026-03-10', 'INTERCOMPANY', ${owner}, 'DRAFT') returning id`);
+      await tx.execute(sql`insert into journal_lines (journal_entry_id, company_id, account_id, line_number, debit, credit) values (${d.rows[0]!.id}, ${a}, ${dueFrom.id}, 1, '10.0000', '0.0000'), (${d.rows[0]!.id}, ${a}, ${exp}, 2, '0.0000', '10.0000')`);
+      await tx.execute(sql`update journal_entries set source_type = 'JOURNAL_ENTRY' where id = ${d.rows[0]!.id}`);
+      await tx.execute(sql`update journal_entries set status = 'POSTED', entry_number = ${n + 4} where id = ${d.rows[0]!.id}`);
+    }))).toMatch(/CONTROL_ACCOUNT_MANUAL_POST/);
     // A/R keeps its rule: a document may still post there, a manual entry still may not.
     const ar = await resolveSystemAccount(getDbTx(), a, 'ACCOUNTS_RECEIVABLE');
     expect(await rejection(rawEntry(a, owner, 'JOURNAL_ENTRY', [{ accountId: ar!, debit: '1.0000', credit: '0.0000' }, { accountId: exp, debit: '0.0000', credit: '1.0000' }], n + 2))).toMatch(/CONTROL_ACCOUNT_MANUAL_POST/);
@@ -277,7 +285,7 @@ describe('organization services', () => {
     expect(statuses.map((r) => r.status)).toEqual(['INACTIVE', 'INACTIVE']);
     expect((await listCompaniesForUser(owner)).find((c) => c.company.id === b)?.organizationName).toBeNull();
     expect(await auditActions(b)).toContain('COMPANY_LEFT_ORGANIZATION');
-    expect(await codeOf(removeCompanyFromOrganization(owner, b), OrganizationError)).toBe('NOT_IN_ORGANIZATION');
+    await expect(removeCompanyFromOrganization(owner, b)).resolves.toBeUndefined(); // idempotent on retry (Gate 7 L11)
 
     // Rejoin: the same rows come back ACTIVE — history intact, no duplicate pair.
     const orgId = (await organizationsActorCanAddTo(owner))[0]!.id;

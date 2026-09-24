@@ -2483,3 +2483,12 @@ mark older than `DEFAULT_MAX_TRANSIT_DAYS` (33: the 3-day window plus a 30-day s
 `stale:…`, so GL-T029 fails on transfers that never matched. A mark auto-joins the counterpart's open
 mark of the same |amount| in the window instead of opening a second group; candidates are allocated one
 entry per line per batch, and a submit that aims two lines at one entry is refused before anything posts.
+**Amendment (LL-102 — shared-path hygiene, Gate 7 M3/M4/L9):** a positive card line mirrored by the
+cardholder's OWN bank statement (a card payment, posted or still staged) is never on offer to another
+company and is refused if requested — it stays with the cardholder, who matches it (LL-094); a refund is
+takeable. A card CHARGE cannot be marked as an intercompany bank transfer (only a payment or refund can be
+the other side of a bank movement). The pair a transfer moves is the one whose OPEN balance the movement
+reduces (paying down what I owe before growing what I am owed, collecting what I am owed before growing
+what I owe), a deactivated pair is reactivated rather than the reverse direction created, and with no pair
+at all the payer holds the receivable — so a repayment settles instead of grossing up, and both companies
+can leave once the relationship nets to zero.

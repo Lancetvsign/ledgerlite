@@ -101,7 +101,7 @@ export async function createOrganization(
       entityId: org.id,
       after: { name: org.name },
     });
-    await joinLocked(tx, actorUserId, companyId, org.id);
+    await joinLocked(tx, actorUserId, companyId, org.id, []);
     return org;
   });
 }
@@ -120,32 +120,36 @@ export async function addCompanyToOrganization(
   await requirePermission(actorUserId, companyId, 'company.organization');
   if (!isUuid(organizationId)) throw new AuthorizationDenied();
 
+  // The stake is proven BEFORE any lock is taken (Gate 7 L5): a guessed id never holds a
+  // foreign organization row, and an unknown id and a stakeless one cost the same.
+  const stakeMembers = await activeMembers(getDbTx(), organizationId);
+  const stake = stakeMembers.length === 0
+    ? []
+    : await getDbTx()
+        .select({ id: schema.companyMemberships.id })
+        .from(schema.companyMemberships)
+        .where(
+          and(
+            eq(schema.companyMemberships.userId, actorUserId),
+            eq(schema.companyMemberships.status, 'ACTIVE'),
+            inArray(schema.companyMemberships.companyId, stakeMembers.map((m) => m.id)),
+            inArray(schema.companyMemberships.role, [...ORGANIZATION_ROLES]),
+          ),
+        )
+        .limit(1);
+  if (stake.length === 0) throw new AuthorizationDenied();
+
   return await getDbTx().transaction(async (tx) => {
     const org = await lockOrganization(tx, organizationId);
-    const members = await activeMembers(tx, org.id);
-    const stake = members.length === 0
-      ? []
-      : await tx
-          .select({ id: schema.companyMemberships.id })
-          .from(schema.companyMemberships)
-          .where(
-            and(
-              eq(schema.companyMemberships.userId, actorUserId),
-              eq(schema.companyMemberships.status, 'ACTIVE'),
-              inArray(schema.companyMemberships.companyId, members.map((m) => m.id)),
-              inArray(schema.companyMemberships.role, [...ORGANIZATION_ROLES]),
-            ),
-          )
-          .limit(1);
-    if (stake.length === 0) throw new AuthorizationDenied();
-
+    const members = await activeMembers(tx, org.id); // re-read under the lock
     const company = await lockActiveCompany(tx, companyId);
+    if (company.organizationId === org.id) return org; // a retry after a lost response (Gate 7 L11)
     assertCanJoin(company);
     const other = members.find((m) => m.currencyCode !== company.currencyCode);
     if (other !== undefined) {
       throw new OrganizationError('CURRENCY_MISMATCH', 'Every company in an organization must use the same currency.');
     }
-    await joinLocked(tx, actorUserId, companyId, org.id);
+    await joinLocked(tx, actorUserId, companyId, org.id, members.map((m) => m.id));
     return org;
   });
 }
@@ -159,7 +163,7 @@ function assertCanJoin(company: { isTemplate: boolean; organizationId: string | 
   }
 }
 
-async function joinLocked(tx: Tx, actorUserId: string, companyId: string, organizationId: string): Promise<void> {
+async function joinLocked(tx: Tx, actorUserId: string, companyId: string, organizationId: string, existingMemberIds: readonly string[]): Promise<void> {
   await recordAuditEvent({
     tx,
     companyId,
@@ -170,6 +174,19 @@ async function joinLocked(tx: Tx, actorUserId: string, companyId: string, organi
     before: { organizationId: null },
     after: { organizationId },
   });
+  // Every existing member's audit log records that a new company can now see its shared
+  // statements and post intercompany against it (Gate 7 L3).
+  for (const memberId of existingMemberIds) {
+    await recordAuditEvent({
+      tx,
+      companyId: memberId,
+      actorUserId,
+      action: 'COMPANY_JOINED_ORGANIZATION',
+      entityType: 'company',
+      entityId: companyId,
+      after: { organizationId, newMemberCompanyId: companyId },
+    });
+  }
   await tx
     .update(schema.companies)
     .set({ organizationId, updatedAt: sql`now()` })
@@ -194,7 +211,7 @@ export async function removeCompanyFromOrganization(actorUserId: string, company
       .where(eq(schema.companies.id, companyId))
       .limit(1);
     const organizationId = peek[0]?.organizationId ?? null;
-    if (organizationId === null) throw new OrganizationError('NOT_IN_ORGANIZATION', 'This company is not in an organization.');
+    if (organizationId === null) return; // already out — a retry after a lost response is a no-op (Gate 7 L11)
     await lockOrganization(tx, organizationId);
 
     const counterpartRows = await tx
@@ -222,10 +239,8 @@ export async function removeCompanyFromOrganization(actorUserId: string, company
       const locked = await lockActiveCompany(tx, id);
       if (id === companyId) company = locked;
     }
-    if (company === undefined || company.organizationId !== organizationId) {
-      // Changed under us before the lock: re-decide from the locked truth.
-      throw new OrganizationError('NOT_IN_ORGANIZATION', 'This company is not in an organization.');
-    }
+    if (company === undefined) throw new AuthorizationDenied();
+    if (company.organizationId !== organizationId) return; // left concurrently — nothing to do
 
     // Money stays NUMERIC in SQL; only a count comes back (ADR-004).
     const open = await tx.execute<{ n: string }>(sql`

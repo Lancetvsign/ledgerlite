@@ -105,10 +105,17 @@ export async function getIntercompanyReport(
       group by a.id
     ),
     pairs as (
-      select distinct case when a.company_id = ${companyId} then a.intercompany_company_id else a.company_id end as counterpart_id
-      from accounts a
-      where a.intercompany_company_id is not null
-        and (a.company_id = ${companyId} or a.intercompany_company_id = ${companyId})
+      -- Only counterparts that are CURRENT members of this company's organization (Gate 7 L2): a
+      -- company that left did so at zero, and its live name is no longer this company's to read.
+      select distinct p.counterpart_id
+      from (
+        select case when a.company_id = ${companyId} then a.intercompany_company_id else a.company_id end as counterpart_id
+        from accounts a
+        where a.intercompany_company_id is not null
+          and (a.company_id = ${companyId} or a.intercompany_company_id = ${companyId})
+      ) p
+      join companies me on me.id = ${companyId}
+      join companies cp on cp.id = p.counterpart_id and cp.status = 'ACTIVE' and cp.organization_id is not null and cp.organization_id = me.organization_id
     )
     select p.counterpart_id::text as counterpart_id,
            c.legal_name as counterpart_legal_name,

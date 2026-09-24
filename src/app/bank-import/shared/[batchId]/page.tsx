@@ -28,7 +28,7 @@ export default async function SharedImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; assigned?: string; detail?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; assigned?: string; closedIn?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -39,8 +39,10 @@ export default async function SharedImportPage({
 
   const { batchId } = await params;
   const sp = await searchParams;
-  const notice = noticeFrom(sp);
   const view = isUuid(batchId) ? await getSharedImportBatch(user.id, membership.companyId, batchId) : null;
+  // The closed-period company is named only when it is one of the two companies of this statement.
+  const closedInName = view === null || sp.closedIn === undefined ? null : sp.closedIn === view.batch.ownerCompanyId ? view.batch.ownerLegalName : sp.closedIn === view.viewerCompanyId ? 'this company' : null;
+  const notice = noticeFrom(sp, closedInName);
   if (view === null) {
     return (
       <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
@@ -170,15 +172,16 @@ export default async function SharedImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; assigned?: string; detail?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; assigned?: string; closedIn?: string }, closedInName: string | null): string | null {
   if (sp.ok === 'assigned') return `Took ${sp.assigned ?? '0'} line(s): posted here as expenses, and on the cardholder's card as due from this company.`;
   if (sp.ok === 'unassigned') return 'Line given back: both entries reversed; the cardholder can review it again.';
   const error = sp.error;
   if (error === undefined) return null;
   if (error === 'nothing') return 'Tick the lines to take.';
   if (error === 'ACCOUNT_REQUIRED') return 'Choose one of our accounts for every ticked line.';
+  if (error === 'CARD_PAYMENT_NOT_TAKEABLE') return 'That line is a payment to the card from the cardholder’s own bank — it stays with the cardholder.';
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Choose one of our active expense or asset accounts — never a control or intercompany account.';
-  if (error === 'PERIOD_CLOSED') return sp.detail ?? 'A line falls in a closed accounting period.';
+  if (error === 'PERIOD_CLOSED') return closedInName === null ? 'A line falls in a closed accounting period.' : `A line falls in a closed accounting period in ${closedInName}.`;
   if (error === 'INTERCOMPANY_NOT_ALLOWED') return 'The two companies must be active members of one organization with the same currency.';
   if (error === 'LINE_NOT_FOUND' || error === 'BATCH_NOT_FOUND') return 'That line is no longer available — reload.';
   if (error === 'denied') return 'You need posting rights in both companies to take a line.';
