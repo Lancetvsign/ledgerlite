@@ -584,6 +584,7 @@ export async function postImportLines(
 
   const plans: LinePlan[] = [];
   const toIgnore: BankImportLine[] = [];
+  const matchedEntries = new Set<string>();
   const periodOpenByDate = new Map<string, boolean>(); // one lookup per distinct date
   const appliedSoFar = new Map<string, Decimal>(); // documentId → Σ|amount| within THIS submit
   for (const d of input.decisions) {
@@ -678,6 +679,11 @@ export async function postImportLines(
       if (cand === undefined || cand.entryId !== d.counterpartEntryId) {
         throw new BankImportError('TRANSFER_MISMATCH', `Line ${n}: that is not the other company's side of this transfer.`);
       }
+      // Two lines of one submit aimed at one entry fail HERE, before anything posts (LL-101).
+      if (matchedEntries.has(cand.entryId)) {
+        throw new BankImportError('TRANSFER_ALREADY_MATCHED', `Line ${n}: another line of this submit already matches that transfer.`);
+      }
+      matchedEntries.add(cand.entryId);
       plan = { kind: 'ic_match', line, counterpartEntryId: cand.entryId, counterpartCompanyId: cand.counterpartCompanyId };
     } else {
       // apply_invoice / apply_bill — the whole line settles ONE open document (ADR-035).

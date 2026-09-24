@@ -122,10 +122,13 @@ export async function findIntercompanyCandidates(
      and ((l.amount > 0 and jl.debit = abs(l.amount)) or (l.amount < 0 and jl.credit = abs(l.amount)))
     where l.company_id = ${companyId} and l.id in (${sql.join(staged.map((s) => sql`${s.id}`), sql`, `)})
     order by l.id, abs(e.transaction_date - l.txn_date), e.transaction_date, e.id`);
+  // One candidate per line AND one line per candidate (LL-101): two equal lines in one batch are
+  // offered different entries, so a single submit never sends two lines at one group.
+  const taken = new Set<string>();
   for (const r of rows.rows) {
-    if (!out.has(r.line_id)) {
-      out.set(r.line_id, { entryId: r.entry_id, counterpartCompanyId: r.company_id, counterpartLegalName: nameById.get(r.company_id) ?? 'another company', txnDate: r.txn_date, intercompanyGroupId: r.group_id });
-    }
+    if (out.has(r.line_id) || taken.has(r.entry_id)) continue;
+    taken.add(r.entry_id);
+    out.set(r.line_id, { entryId: r.entry_id, counterpartCompanyId: r.company_id, counterpartLegalName: nameById.get(r.company_id) ?? 'another company', txnDate: r.txn_date, intercompanyGroupId: r.group_id });
   }
   return out;
 }
@@ -154,6 +157,29 @@ export interface MarkResult {
   readonly intercompanyGroupId: string;
 }
 
+/**
+ * The counterpart's still-unmatched mark that mirrors this line (opposite side of |amount| on the
+ * pair account facing us, in the window), read inside the transaction — a mark auto-joins it
+ * instead of opening a second group (LL-101: both companies marking independently no longer
+ * leaves permanent in-transit both ways).
+ */
+async function findMirrorMark(tx: Tx, companyId: string, counterpartCompanyId: string, line: BankImportLine): Promise<string | null> {
+  const amt = toMoney(line.amount);
+  const abs = amt.abs().toFixed(4);
+  const rows = await tx.execute<{ id: string }>(sql`
+    select e.id::text as id
+    from journal_entries e
+    join journal_lines jl on jl.journal_entry_id = e.id
+    join accounts pa on pa.company_id = jl.company_id and pa.id = jl.account_id and pa.intercompany_company_id = ${companyId}
+    where e.company_id = ${counterpartCompanyId} and e.source_type = 'INTERCOMPANY' and e.status = 'POSTED' and e.intercompany_group_id is not null
+      and abs(e.transaction_date - ${line.txnDate}::date) <= ${WINDOW_DAYS}
+      and ${amt.isPositive() ? sql`jl.debit = ${abs}::numeric` : sql`jl.credit = ${abs}::numeric`}
+      and not exists (select 1 from journal_entries mine where mine.intercompany_group_id = e.intercompany_group_id and mine.company_id = ${companyId})
+    order by abs(e.transaction_date - ${line.txnDate}::date), e.transaction_date, e.id
+    limit 1`);
+  return rows.rows[0]?.id ?? null;
+}
+
 /** Posts THIS company's side of a transfer with `counterpartCompanyId` (inside the caller's tx, line already locked). */
 export async function markIntercompanyTransfer(
   tx: Tx,
@@ -163,6 +189,8 @@ export async function markIntercompanyTransfer(
   line: BankImportLine,
   counterpartCompanyId: string,
 ): Promise<MarkResult> {
+  const mirror = await findMirrorMark(tx, companyId, counterpartCompanyId, line);
+  if (mirror !== null) return await matchIntercompanyTransfer(tx, actorUserId, companyId, bankAccountId, line, mirror);
   const amt = toMoney(line.amount);
   const moneyOut = amt.isNegative();
   const abs = amt.abs().toFixed(4);

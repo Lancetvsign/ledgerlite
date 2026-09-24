@@ -42,7 +42,14 @@ export interface IntercompanyRow {
   /** dueTo − counterpartDueFrom. */
   readonly payableDifference: string;
   readonly payableInTransit: string;
-  /** Both differences are exactly explained by cash in transit (usually: exactly zero). */
+  /** Days between the as-of date and the oldest still-unmatched mark on this pair, or null. */
+  readonly inTransitOldestDays: number | null;
+  /**
+   * 'mirrored' — both differences are exactly zero; 'in_transit' — the differences are exactly the
+   * marked-but-unmatched transfers (LL-101: never presented as mirrored); 'mismatch' — anything else.
+   */
+  readonly state: 'mirrored' | 'in_transit' | 'mismatch';
+  /** state === 'mirrored'. */
   readonly mirrored: boolean;
 }
 
@@ -52,8 +59,10 @@ export interface IntercompanyReport {
   readonly rows: readonly IntercompanyRow[];
   readonly totalDueFrom: string;
   readonly totalDueTo: string;
-  /** Every row mirrors (net of cash in transit) — the organization-wide statement GL-T029 makes at the gate. */
+  /** Every row is strictly mirrored. */
   readonly mirrored: boolean;
+  /** The worst row state: 'mismatch' > 'in_transit' > 'mirrored'. */
+  readonly state: 'mirrored' | 'in_transit' | 'mismatch';
 }
 
 export async function getIntercompanyReport(
@@ -129,22 +138,33 @@ export async function getIntercompanyReport(
     join journal_entries e on e.id = l.journal_entry_id and e.status in ('POSTED', 'REVERSED') and e.posting_date <= ${asOfDate}
     where a.company_id = ${companyId} and a.intercompany_company_id is not null`);
 
-  // Cash in transit (LL-099): single-sided INTERCOMPANY groups — one company marked a bank
-  // transfer from its statement, the other has not matched its own line yet. Per account,
-  // natural direction, as of the date.
-  const transit = new Map<string, string>();
-  const transitRows = await db.execute<{ account_id: string; amt: string }>(sql`
+  // Cash in transit (LL-099 / LL-101): a MARK — the posting of this company's or the
+  // counterpart's own POSTED statement line onto the pair account — whose group has no other
+  // side as of the date. Per account, natural direction, with the oldest open mark's date.
+  const transit = new Map<string, { amt: string; oldest: string }>();
+  const transitRows = await db.execute<{ account_id: string; amt: string; oldest: string }>(sql`
+    with single as (
+      select e.id, e.transaction_date
+      from journal_entries e
+      join bank_import_lines bl on bl.company_id = e.company_id and bl.id::text = e.source_id and bl.status = 'POSTED' and bl.journal_entry_id = e.id
+      join accounts pa on pa.company_id = bl.company_id and pa.id = bl.chosen_account_id and pa.intercompany_company_id is not null
+      where e.source_type = 'INTERCOMPANY' and e.status = 'POSTED' and e.intercompany_group_id is not null and e.posting_date <= ${asOfDate}
+        and (pa.company_id = ${companyId} or pa.intercompany_company_id = ${companyId})
+        and not exists (select 1 from journal_entries o where o.intercompany_group_id = e.intercompany_group_id and o.id <> e.id and o.posting_date <= ${asOfDate})
+    )
     select a.id::text as account_id,
-           coalesce(sum(case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end), 0)::numeric(19,4)::text as amt
+           coalesce(sum(case when a.account_type = 'ASSET' then l.debit - l.credit else l.credit - l.debit end), 0)::numeric(19,4)::text as amt,
+           min(s.transaction_date)::text as oldest
     from accounts a
     join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
-    join journal_entries e on e.id = l.journal_entry_id and e.source_type = 'INTERCOMPANY' and e.status = 'POSTED'
-     and e.intercompany_group_id is not null and e.posting_date <= ${asOfDate}
-     and not exists (select 1 from journal_entries o where o.intercompany_group_id = e.intercompany_group_id and o.id <> e.id)
+    join single s on s.id = l.journal_entry_id
     where a.intercompany_company_id is not null and (a.company_id = ${companyId} or a.intercompany_company_id = ${companyId})
     group by a.id`);
-  for (const t of transitRows.rows) transit.set(t.account_id, t.amt);
-  const tr = (id: string | null) => toMoney(id === null ? '0' : (transit.get(id) ?? '0'));
+  for (const t of transitRows.rows) transit.set(t.account_id, { amt: t.amt, oldest: t.oldest });
+  const tr = (id: string | null) => toMoney(id === null ? '0' : (transit.get(id)?.amt ?? '0'));
+  const oldestOf = (ids: (string | null)[]): string | null =>
+    ids.map((id) => (id === null ? null : (transit.get(id)?.oldest ?? null))).filter((d): d is string => d !== null).sort()[0] ?? null;
+  const daysBetween = (from: string, to: string): number => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 
   // The differences are the one computation here: Decimal, exact at 4 dp (ADR-004).
   const out: IntercompanyRow[] = rows.rows.map((r) => {
@@ -152,6 +172,10 @@ export async function getIntercompanyReport(
     const payableDifference = toMoney(r.due_to).minus(toMoney(r.counterpart_due_from)).toFixed(4);
     const receivableInTransit = tr(r.due_from_id).minus(tr(r.counterpart_due_to_id)).toFixed(4);
     const payableInTransit = tr(r.due_to_id).minus(tr(r.counterpart_due_from_id)).toFixed(4);
+    const explained = toMoney(receivableDifference).eq(toMoney(receivableInTransit)) && toMoney(payableDifference).eq(toMoney(payableInTransit));
+    const zero = toMoney(receivableDifference).isZero() && toMoney(payableDifference).isZero();
+    const oldest = oldestOf([r.due_from_id, r.counterpart_due_to_id, r.due_to_id, r.counterpart_due_from_id]);
+    const state: IntercompanyRow['state'] = zero && toMoney(receivableInTransit).isZero() && toMoney(payableInTransit).isZero() ? 'mirrored' : explained ? 'in_transit' : 'mismatch';
     return {
       counterpartId: r.counterpart_id,
       counterpartLegalName: r.counterpart_legal_name,
@@ -163,7 +187,9 @@ export async function getIntercompanyReport(
       counterpartDueFrom: r.counterpart_due_from,
       payableDifference,
       payableInTransit,
-      mirrored: toMoney(receivableDifference).eq(toMoney(receivableInTransit)) && toMoney(payableDifference).eq(toMoney(payableInTransit)),
+      inTransitOldestDays: oldest === null ? null : daysBetween(oldest, asOfDate),
+      state,
+      mirrored: state === 'mirrored',
     };
   });
   return {
@@ -173,5 +199,6 @@ export async function getIntercompanyReport(
     totalDueFrom: totals.rows[0]?.f ?? '0.0000',
     totalDueTo: totals.rows[0]?.t ?? '0.0000',
     mirrored: out.every((r) => r.mirrored),
+    state: out.some((r) => r.state === 'mismatch') ? 'mismatch' : out.some((r) => r.state === 'in_transit') ? 'in_transit' : 'mirrored',
   };
 }
