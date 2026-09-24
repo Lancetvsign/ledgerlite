@@ -34,6 +34,10 @@ env:
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
   NEON_BRANCH: preview/pr-${{ github.event.pull_request.number }}
+  # The PR's git branch name, for the branch-scoped Vercel variables. Through
+  # the environment, never inline in a script: a branch name is attacker-chosen
+  # text, and inline it would be spliced into the shell before it runs.
+  HEAD_REF: ${{ github.head_ref }}
   NEONCTL: neonctl@2.15.0
 
 jobs:
@@ -75,21 +79,59 @@ jobs:
           # Whether it was CREATED matters downstream: the emptiness assertion is
           # only meaningful on a fresh branch. On a reused one it would fail on our
           # own seed data, which is what happened the first time this ran twice.
+          #
+          # Whether one is AVAILABLE at all matters even more. A --schema-only
+          # branch is a ROOT branch in Neon's accounting, and root branches are
+          # capped per project (docs/DEPLOYMENT.md has the number). When the cap
+          # is hit this job must not go red: it is not a correctness gate and the
+          # PR's CI does not depend on it. The Preview deployment simply gets no
+          # database — production credentials are not in Vercel's Preview scope,
+          # so it fails loudly there rather than falling back to anything.
           if npx --yes "$NEONCTL" branches get "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" >/dev/null 2>&1; then
             echo "Reusing existing branch $NEON_BRANCH"
             echo "created=false" >> "$GITHUB_OUTPUT"
-          else
-            # --schema-only is the guarantee. Without it this branch would be a
-            # copy-on-write clone of production, data included.
-            npx --yes "$NEONCTL" branches create \
-              --project-id "$NEON_PROJECT_ID" \
-              --name "$NEON_BRANCH" \
-              --schema-only
-            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # --schema-only is the guarantee. Without it this branch would be a
+          # copy-on-write clone of production, data included. Do NOT "fix" the
+          # root-branch cap by adding --parent: that trades the cap for a copy of
+          # production's financial data behind a preview URL.
+          #
+          # Output is captured rather than streamed: on success it includes the
+          # new branch's connection URIs, which have no business in a build log.
+          log="$RUNNER_TEMP/branch-create.log"
+          set +e
+          npx --yes "$NEONCTL" branches create \
+            --project-id "$NEON_PROJECT_ID" \
+            --name "$NEON_BRANCH" \
+            --schema-only > "$log" 2>&1
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "Created schema-only branch $NEON_BRANCH"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -qi 'root branches limit exceeded' "$log"; then
+            echo "::warning title=No preview database for this PR::Neon's root-branch cap is reached (every schema-only preview branch is a root branch), so $NEON_BRANCH was not created. This PR's Preview deployment has no database until a preview/* branch is freed: merge or close another PR, or run the Neon branch reaper by hand. CI for this PR is unaffected. See docs/DEPLOYMENT.md."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Any other failure is a real one and stays red. Connection URIs are
+          # filtered out in case a partial success printed one before failing.
+          grep -v 'postgresql://' "$log" || true
+          exit "$status"
 
       - name: Resolve connection strings
         id: conn
+        if: steps.branch.outputs.available == 'true'
         run: |
           set -euo pipefail
           POOLED=$(npx --yes "$NEONCTL" connection-string "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" --pooled --output json | tr -d '"')
@@ -129,6 +171,7 @@ jobs:
         run: npm run db:reset-preview
 
       - name: Apply migrations
+        if: steps.branch.outputs.available == 'true'
         env:
           APP_ENV: test
         run: npm run db:migrate
@@ -142,16 +185,30 @@ jobs:
       # Always: db:seed is idempotent, and a reused branch may need data a newly
       # added migration expects.
       - name: Seed synthetic data
+        if: steps.branch.outputs.available == 'true'
         env:
           APP_ENV: test
         run: npm run db:seed
 
       - name: Point this PR's Preview deployment at it
+        # Skipped when no branch could be provisioned: the Preview deployment
+        # then has no DATABASE_URL at all, which is the loud failure we want.
+        if: steps.branch.outputs.available == 'true'
         # Vercel REST API, not `vercel env add`. The CLI resolves the project from
         # a .vercel/project.json link file, which is gitignored and absent in CI;
         # supplying the identifiers only gets as far as "Could not retrieve
         # Project Settings". The API takes them directly.
-        run: npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}"
+        run: npx tsx scripts/set-preview-env.ts "$HEAD_REF"
+
+      - name: Unpoint this PR's Preview deployment
+        # The cap path. If this PR was provisioned before and its branch has
+        # since been reaped, stale branch-scoped variables would still name a
+        # database that no longer exists. Remove them so the deployment has no
+        # DATABASE_URL at all — the documented state — rather than a dead one.
+        if: steps.branch.outputs.available != 'true'
+        run: |
+          npx tsx scripts/set-preview-env.ts "$HEAD_REF" --remove \
+            || echo "::warning title=Stale preview variables::variables for $HEAD_REF may still name a deleted branch"
 
   teardown:
     name: Destroy preview database
@@ -169,12 +226,12 @@ jobs:
       - name: Delete Neon branch and Vercel variables
         run: |
           if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
-            echo "::warning title=Teardown skipped::Neon secrets absent; the reaper will not catch preview/* branches"
+            echo "::warning title=Teardown skipped::Neon secrets absent; $NEON_BRANCH persists until the reaper (which needs the same secrets) removes it"
             exit 0
           fi
           npx --yes "$NEONCTL" branches delete "$NEON_BRANCH" --project-id "$NEON_PROJECT_ID" \
             || echo "::warning title=Branch not deleted::$NEON_BRANCH may still exist"
           if [ -n "$VERCEL_TOKEN" ]; then
-            npx tsx scripts/set-preview-env.ts "${{ github.head_ref }}" --remove \
-              || echo "::warning title=Teardown::preview variables for ${{ github.head_ref }} may remain"
+            npx tsx scripts/set-preview-env.ts "$HEAD_REF" --remove \
+              || echo "::warning title=Teardown::preview variables for $HEAD_REF may remain"
           fi

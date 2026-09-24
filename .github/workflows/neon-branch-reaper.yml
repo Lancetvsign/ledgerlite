@@ -1,10 +1,16 @@
 name: Neon branch reaper
 
-# Ephemeral CI branches are deleted by the job that creates them, but that
-# cleanup can itself fail — a cancelled run, a timeout, a Neon API blip. Each
-# leak is harmless; the accumulation is not. Neon projects have a finite branch
-# limit, and hitting it takes CI down for a reason that looks nothing like its
-# cause.
+# Ephemeral CI branches are deleted by the job that creates them, and preview
+# branches by the PR-closed teardown, but that cleanup can itself fail — a
+# cancelled run, a timeout, a Neon API blip. Each leak is harmless; the
+# accumulation is not. Neon projects have a finite branch limit, and hitting it
+# takes CI down for a reason that looks nothing like its cause.
+#
+# Preview branches are worse than test branches here: every schema-only
+# preview/* branch is a ROOT branch in Neon's accounting, and root branches
+# are capped at a handful per project (docs/DEPLOYMENT.md has the number). One
+# leaked preview branch is enough to deny the next pull request a preview
+# database, so they are reaped too — by PR state, and by age as a backstop.
 on:
   schedule:
     - cron: '17 4 * * *' # daily, off the hour to avoid the scheduling stampede
@@ -12,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # `gh pr view`, to learn whether a preview branch's PR is closed
 
 concurrency:
   group: neon-branch-reaper
@@ -19,13 +26,14 @@ concurrency:
 
 jobs:
   reap:
-    name: Delete stale test/* branches
+    name: Delete stale test/* and preview/* branches
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
       MAX_AGE_HOURS: '24'
+      PREVIEW_MAX_AGE_DAYS: '14'
     steps:
       - name: Require Neon credentials
         run: |
@@ -88,4 +96,106 @@ jobs:
 
           if [ "$failed" -ne 0 ]; then
             echo "::warning title=Reaper::$failed branch(es) could not be deleted"
+          fi
+
+      # preview/* branches are normally deleted by the PR-closed teardown in
+      # preview-database.yml. That teardown can miss (cancelled run, Neon blip,
+      # secrets absent), and because every schema-only preview branch is a Neon
+      # ROOT branch, a leaked one occupies a slot in a very small cap: the next
+      # PR then gets "root branches limit exceeded" and no preview database.
+      #
+      # Two rules; either one is sufficient:
+      #   1. the PR the branch was created for is closed or merged
+      #      (preview-database.yml names branches preview/pr-<number>);
+      #   2. the branch is older than PREVIEW_MAX_AGE_DAYS, whatever the PR state.
+      #      A long-lived PR loses its preview database, and a reviewer their
+      #      manual test data; the next push to the PR re-provisions it. That is
+      #      the price of keeping a slot free for the next PR.
+      - name: Delete preview branches whose PR is closed, or older than 14 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          npx --yes neonctl@2.15.0 branches list \
+            --project-id "$NEON_PROJECT_ID" --output json > /tmp/branches.json
+
+          # One line per preview/* branch: "<name>\t<pr number or ->\t<old or ->".
+          # Same rule as above: a branch whose age cannot be established is never
+          # "old". Missing data must never resolve to the destructive answer.
+          #
+          # Via a file, not process substitution: a crash inside the script (bad
+          # JSON, say) then fails the step under set -e instead of reading as
+          # "no preview branches" and quietly reaping nothing forever.
+          node -e '
+            const fs = require("node:fs");
+            const maxAgeMs = Number(process.env.PREVIEW_MAX_AGE_DAYS) * 24 * 3600 * 1000;
+            const now = Date.now();
+            const branches = JSON.parse(fs.readFileSync("/tmp/branches.json", "utf8"));
+            for (const b of branches) {
+              if (!b.name || !b.name.startsWith("preview/")) continue;
+              if (b.primary || b.default) continue;
+
+              const pr = /^preview\/pr-(\d+)$/.exec(b.name)?.[1] ?? "-";
+
+              let old = "-";
+              const rawCreated = b.created_at ?? b.createdAt;
+              if (typeof rawCreated !== "string" || rawCreated === "") {
+                console.error(`  ${b.name}: no creation timestamp; age unknown`);
+              } else {
+                const created = Date.parse(rawCreated);
+                if (!Number.isFinite(created)) {
+                  console.error(`  ${b.name}: unparseable timestamp; age unknown`);
+                } else if (now - created > maxAgeMs) {
+                  old = "old";
+                }
+              }
+              console.log(`${b.name}\t${pr}\t${old}`);
+            }
+          ' > /tmp/preview-candidates.txt
+          mapfile -t CANDIDATES < /tmp/preview-candidates.txt
+
+          if [ ${#CANDIDATES[@]} -eq 0 ]; then
+            echo "No preview branches."
+            exit 0
+          fi
+
+          deleted=0
+          failed=0
+          for line in "${CANDIDATES[@]}"; do
+            IFS=$'\t' read -r name pr old <<< "$line"
+            reason=""
+
+            if [ "$pr" != "-" ]; then
+              # A lookup that fails (API error, PR not found) must not read as
+              # "closed": fall through to the age rule instead.
+              state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || echo "UNKNOWN")
+              case "$state" in
+                CLOSED|MERGED) reason="PR #$pr is $state" ;;
+                OPEN) ;;
+                *) echo "  $name: state of PR #$pr unknown ($state); age rule only" ;;
+              esac
+            fi
+
+            if [ -z "$reason" ] && [ "$old" = "old" ]; then
+              reason="older than $PREVIEW_MAX_AGE_DAYS days"
+            fi
+
+            if [ -z "$reason" ]; then
+              echo "  keeping $name"
+              continue
+            fi
+
+            echo "  deleting $name ($reason)"
+            if npx --yes neonctl@2.15.0 branches delete "$name" --project-id "$NEON_PROJECT_ID"; then
+              deleted=$((deleted + 1))
+            else
+              failed=$((failed + 1))
+            fi
+          done
+
+          echo "Deleted $deleted preview branch(es)."
+          if [ "$failed" -ne 0 ]; then
+            echo "::warning title=Reaper::$failed preview branch(es) could not be deleted"
           fi

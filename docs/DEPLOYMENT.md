@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Local | any | your own Neon branch (`dev/lance`) | you, once |
 | CI | pull request | ephemeral `test/pr-N-run-M`, deleted after the run | `ci.yml` |
-| Preview | pull request | **schema-only** `preview/pr-N`, deleted when the PR closes | `preview-database.yml` |
+| Preview | pull request | **schema-only** `preview/pr-N`, deleted when the PR closes (at most 2 at once — see below) | `preview-database.yml` |
 | Production | `main` | production Neon branch | `production-deploy.yml` |
 
 The production database is never used for local development, tests, pull request
@@ -41,6 +41,41 @@ Preview variable, set by the workflow and removed when the PR closes.
 
 Synthetic seed data comes from `npm run db:seed`, which refuses to run against any
 database not carrying the disposable-test marker.
+
+### Schema-only branches are root branches, and Neon caps them
+
+A `--schema-only` branch has no parent. Neon therefore counts it as a **root branch**, the
+same category as `main`, and root branches are capped per project:
+
+| Neon plan | Root branches per project |
+|---|---|
+| Free | 3 |
+| Launch | 5 |
+| Scale | 25 |
+
+The production branch is one of them. **On the Free plan this project is on, at most 2
+preview databases can exist at once.** The cap was found the hard way on 2026-09-24: with
+`preview/pr-106` and `preview/pr-107` alive, provisioning for #108 failed with
+`ERROR: root branches limit exceeded` (run 35937875314). Branches created with a parent
+(`test/*` in `ci.yml`, a normal `dev/*` branch) are not root branches and do not count.
+
+Do **not** work around the cap by giving preview branches a parent. A child branch is
+copy-on-write from its parent and would carry production's financial data; the cap is the
+price of the schema-only guarantee above, and the workflow's comments say so at the point
+of temptation.
+
+What happens instead, when the cap is hit:
+
+- `preview-database.yml` emits a `::warning` on the PR, skips the Vercel wiring (and
+  removes any branch-scoped variables left from an earlier provisioning), and exits
+  green. The job is not a correctness gate, so the PR's CI is unaffected.
+- That PR's Preview deployment has **no** `DATABASE_URL` (mechanism 3 above) and fails
+  loudly if opened. It does not fall back to production or to another PR's branch.
+- Raising the cap means a higher Neon plan; the table above is the price list.
+- The slot is freed by merging or closing a PR (its teardown deletes the branch) or by the
+  reaper; the next push to the waiting PR then provisions its branch normally. To
+  re-provision without pushing, close and reopen the PR, or run the reaper by hand
+  (`workflow_dispatch`).
 
 ## Where migrations run
 
@@ -76,11 +111,19 @@ endpoint. See [DATABASE.md](DATABASE.md).
 | `ci.yml` | PR, push to `main` | lint, types, unit, build, e2e, integration |
 | `preview-database.yml` | PR opened/synchronized/closed | provision and destroy the preview database |
 | `production-deploy.yml` | push to `main` | migrate, then promote |
-| `neon-branch-reaper.yml` | daily | delete leaked `test/*` branches |
+| `neon-branch-reaper.yml` | daily | delete leaked `test/*` branches; `preview/*` branches whose PR is closed, or older than 14 days |
 
-`preview/*` branches are removed by the PR-closed teardown. The reaper deliberately does
-not reap them by age, because a long-lived PR is a legitimate reason for one to persist.
-If teardown fails, the warning in that job is the signal to clean up by hand.
+`preview/*` branches are removed by the PR-closed teardown. Because each one occupies a
+root-branch slot (see above), the reaper also removes any `preview/pr-N` branch whose PR
+is closed or merged (it asks GitHub for the PR's state), and, as a backstop, any preview
+branch older than **14 days** regardless of PR state. A long-lived PR therefore loses its
+preview database once a fortnight, together with any manual test data a reviewer put
+there; the next push re-provisions it. A branch whose PR state cannot be determined is
+judged by age alone, and one whose age cannot be established is never deleted: missing
+data must not resolve to the destructive answer. The reaper only touches Neon; the
+branch-scoped Vercel variables of a reaped branch stay until the PR closes or its next
+provisioning run, and a deployment that reads them fails to connect rather than reaching
+another database.
 
 ## Required GitHub secrets
 
@@ -211,6 +254,9 @@ Verified in production (2026-09-11):
 
 **Not yet exercised:**
 
+- The root-branch-cap path in `preview-database.yml` (warning, skipped wiring, green job)
+  and the `preview/*` step of the reaper — both new on 2026-09-24. The first exercises
+  itself the next time a PR opens while two preview branches exist.
 - A failed production migration blocking promotion (only the success path has run).
 - A real statement extraction end to end — the pipeline reaches the model; first successful run
   pending the direct-Anthropic route (#78).
