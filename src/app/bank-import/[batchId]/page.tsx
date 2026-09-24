@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, transferCounterparts, type ImportLineView } from '@/server/bank-import';
+import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listOpenBills } from '@/server/bill-payments';
 import { listCustomers } from '@/server/customers';
@@ -18,12 +18,13 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { deleteImportBatchAction, postImportLinesAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
 import { LineCounterpartSelect } from './line-counterpart';
 import { LineActionControls } from './line-action';
-import { ReviewStateProvider, type LineAction } from './review-state';
+import { ReviewStateProvider, toLineAction, type LineAction } from './review-state';
 
 /**
  * Bank-statement import — review (LL-076, LL-077). The human gate: every staged line shows
@@ -140,23 +141,55 @@ export default async function ReviewImportPage({
     };
   };
 
-  // The client-side review state starts from the server's suggestion per STAGED line (LL-089).
+  // The client-side review state starts from the server's suggestion per STAGED line (LL-089)…
   const defaultActions: Record<string, LineAction> = Object.fromEntries(
     view.lines.flatMap((l, i) => (l.status === 'STAGED' ? [[String(i), suggestionFor(l).action]] : [])),
   );
+  // …unless a draft was saved (LL-105): the page opens where the reviewer left off. A draft
+  // action the row can no longer offer (its candidate vanished) falls back to the suggestion.
+  const allowedFor = (l: ImportLineView, s: { moneyIn: boolean }): Set<LineAction> => {
+    const allowed = new Set<LineAction>(['post', 'ignore']);
+    if (personalDefault !== null) allowed.add('personal');
+    if (l.intercompanyCandidate !== null) allowed.add('match_intercompany');
+    if (counterparts.length > 0 && (!isCard || s.moneyIn)) allowed.add('intercompany_transfer');
+    if (l.transferCandidate?.status === 'POSTED') allowed.add('match_transfer');
+    if (!isCard) allowed.add(s.moneyIn ? 'apply_invoice' : 'apply_bill');
+    return allowed;
+  };
+  const initialActions: Record<string, LineAction> = Object.fromEntries(
+    view.lines.flatMap((l, i) => {
+      if (l.status !== 'STAGED') return [];
+      const s = suggestionFor(l);
+      const draft = l.draft === null ? null : toLineAction(l.draft.action);
+      return [[String(i), draft !== null && allowedFor(l, s).has(draft) ? draft : s.action]];
+    }),
+  );
+  const draftCount = view.lines.filter((l) => l.status === 'STAGED' && l.draft !== null).length;
   const staged = view.lines.filter((l) => l.status === 'STAGED').length;
   const posted = view.lines.filter((l) => l.status === 'POSTED').length;
   const personal = view.lines.filter((l) => l.status === 'PERSONAL').length;
   const assigned = view.lines.filter((l) => l.status === 'ASSIGNED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
   const decided = posted + personal + assigned;
+  const reviewStatus = reviewStatusOf({ stagedCount: staged, decidedCount: decided + ignored, draftCount });
+  const STATUS_TEXT = { new: 'New', in_progress: 'In progress', complete: 'Complete' } as const;
+  const STATUS_CLASS = {
+    new: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200',
+    in_progress: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+    complete: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
+  } as const;
 
   const selectClass = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Review import</h1>
+        <h1 className="flex items-center gap-3 text-2xl font-semibold">
+          Review import
+          <span data-testid="review-status" data-status={reviewStatus} className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_CLASS[reviewStatus]}`}>
+            {STATUS_TEXT[reviewStatus]}
+          </span>
+        </h1>
         <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
       </header>
 
@@ -189,8 +222,14 @@ export default async function ReviewImportPage({
 
       <form action={postImportLinesAction} data-testid="review-form" className="flex flex-col gap-4">
         <input type="hidden" name="batchId" value={view.batch.id} />
-        <ReviewStateProvider defaults={defaultActions}>
-        {staged > 0 && <BulkControls />}
+        <ReviewStateProvider defaults={defaultActions} initial={initialActions}>
+        {staged > 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            <BulkControls />
+            {/* LL-105: every change is saved as a draft; leaving the page loses nothing. */}
+            <Autosave action={saveReviewDraftsAction} />
+          </div>
+        )}
         <table className="w-full border-collapse text-sm" data-testid="import-lines">
           <thead>
             <tr className="border-b border-neutral-300 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-700">
@@ -239,17 +278,18 @@ export default async function ReviewImportPage({
                         <input type="hidden" name="lineId" value={l.id} />
                         <input type="hidden" name="counterpartLineId" value={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.lineId : ''} />
                         <input type="hidden" name="counterpartEntryId" value={l.intercompanyCandidate?.entryId ?? ''} />
-                        {counterparts.length > 0 && <LineCounterpartSelect index={i} options={counterparts} />}
+                        {counterparts.length > 0 && <LineCounterpartSelect index={i} options={counterparts} initialId={l.draft?.counterpartCompanyId ?? null} />}
                         <LineAccountSelect
                           index={i}
                           options={pickableOptions}
                           suggestedId={l.transferCandidate?.status === 'POSTED' ? l.transferCandidate.accountId : (l.suggestedAccountId ?? '')}
                           personalDefaultId={personalDefault?.id ?? null}
+                          initialId={initialActions[String(i)] === (l.draft === null ? null : toLineAction(l.draft.action)) ? (l.draft?.accountId ?? null) : null}
                         />
                       </td>
                       <td className="py-2 pr-2">
                         {!isCard && (
-                          <select name="documentId" defaultValue={s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
+                          <select name="documentId" defaultValue={l.draft?.documentId ?? s.documentId} data-testid={`import-document-${String(i)}`} className={selectClass}>
                             <option value="">{s.moneyIn ? 'Open invoice…' : 'Open bill…'}</option>
                             {s.options.map((o) => (
                               <option key={o.id} value={o.id}>{o.label}</option>

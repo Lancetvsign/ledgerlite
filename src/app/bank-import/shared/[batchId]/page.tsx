@@ -10,7 +10,8 @@ import { getSharedImportBatch } from '@/server/bank-import';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
-import { assignSharedLinesAction, unassignSharedLineAction } from '../actions';
+import { Autosave } from '../../[batchId]/autosave';
+import { assignSharedLinesAction, saveSharedDraftsAction, unassignSharedLineAction } from '../actions';
 import { TakeCheckbox } from './take-checkbox';
 
 /**
@@ -99,7 +100,7 @@ export default async function SharedImportPage({
                   {l.status === 'STAGED' ? (
                     <>
                       <input type="hidden" name="lineId" value={l.id} />
-                      <TakeCheckbox index={i} />
+                      <TakeCheckbox index={i} initialChecked={l.draft?.action === 'take'} />
                     </>
                   ) : (
                     <span className="text-xs text-neutral-500" data-testid={`shared-taken-${String(i)}`}>taken</span>
@@ -113,7 +114,7 @@ export default async function SharedImportPage({
                 <td className="py-2 pr-2 text-right tabular-nums" data-testid={`shared-amount-${String(i)}`}>{formatMoney(l.amount)}</td>
                 <td className="py-2 pr-2">
                   {l.status === 'STAGED' ? (
-                    <select name="accountId" defaultValue={l.suggestedAccountId ?? ''} data-testid={`shared-account-${String(i)}`} className={selectClass}>
+                    <select name="accountId" defaultValue={l.draft?.accountId ?? l.suggestedAccountId ?? ''} data-testid={`shared-account-${String(i)}`} className={selectClass}>
                       <option value="">Choose our account…</option>
                       {view.pickable.map((a) => (
                         <option key={a.id} value={a.id}>{label(a)}</option>
@@ -129,6 +130,8 @@ export default async function SharedImportPage({
         </table>
         {untaken.length > 0 ? (
           <div className="flex items-center gap-2">
+            {/* LL-105: ticks and account picks are saved as this company's drafts. */}
+            <Autosave action={saveSharedDraftsAction} />
             <span className="flex-1 text-xs text-neutral-400">
               Taking a line posts it as this company&apos;s expense owed to {view.batch.ownerLegalName} (“Due to”), and as
               “Due from” this company on their card. Give a line back with Undo.

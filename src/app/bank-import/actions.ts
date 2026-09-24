@@ -6,13 +6,13 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, deleteImportBatch, postImportLines, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { BankImportError, deleteImportBatch, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
-import { postImportLinesInput, stageImportInput } from '@/validation/bank-import';
+import { postImportLinesInput, saveReviewDraftsInput, stageImportInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
 
 /**
@@ -122,6 +122,40 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   redirect(
     `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}`,
   );
+}
+
+/**
+ * Saves the review screen's current choices as drafts — LL-105. Called by the autosaver with
+ * the form serialised exactly as a submit would be; never posts, never redirects (the page
+ * stays put), and any failure is reported as `ok: false` for the status text — an autosave
+ * must not throw the reviewer off the page.
+ */
+export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: true; saved: number } | { ok: false }> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) return { ok: false };
+  const lineIds = formData.getAll('lineId');
+  const actions = formData.getAll('action');
+  const accountIds = formData.getAll('accountId');
+  const documentIds = formData.getAll('documentId');
+  const counterpartCompanyIds = formData.getAll('counterpartCompanyId');
+  const parsed = saveReviewDraftsInput.safeParse({
+    drafts: lineIds.map((lineId, i) => ({
+      lineId: typeof lineId === 'string' ? lineId : '',
+      action: typeof actions[i] === 'string' ? actions[i] : 'post',
+      accountId: opt(accountIds[i] ?? null),
+      documentId: opt(documentIds[i] ?? null),
+      counterpartCompanyId: opt(counterpartCompanyIds[i] ?? null),
+    })),
+  });
+  if (!parsed.success) return { ok: false };
+  try {
+    const { saved } = await saveReviewDrafts(userId, companyId, batchId, parsed.data);
+    return { ok: true, saved };
+  } catch (error) {
+    if (error instanceof AuthorizationDenied || error instanceof BankImportError) return { ok: false };
+    throw error;
+  }
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */

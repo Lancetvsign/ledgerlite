@@ -8,10 +8,10 @@ import { isUuid } from '@/lib/uuid';
 import { AccountError } from '@/server/accounts';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { assignSharedLines, BankImportError, PeriodClosedInCompanyError, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, BankImportError, PeriodClosedInCompanyError, saveSharedDrafts, unassignSharedLine } from '@/server/bank-import';
 import { LedgerError } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
-import { assignSharedLinesInput } from '@/validation/bank-import';
+import { assignSharedLinesInput, saveSharedDraftsInput } from '@/validation/bank-import';
 
 /**
  * Shared-statement actions — LL-097. The VIEWING company comes from the session context; the
@@ -65,6 +65,30 @@ export async function assignSharedLinesAction(formData: FormData): Promise<void>
     redirectOnFailure(batchId, error);
   }
   redirect(`/bank-import/shared/${batchId}?ok=assigned&assigned=${String(assigned)}`);
+}
+
+/** Saves the ticks and account picks as this company's drafts — LL-105. Never posts, never redirects. */
+export async function saveSharedDraftsAction(formData: FormData): Promise<{ ok: true; saved: number } | { ok: false }> {
+  const { userId, companyId } = await requireContext();
+  const batchId = str(formData.get('batchId'));
+  if (!isUuid(batchId)) return { ok: false };
+  const lineIds = formData.getAll('lineId');
+  const takes = formData.getAll('take');
+  const accountIds = formData.getAll('accountId');
+  const parsed = saveSharedDraftsInput.safeParse({
+    drafts: lineIds.map((lineId, i) => {
+      const accountId = str(accountIds[i]);
+      return { lineId: str(lineId), take: str(takes[i]) === '1', ...(accountId === '' ? {} : { accountId }) };
+    }),
+  });
+  if (!parsed.success) return { ok: false };
+  try {
+    const { saved } = await saveSharedDrafts(userId, companyId, batchId, parsed.data);
+    return { ok: true, saved };
+  } catch (error) {
+    if (error instanceof AuthorizationDenied || error instanceof BankImportError) return { ok: false };
+    throw error;
+  }
 }
 
 /** Gives one taken line back to the cardholder company. */

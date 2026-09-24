@@ -22,6 +22,7 @@ import { getAccountingPeriod } from '@/server/periods';
 import { extractedTransactionsSchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
+import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
 import { auditIntercompanyLine, findIntercompanyCandidates, markIntercompanyTransfer, matchIntercompanyTransfer, transferCounterparts, type IntercompanyCandidate } from './intercompany';
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
@@ -316,6 +317,8 @@ export interface ImportLineView extends BankImportLine {
   readonly intercompanyCandidate: IntercompanyCandidate | null;
   /** For a POSTED line: the source of its entry — 'INTERCOMPANY' means it can be un-marked (LL-100). */
   readonly postedSource: string | null;
+  /** LL-105: this company's saved-but-not-posted choice for a STAGED line, if any. */
+  readonly draft: LineDraft | null;
 }
 
 export interface TransferCandidate {
@@ -419,8 +422,10 @@ export async function getImportBatch(
     target.set(r.hash, set);
   }
 
-  const candidates = await findTransferCandidates(companyId, batch.bankAccountId, lines.filter((l) => l.status === 'STAGED').map((l) => l.id));
+  const stagedIds = lines.filter((l) => l.status === 'STAGED').map((l) => l.id);
+  const candidates = await findTransferCandidates(companyId, batch.bankAccountId, stagedIds);
   const icCandidates = await findIntercompanyCandidates(actorUserId, companyId, lines);
+  const drafts = await draftsFor(db, companyId, stagedIds);
   const entryIds = lines.map((l) => l.journalEntryId).filter((id): id is string => id !== null);
   const sourceByEntry = new Map(
     entryIds.length === 0
@@ -447,20 +452,55 @@ export async function getImportBatch(
         assignedCompanyName: l.assignedCompanyId === null ? null : (assignedNames.get(l.assignedCompanyId) ?? null),
         intercompanyCandidate: icCandidates.get(l.id) ?? null,
         postedSource: l.journalEntryId === null ? null : (sourceByEntry.get(l.journalEntryId) ?? null),
+        draft: drafts.get(l.id) ?? null,
       };
     }),
   };
 }
 
-/** Recent batches for the upload page. */
-export async function listImportBatches(actorUserId: string, companyId: string): Promise<BankImportBatch[]> {
+/** LL-105: where a statement's review stands — derived from its lines and this company's drafts. */
+export type ReviewStatus = 'new' | 'in_progress' | 'complete';
+
+export interface ImportBatchSummary extends BankImportBatch {
+  readonly stagedCount: number;
+  /** Lines that left STAGED (posted, personal, taken, ignored). */
+  readonly decidedCount: number;
+  readonly draftCount: number;
+  readonly reviewStatus: ReviewStatus;
+}
+
+export function reviewStatusOf(c: { stagedCount: number; decidedCount: number; draftCount: number }): ReviewStatus {
+  if (c.stagedCount === 0) return 'complete';
+  if (c.draftCount > 0 || c.decidedCount > 0) return 'in_progress';
+  return 'new';
+}
+
+/** Recent batches for the upload page, each with its review status (LL-105). */
+export async function listImportBatches(actorUserId: string, companyId: string): Promise<ImportBatchSummary[]> {
   await requirePermission(actorUserId, companyId, 'journal.post');
-  return await getDb()
+  const db = getDb();
+  const batches = await db
     .select()
     .from(schema.bankImportBatches)
     .where(eq(schema.bankImportBatches.companyId, companyId))
     .orderBy(desc(schema.bankImportBatches.createdAt))
     .limit(20);
+  if (batches.length === 0) return [];
+  const ids = batches.map((b) => b.id);
+  const counts = new Map<string, { staged: number; decided: number }>();
+  const rows = await db.execute<{ batch_id: string; staged: string; decided: string }>(sql`
+    select batch_id::text as batch_id,
+           count(*) filter (where status = 'STAGED')::text as staged,
+           count(*) filter (where status <> 'STAGED')::text as decided
+    from bank_import_lines
+    where company_id = ${companyId} and batch_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    group by batch_id`);
+  for (const r of rows.rows) counts.set(r.batch_id, { staged: Number(r.staged), decided: Number(r.decided) });
+  const drafts = await draftCountsByBatch(db, companyId, ids);
+  return batches.map((b) => {
+    const c = { stagedCount: counts.get(b.id)?.staged ?? 0, decidedCount: counts.get(b.id)?.decided ?? 0, draftCount: drafts.get(b.id) ?? 0 };
+    return { ...b, ...c, reviewStatus: reviewStatusOf(c) };
+  });
 }
 
 export interface PostImportResult {
@@ -1089,4 +1129,6 @@ export async function setBatchSharing(
 
 export * from './shared';
 export { transferCounterparts, unmarkIntercompanyTransfer } from './intercompany';
+export { saveReviewDrafts, saveSharedDrafts } from './drafts';
+export type { LineDraft } from './drafts';
 export type { IntercompanyCandidate, MemberCompany as TransferCounterpart } from './intercompany';

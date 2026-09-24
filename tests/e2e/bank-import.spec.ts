@@ -192,6 +192,45 @@ test('a mistaken upload can be deleted until something posts (LL-087)', async ({
   await expect(page.getByTestId('delete-import-batch')).toHaveCount(0);
 });
 
+test('review choices survive leaving the page, and the list shows In progress → Complete (LL-105)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  const reviewUrl = page.url();
+  await expect(page.getByTestId('review-status')).toHaveText('New');
+
+  // Change an account and ignore a line; the autosaver reports the save.
+  await page.getByTestId('import-account-1').selectOption({ label: '6800 · Utilities' });
+  await page.getByTestId('import-action-2').selectOption('ignore');
+  await expect(page.getByTestId('autosave-status')).toContainText('Saved', { timeout: 10_000 });
+
+  // Leave: the list shows the statement in progress …
+  await page.goto('/bank-import');
+  await expect(page.getByTestId('batch-status')).toHaveText('In progress');
+  await expect(page.getByTestId('batch-status')).toHaveAttribute('data-status', 'in_progress');
+
+  // … and coming back restores every choice, including the ignore's Undo state.
+  await page.goto(reviewUrl);
+  await expect(page.getByTestId('review-status')).toHaveText('In progress');
+  await expect(page.getByTestId('import-account-1').locator('option:checked')).toHaveText('6800 · Utilities');
+  await expect(page.getByTestId('import-action-2')).toHaveValue('ignore');
+  await expect(page.getByTestId('ignore-line-2')).toHaveText('Undo');
+  await expect(page.getByTestId('review-counts')).toHaveText('2 to post · 1 to ignore');
+
+  // "Reset to suggestions" still means the suggestions, and is saved too.
+  await page.getByTestId('reset-all').click();
+  await expect(page.getByTestId('import-action-2')).toHaveValue('post');
+  await expect(page.getByTestId('autosave-status')).toContainText('Saved', { timeout: 10_000 });
+  await page.getByTestId('import-action-2').selectOption('ignore');
+  await expect(page.getByTestId('autosave-status')).toContainText('Saved', { timeout: 10_000 });
+
+  // Post: the drafts are gone with the decisions and the statement is complete.
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 2 line(s), ignored 1', { timeout: 15_000 });
+  await expect(page.getByTestId('review-status')).toHaveText('Complete');
+  await page.goto('/bank-import');
+  await expect(page.getByTestId('batch-status')).toHaveText('Complete');
+});
+
 test('a credit-card statement imports into the card account and increases what is owed (LL-088)', async ({ page }) => {
   await freshCompany(page);
   await page.goto('/bank-import');

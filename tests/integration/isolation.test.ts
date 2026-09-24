@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -826,6 +826,17 @@ const REGISTRY: IsolationDescriptor[] = [
           const line = await db.execute<{ id: string }>(rawSql`select id from bank_import_lines where company_id = ${victim.companyId} limit 1`);
           return await assignSharedLines(attacker, own.rows[0]?.company_id ?? attacker, recordId, { decisions: [{ lineId: line.rows[0]?.id ?? recordId, accountId: recordId }] });
         },
+      },
+      // LL-105: review drafts are scoped like the screens they belong to.
+      {
+        operation: 'save review drafts on it (authorized front door)',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => saveReviewDrafts(attacker, victim.companyId, recordId, { drafts: [] }),
+      },
+      {
+        operation: 'save shared-screen drafts on it as if viewing from the victim company',
+        expect: 'denied',
+        run: (attacker, victim, recordId) => saveSharedDrafts(attacker, victim.companyId, recordId, { drafts: [] }),
       },
       {
         operation: 'give a line of it back from the attacker company',

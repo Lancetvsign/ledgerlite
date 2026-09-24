@@ -2553,3 +2553,50 @@ setting, and no trust in the caller; it is the same shape the database already p
 - Not addressed: a structural "both sides" rule for intercompany groups (5c N5) — a one-member group is
   legal at the database and is what "in transit" is.
 
+## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
+
+**Status** Accepted · **Added by** LL-105 · **Decided by** product owner ("have it save and mark as in progress instead of resetting if I leave the statement before completion")
+
+### Context
+
+The bank-statement review screen (LL-076 … LL-102) and the shared "take" screen (LL-097) kept every
+per-line choice in React state only. Leaving the page — to look something up, to open the other
+company, or by accident — discarded the whole review, and the "Recent imports" list could not say
+which statements were half done. The owner hit this on the first real statement.
+
+### Decision
+
+1. **A draft table, one row per STAGED line per drafting company.** `bank_import_line_drafts`
+   (migration 0043) holds the action, the account (composite-FK'd to the drafting company's own
+   chart), the open document and the counterpart company chosen so far, with `UNIQUE (line_id,
+   company_id)`. The drafting company is the cardholder on its review screen and the viewing
+   member on the shared screen — a by-design cross-company reference, like `assigned_company_id`.
+2. **A draft is scratch state.** It never posts; it is only what the page opens with. Saving
+   validates nothing that posting will not re-validate: an account outside the drafting
+   company's pickable set is stored as nothing, a counterpart outside the organization likewise,
+   a line that is no longer STAGED is skipped. An autosave must never throw the reviewer off the page.
+3. **Drafts live only while the line is STAGED — structurally.** An AFTER UPDATE trigger on
+   `bank_import_lines` deletes every draft of a line the moment its status leaves STAGED, whatever
+   service decided it (post, ignore, personal, take, transfer mark or match — today's and
+   tomorrow's); a BEFORE INSERT OR UPDATE trigger on the drafts refuses a draft for a decided
+   line. A deleted line (batch delete, purge) takes its drafts by cascade.
+4. **Autosave, plus a button.** The review and shared forms carry an autosaver that serialises
+   the form exactly as a submit would, 600 ms after the last change (DOM changes and the review
+   state's programmatic changes alike), and calls a server action that upserts drafts and never
+   redirects; "Save progress" runs the same save on click. The page opens with the draft as its
+   initial values; "Reset to suggestions" still returns to the server's suggestions.
+5. **Review status is derived, never stored.** `new` (all staged, no drafts), `in_progress`
+   (drafts exist, or some lines decided while others are staged), `complete` (nothing staged) —
+   computed from the lines and this company's drafts on every listing.
+
+### Consequences
+
+- Per company, not per user: one review per statement per company; two reviewers of the same
+  company share the draft (last save wins). Adequate for the owner-operated product; revisit if
+  reviews become multi-user.
+- The shared screen's drafts are invisible to the cardholder and to other members, and require
+  the same visibility as the shared view itself; an invisible statement reads as not-found.
+- The `journal.post` capability governs drafting as it governs reviewing.
+- LL-106 builds on this table for a card payment that is "waiting for a match" from another
+  company's statement (a transfer draft with no counterpart yet).
+

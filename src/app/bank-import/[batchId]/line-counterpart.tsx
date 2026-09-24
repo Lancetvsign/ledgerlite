@@ -10,13 +10,13 @@ const SELECT = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border
  * "Transfer with another company". The service re-proves the company is a member the
  * reviewer may post in.
  */
-export function LineCounterpartSelect({ index, options }: { index: number; options: readonly { id: string; legalName: string }[] }) {
+export function LineCounterpartSelect({ index, options, initialId = null }: { index: number; options: readonly { id: string; legalName: string }[]; /** LL-105: the saved draft's counterpart. */ initialId?: string | null }) {
   const { actions } = useReviewState();
   const active = (actions[String(index)] ?? 'post') === 'intercompany_transfer';
   return (
     <select
       name="counterpartCompanyId"
-      defaultValue={options[0]?.id ?? ''}
+      defaultValue={initialId ?? options[0]?.id ?? ''}
       data-testid={`import-counterpart-${String(index)}`}
       className={SELECT}
       hidden={!active}
