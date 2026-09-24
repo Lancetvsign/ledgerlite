@@ -103,7 +103,7 @@ describe('mark, then match from the other company', () => {
 
     // Between the mark and the match the mirror holds NET OF CASH IN TRANSIT (LL-099).
     const pending = (await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]!;
-    expect(pending).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '0.0000', receivableDifference: '5000.0000', receivableInTransit: '5000.0000', mirrored: true });
+    expect(pending).toMatchObject({ dueFrom: '5000.0000', counterpartDueTo: '0.0000', receivableDifference: '5000.0000', receivableInTransit: '5000.0000', state: 'in_transit', mirrored: false, inTransitOldestDays: 183 });
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
     // B's statement two days later: the candidate is offered and the default is to match it.
     const inB = await stageOne(c.owner, c.b, c.bankB, '2026-07-03', 'DEPOSIT FROM ALPHA', '5000.00');
@@ -158,7 +158,7 @@ describe('mark, then match from the other company', () => {
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
   });
 
-  it('both sides marked independently still mirror (two groups, same balances); a refund-shaped receipt with no pair makes the payer the receivable holder', async () => {
+  it('a second independent mark joins the first mark\'s group; a receipt with no pair makes the payer the receivable holder', async () => {
     const c = await setup();
     const outA = await stageOne(c.owner, c.a, c.bankA, '2026-07-01', 'TFR TO BETA', '-700.00');
     const inB = await stageOne(c.owner, c.b, c.bankB, '2026-07-01', 'FROM ALPHA', '700.00');
@@ -167,12 +167,12 @@ describe('mark, then match from the other company', () => {
     const pair = await pairIds(c.a, c.b);
     expect(pair.dueFromInA).not.toBeNull();
     expect(pair.dueFromInB).toBeNull();
-    // A marks independently instead of matching.
+    // A marks independently instead of matching: the mark auto-joins B's open group (LL-101).
     await postImportLines(c.owner, c.a, outA.batch.id, { decisions: [{ lineId: outA.line.id, action: 'intercompany_transfer', counterpartCompanyId: c.b }] });
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
-    expect((await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]).toMatchObject({ dueFrom: '700.0000', counterpartDueTo: '700.0000', mirrored: true });
+    expect((await getIntercompanyReport(c.owner, c.a, '2026-12-31')).rows[0]).toMatchObject({ dueFrom: '700.0000', counterpartDueTo: '700.0000', state: 'mirrored', mirrored: true });
     const db = await getTestDb();
-    expect((await db.execute<{ n: string }>(sql`select count(distinct intercompany_group_id)::text n from journal_entries where source_type = 'INTERCOMPANY'`)).rows[0]!.n).toBe('2');
+    expect((await db.execute<{ n: string }>(sql`select count(distinct intercompany_group_id)::text n from journal_entries where source_type = 'INTERCOMPANY'`)).rows[0]!.n).toBe('1');
   });
 });
 

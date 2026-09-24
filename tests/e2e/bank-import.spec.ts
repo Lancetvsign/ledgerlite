@@ -385,7 +385,7 @@ test('an intercompany bank transfer is marked in one company and matched from th
   await expect(page.getByTestId('notice')).toContainText('1 posted as intercompany transfers', { timeout: 15_000 });
   await page.goto('/reports/intercompany');
   await expect(page.getByTestId('intercompany-row').filter({ hasText: payee })).toContainText('2,000.00');
-  await expect(page.getByTestId('intercompany-mirrored')).toContainText('Mirrored');
+  await expect(page.getByTestId('intercompany-mirrored')).toContainText('In transit'); // LL-101: never "Mirrored" while a mark awaits its match
 
   // Payee Co: its card statement's +2000 PAYMENT line is the other side; it is flagged and defaults to Match.
   await page.goto('/account');
