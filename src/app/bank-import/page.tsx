@@ -12,6 +12,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
 import { uploadStatementAction } from './actions';
+import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from './review-status';
 import { UploadSubmitButton } from './upload-submit-button';
 
 /**
@@ -136,8 +137,8 @@ export default async function BankImportPage({
                   {b.filename ?? 'statement'} — {nameById.get(b.bankAccountId) ?? b.bankAccountId}
                 </Link>
                 {/* LL-105: where the review stands — a saved draft counts as progress. */}
-                <span data-testid="batch-status" data-status={b.reviewStatus} className={`rounded px-1.5 py-0.5 text-xs ${STATUS_CLASS[b.reviewStatus]}`}>
-                  {STATUS_TEXT[b.reviewStatus]}
+                <span data-testid="batch-status" data-status={b.reviewStatus} className={`rounded px-1.5 py-0.5 text-xs ${REVIEW_STATUS_CLASS[b.reviewStatus]}`}>
+                  {REVIEW_STATUS_TEXT[b.reviewStatus]}
                 </span>
                 <span className="text-xs text-neutral-500">
                   {String(b.stagedCount)} to review · {String(b.decidedCount)} done
@@ -150,13 +151,6 @@ export default async function BankImportPage({
     </main>
   );
 }
-
-const STATUS_TEXT = { new: 'New', in_progress: 'In progress', complete: 'Complete' } as const;
-const STATUS_CLASS = {
-  new: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200',
-  in_progress: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-  complete: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
-} as const;
 
 function noticeFrom(error: string | undefined): string | null {
   if (error === undefined) return null;

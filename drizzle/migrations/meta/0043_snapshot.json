@@ -1,5 +1,5 @@
 {
-  "id": "302b86b3-0074-4a3e-bba5-619ad9e25c85",
+  "id": "5ccd2146-fac4-4716-b197-df798d88acd9",
   "prevId": "b79f0223-cc9b-4bf8-a3b7-69c82a2e2a12",
   "version": "7",
   "dialect": "postgresql",
@@ -4776,7 +4776,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "bank_import_line_drafts_updated_by_users_id_fk": {

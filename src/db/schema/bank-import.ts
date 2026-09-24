@@ -220,8 +220,8 @@ export const bankImportLineDrafts = pgTable(
     accountId: uuid('account_id'),
     /** An open invoice / bill of the drafting company; a scratch pointer, validated at post time. */
     documentId: uuid('document_id'),
-    /** intercompany_transfer: the other company chosen so far, if any. */
-    counterpartCompanyId: uuid('counterpart_company_id').references(() => companies.id, { onDelete: 'restrict' }),
+    /** intercompany_transfer: the other company chosen so far, if any. SET NULL: a draft is scratch and must never block a purge. */
+    counterpartCompanyId: uuid('counterpart_company_id').references(() => companies.id, { onDelete: 'set null' }),
     updatedBy: uuid('updated_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),

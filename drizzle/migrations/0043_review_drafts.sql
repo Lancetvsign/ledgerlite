@@ -14,11 +14,10 @@ CREATE TABLE "bank_import_line_drafts" (
 --> statement-breakpoint
 ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_line_id_bank_import_lines_id_fk" FOREIGN KEY ("line_id") REFERENCES "public"."bank_import_lines"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_counterpart_company_id_companies_id_fk" FOREIGN KEY ("counterpart_company_id") REFERENCES "public"."companies"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_counterpart_company_id_companies_id_fk" FOREIGN KEY ("counterpart_company_id") REFERENCES "public"."companies"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_updated_by_users_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "bank_import_line_drafts" ADD CONSTRAINT "bank_import_line_drafts_account_same_company_fk" FOREIGN KEY ("company_id","account_id") REFERENCES "public"."accounts"("company_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "bank_import_line_drafts_company_line_idx" ON "bank_import_line_drafts" USING btree ("company_id","line_id");--> statement-breakpoint
--- ===========================================================================
+CREATE INDEX "bank_import_line_drafts_company_line_idx" ON "bank_import_line_drafts" USING btree ("company_id","line_id");-- ===========================================================================
 -- LL-105 (ADR-045) — review drafts live only while a line is STAGED, structurally.
 --
 -- A draft is a reviewer's saved-but-not-posted choice for one staged line, kept per

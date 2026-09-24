@@ -19,6 +19,7 @@ import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
 import { deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
@@ -172,12 +173,6 @@ export default async function ReviewImportPage({
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
   const decided = posted + personal + assigned;
   const reviewStatus = reviewStatusOf({ stagedCount: staged, decidedCount: decided + ignored, draftCount });
-  const STATUS_TEXT = { new: 'New', in_progress: 'In progress', complete: 'Complete' } as const;
-  const STATUS_CLASS = {
-    new: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200',
-    in_progress: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-    complete: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
-  } as const;
 
   const selectClass = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
@@ -186,8 +181,8 @@ export default async function ReviewImportPage({
       <header className="flex items-center justify-between">
         <h1 className="flex items-center gap-3 text-2xl font-semibold">
           Review import
-          <span data-testid="review-status" data-status={reviewStatus} className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_CLASS[reviewStatus]}`}>
-            {STATUS_TEXT[reviewStatus]}
+          <span data-testid="review-status" data-status={reviewStatus} className={`rounded px-2 py-0.5 text-xs font-medium ${REVIEW_STATUS_CLASS[reviewStatus]}`}>
+            {REVIEW_STATUS_TEXT[reviewStatus]}
           </span>
         </h1>
         <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
