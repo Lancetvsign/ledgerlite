@@ -136,6 +136,107 @@ export async function findIntercompanyCandidates(
 }
 
 /**
+ * LL-106: another member company's bank-statement line that mirrors one of ours — the other side
+ * of a card payment or a transfer, found on THEIR statement rather than guessed from a company
+ * picker. `staged` = not yet reviewed there (choosing it marks OUR side now; their reviewer then
+ * sees the match_intercompany candidate, or LL-101's auto-link joins the groups if they mark
+ * first); `posted_mark` = they already posted it as an intercompany mark (today's
+ * `intercompanyCandidate` — match it); `decided` = they posted, ignored or took it some other way
+ * (shown as a warning only — undo it there first).
+ */
+export interface OrganizationMatch {
+  readonly lineId: string;
+  readonly companyId: string;
+  readonly legalName: string;
+  readonly accountName: string;
+  readonly txnDate: string;
+  readonly status: 'staged' | 'posted_mark' | 'decided';
+  /** For `decided`: what they did with it ("posted to 6800 · Utilities", "ignored", …). */
+  readonly detail: string | null;
+}
+
+/**
+ * For each STAGED line, the other members' bank-statement lines with the opposite amount within
+ * the window, on a BANK (asset) account — a card in the other company is never the other side of
+ * a movement (LL-102) — in companies the actor may post in. Nearest date first, staged before
+ * decided at equal distance.
+ */
+export async function findOrganizationStatementMatches(
+  actorUserId: string,
+  companyId: string,
+  lines: readonly { id: string; status: string }[],
+): Promise<Map<string, OrganizationMatch[]>> {
+  const out = new Map<string, OrganizationMatch[]>();
+  const staged = lines.filter((l) => l.status === 'STAGED');
+  if (staged.length === 0) return out;
+  const counterparts = await transferCounterparts(actorUserId, companyId);
+  if (counterparts.length === 0) return out;
+  const nameById = new Map(counterparts.map((c) => [c.id, c.legalName]));
+
+  const rows = await getDb().execute<{
+    line_id: string; match_id: string; company_id: string; account_name: string; txn_date: string;
+    status: string; source_type: string | null; chosen_number: string | null; chosen_name: string | null;
+  }>(sql`
+    select l.id::text as line_id, l2.id::text as match_id, l2.company_id::text as company_id,
+           a2.name as account_name, l2.txn_date::text as txn_date, l2.status::text as status,
+           e.source_type::text as source_type, ca.account_number as chosen_number, ca.name as chosen_name
+    from bank_import_lines l
+    join bank_import_lines l2
+      on l2.company_id in (${sql.join(counterparts.map((c) => sql`${c.id}`), sql`, `)})
+     and l2.amount = -l.amount
+     and abs(l2.txn_date - l.txn_date) <= ${WINDOW_DAYS}
+    join bank_import_batches b2 on b2.company_id = l2.company_id and b2.id = l2.batch_id
+    join accounts a2 on a2.company_id = b2.company_id and a2.id = b2.bank_account_id and a2.account_type = 'ASSET'
+    left join journal_entries e on e.company_id = l2.company_id and e.id = l2.journal_entry_id
+    left join accounts ca on ca.company_id = l2.company_id and ca.id = l2.chosen_account_id
+    where l.company_id = ${companyId} and l.id in (${sql.join(staged.map((x) => sql`${x.id}`), sql`, `)})
+    order by l.id, abs(l2.txn_date - l.txn_date), (l2.status::text <> 'STAGED'), l2.txn_date, l2.id`);
+  for (const r of rows.rows) {
+    const status: OrganizationMatch['status'] = r.status === 'STAGED' ? 'staged' : r.status === 'POSTED' && r.source_type === 'INTERCOMPANY' ? 'posted_mark' : 'decided';
+    const chosen = r.chosen_name === null ? null : r.chosen_number !== null && r.chosen_number !== '' ? `${r.chosen_number} · ${r.chosen_name}` : r.chosen_name;
+    const detail =
+      status !== 'decided' ? null
+      : r.status === 'IGNORED' ? 'ignored there'
+      : r.status === 'PERSONAL' ? 'marked personal there'
+      : r.status === 'ASSIGNED' ? 'taken by another company there'
+      : chosen !== null ? `posted there to ${chosen}` : 'posted there';
+    const m: OrganizationMatch = { lineId: r.match_id, companyId: r.company_id, legalName: nameById.get(r.company_id) ?? 'another company', accountName: r.account_name, txnDate: r.txn_date, status, detail };
+    const list = out.get(r.line_id);
+    if (list === undefined) out.set(r.line_id, [m]);
+    else list.push(m);
+  }
+  return out;
+}
+
+/**
+ * LL-106: the counterpart company of a transfer named by the OTHER company's statement line
+ * (never by a company id the browser guessed). Re-proven here from the database: the line is
+ * STAGED, on a bank (asset) account, in a member company the actor may post in, mirrors ours
+ * (opposite amount) within the window. Returns that company's id, or null.
+ */
+export async function statementCounterpartFor(
+  actorUserId: string,
+  companyId: string,
+  line: { amount: string; txnDate: string },
+  statementLineId: string,
+): Promise<string | null> {
+  const counterparts = await transferCounterparts(actorUserId, companyId);
+  if (counterparts.length === 0) return null;
+  const rows = await getDb().execute<{ company_id: string }>(sql`
+    select l2.company_id::text as company_id
+    from bank_import_lines l2
+    join bank_import_batches b2 on b2.company_id = l2.company_id and b2.id = l2.batch_id
+    join accounts a2 on a2.company_id = b2.company_id and a2.id = b2.bank_account_id and a2.account_type = 'ASSET'
+    where l2.id = ${statementLineId}
+      and l2.company_id in (${sql.join(counterparts.map((c) => sql`${c.id}`), sql`, `)})
+      and l2.status = 'STAGED'
+      and l2.amount = -(${line.amount}::numeric)
+      and abs(l2.txn_date - ${line.txnDate}::date) <= ${WINDOW_DAYS}
+    limit 1`);
+  return rows.rows[0]?.company_id ?? null;
+}
+
+/**
  * The pair to move for a transfer between `me` and `other` (LL-102 / Gate 7 M4): the pair whose
  * OPEN balance the movement reduces — money out of me pays down what I owe (my payable) if any,
  * else raises what I am owed (my receivable); money in collects what I am owed if any, else raises

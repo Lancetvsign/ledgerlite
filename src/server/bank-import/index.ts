@@ -23,7 +23,7 @@ import { extractedTransactionsSchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
-import { auditIntercompanyLine, findIntercompanyCandidates, markIntercompanyTransfer, matchIntercompanyTransfer, transferCounterparts, type IntercompanyCandidate } from './intercompany';
+import { auditIntercompanyLine, findIntercompanyCandidates, findOrganizationStatementMatches, markIntercompanyTransfer, matchIntercompanyTransfer, statementCounterpartFor, transferCounterparts, type IntercompanyCandidate, type OrganizationMatch } from './intercompany';
 import { BankImportError } from './errors';
 import { resolveExtractor, type TransactionExtractor } from './extract';
 
@@ -319,6 +319,8 @@ export interface ImportLineView extends BankImportLine {
   readonly postedSource: string | null;
   /** LL-105: this company's saved-but-not-posted choice for a STAGED line, if any. */
   readonly draft: LineDraft | null;
+  /** LL-106: the other members' statement lines that mirror this one (nearest first). */
+  readonly organizationMatches: readonly OrganizationMatch[];
 }
 
 export interface TransferCandidate {
@@ -426,6 +428,7 @@ export async function getImportBatch(
   const candidates = await findTransferCandidates(companyId, batch.bankAccountId, stagedIds);
   const icCandidates = await findIntercompanyCandidates(actorUserId, companyId, lines);
   const drafts = await draftsFor(db, companyId, stagedIds);
+  const orgMatches = await findOrganizationStatementMatches(actorUserId, companyId, lines);
   const entryIds = lines.map((l) => l.journalEntryId).filter((id): id is string => id !== null);
   const sourceByEntry = new Map(
     entryIds.length === 0
@@ -453,6 +456,7 @@ export async function getImportBatch(
         intercompanyCandidate: icCandidates.get(l.id) ?? null,
         postedSource: l.journalEntryId === null ? null : (sourceByEntry.get(l.journalEntryId) ?? null),
         draft: drafts.get(l.id) ?? null,
+        organizationMatches: orgMatches.get(l.id) ?? [],
       };
     }),
   };
@@ -708,8 +712,17 @@ export async function postImportLines(
       }
       plan = { kind: 'post', line, accountId: d.accountId, personal: true };
     } else if (d.action === 'intercompany_transfer') {
-      // LL-099: this company's side of money moved to/from another member company.
-      const cp = counterparts.find((c) => c.id === d.counterpartCompanyId);
+      // LL-099: this company's side of money moved to/from another member company. LL-106: the
+      // company is named either by the OTHER company's staged statement line (re-proven from the
+      // database — never a guessed id) or, as a last resort, by a company picker.
+      if (d.counterpartStatementLineId === undefined && d.counterpartCompanyId === undefined) {
+        throw new BankImportError('COUNTERPART_REQUIRED', `Line ${n}: still waiting for the other company's statement — nothing to match yet.`);
+      }
+      const resolved = d.counterpartStatementLineId === undefined ? null : await statementCounterpartFor(actorUserId, companyId, line, d.counterpartStatementLineId);
+      if (d.counterpartStatementLineId !== undefined && resolved === null) {
+        throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: that statement line is no longer the other side of this movement — check again.`);
+      }
+      const cp = counterparts.find((c) => c.id === (resolved ?? d.counterpartCompanyId));
       if (cp === undefined) {
         throw new BankImportError('COUNTERPART_INVALID', `Line ${n}: choose a company of your organization you can post in.`);
       }
@@ -1131,4 +1144,4 @@ export * from './shared';
 export { transferCounterparts, unmarkIntercompanyTransfer } from './intercompany';
 export { saveReviewDrafts, saveSharedDrafts } from './drafts';
 export type { LineDraft } from './drafts';
-export type { IntercompanyCandidate, MemberCompany as TransferCounterpart } from './intercompany';
+export type { IntercompanyCandidate, MemberCompany as TransferCounterpart, OrganizationMatch } from './intercompany';

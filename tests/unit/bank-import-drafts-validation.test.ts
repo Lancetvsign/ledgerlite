@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { saveReviewDraftsInput, saveSharedDraftsInput } from '@/validation/bank-import';
+import { postImportLinesInput, saveReviewDraftsInput, saveSharedDraftsInput } from '@/validation/bank-import';
 
 const ID = '00000000-0000-4000-8000-000000000001';
 
@@ -19,3 +19,13 @@ describe('LL-105 draft inputs', () => {
     expect(saveSharedDraftsInput.safeParse({ drafts: [{ lineId: ID, take: 'yes' }] }).success).toBe(false);
   });
 });
+
+describe('LL-106 decision input', () => {
+  it('an intercompany transfer may name the other company\'s statement line instead of a company', () => {
+    const d = postImportLinesInput.parse({ decisions: [{ lineId: ID, action: 'intercompany_transfer', counterpartStatementLineId: ID }] }).decisions[0]!;
+    expect(d.counterpartStatementLineId).toBe(ID);
+    expect(d.counterpartCompanyId).toBeUndefined();
+    expect(postImportLinesInput.safeParse({ decisions: [{ lineId: ID, action: 'intercompany_transfer', counterpartStatementLineId: 'nope' }] }).success).toBe(false);
+  });
+});
+

@@ -2498,6 +2498,19 @@ what I owe), a deactivated pair is reactivated rather than the reverse direction
 at all the payer holds the receivable — so a repayment settles instead of grossing up, and both companies
 can leave once the relationship nets to zero.
 
+**Amendment (LL-106 — the other side is found on the organization's statements, never guessed):** for every
+staged line, the review offers the other members' bank-statement lines that mirror it — opposite amount,
+three-day window, on a BANK account (a card there is never the other side, LL-102), in companies the
+reviewer may post in — whatever their state there: *staged* (choosing it marks this side now, with the
+counterpart derived from that line and re-proven by the service; the other reviewer then sees the
+`match_intercompany` candidate, or LL-101's auto-link joins the groups if they mark first), *posted as an
+intercompany mark* (the existing candidate — match it), or *decided otherwise* (a warning: undo it there
+first). A card payment with nothing to match yet **waits** — an LL-105 draft with no counterpart that the
+submit skips and reports — and the page re-reads the server every 30 s while anything waits, so the match
+appears when the other statement is uploaded. The company picker survives as a last resort ("no statement
+line found"); an `intercompany_transfer` naming neither a line nor a company is refused
+(`COUNTERPART_REQUIRED`). Bank-statement lines get the same matches; only a card payment defaults to waiting.
+
 ## ADR-044 — Journal lines are frozen structurally; the engine posts by transition
 
 **Status** Accepted · **Added by** LL-104 · **Decided by** product owner ("start LL-104" on the Gate 7 §7 item 2 direction)

@@ -38,6 +38,24 @@ function opt(v: FormDataEntryValue | null): string | undefined {
   return s === '' ? undefined : s;
 }
 
+/**
+ * LL-106: the row's counterpart select carries either a match found on the other company's
+ * statement (`line:<lineId>:<companyId>`) or a plain company pick (`company:<id>`); empty means
+ * the line is still waiting for a match. The service re-proves whichever arrives.
+ */
+function parseCounterpart(v: FormDataEntryValue | null | undefined): { counterpartCompanyId?: string; counterpartStatementLineId?: string } {
+  const s = typeof v === 'string' ? v.trim() : '';
+  if (s.startsWith('line:')) {
+    const [, lineId, companyId] = s.split(':');
+    return { ...(lineId !== undefined && lineId !== '' ? { counterpartStatementLineId: lineId } : {}), ...(companyId !== undefined && companyId !== '' ? { counterpartCompanyId: companyId } : {}) };
+  }
+  if (s.startsWith('company:')) {
+    const id = s.slice('company:'.length);
+    return id === '' ? {} : { counterpartCompanyId: id };
+  }
+  return {};
+}
+
 export async function uploadStatementAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
 
@@ -89,16 +107,21 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   const documentIds = formData.getAll('documentId');
   const counterpartIds = formData.getAll('counterpartLineId');
   const counterpartEntryIds = formData.getAll('counterpartEntryId');
-  const counterpartCompanyIds = formData.getAll('counterpartCompanyId');
-  const decisions = lineIds.map((lineId, i) => ({
+  const counterparts = formData.getAll('counterpart');
+  const all = lineIds.map((lineId, i) => ({
     lineId: typeof lineId === 'string' ? lineId : '',
     action: typeof actions[i] === 'string' ? actions[i] : 'post',
     accountId: opt(accountIds[i] ?? null),
     documentId: opt(documentIds[i] ?? null),
     counterpartLineId: opt(counterpartIds[i] ?? null),
     counterpartEntryId: opt(counterpartEntryIds[i] ?? null),
-    counterpartCompanyId: opt(counterpartCompanyIds[i] ?? null),
+    ...parseCounterpart(counterparts[i]),
   }));
+  // LL-106: a transfer still waiting for the other company's statement is not submitted — it
+  // stays a draft and the notice says so; the service would refuse it (COUNTERPART_REQUIRED).
+  const waiting = all.filter((d) => d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined).length;
+  const decisions = all.filter((d) => !(d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined));
+  if (decisions.length === 0) redirect(`/bank-import/${batchId}?ok=posted&posted=0&ignored=0&waiting=${String(waiting)}`);
 
   const parsed = postImportLinesInput.safeParse({ decisions });
   if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
@@ -120,7 +143,7 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}`,
+    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}&waiting=${String(waiting)}`,
   );
 }
 
@@ -138,14 +161,14 @@ export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: 
   const actions = formData.getAll('action');
   const accountIds = formData.getAll('accountId');
   const documentIds = formData.getAll('documentId');
-  const counterpartCompanyIds = formData.getAll('counterpartCompanyId');
+  const counterparts = formData.getAll('counterpart');
   const parsed = saveReviewDraftsInput.safeParse({
     drafts: lineIds.map((lineId, i) => ({
       lineId: typeof lineId === 'string' ? lineId : '',
       action: typeof actions[i] === 'string' ? actions[i] : 'post',
       accountId: opt(accountIds[i] ?? null),
       documentId: opt(documentIds[i] ?? null),
-      counterpartCompanyId: opt(counterpartCompanyIds[i] ?? null),
+      ...(parseCounterpart(counterparts[i]).counterpartCompanyId === undefined ? {} : { counterpartCompanyId: parseCounterpart(counterparts[i]).counterpartCompanyId }),
     })),
   });
   if (!parsed.success) return { ok: false };
