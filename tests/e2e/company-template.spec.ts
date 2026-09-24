@@ -57,6 +57,12 @@ test('a designated master company seeds the chart and settings of the next compa
   } finally {
     await page.goto('/account');
     const release = page.locator('li', { hasText: master }).getByTestId('release-template');
-    if (await release.count()) await release.click();
+    if (await release.count()) {
+      await release.click();
+      // Wait for the release to land. The next spec's create form defaults to the
+      // template while one exists; a release still in flight when that page renders
+      // makes its create fail with NO_TEMPLATE.
+      await expect(page.getByTestId('notice')).toContainText('no longer the master template');
+    }
   }
 });

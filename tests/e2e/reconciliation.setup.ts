@@ -1,5 +1,6 @@
 import { expect, test as setup } from '@playwright/test';
 
+import { deleteOwnedCompanies } from './company-cleanup';
 import { RECONCILIATION_STORAGE, RECONCILIATION_USER } from './constants';
 
 setup('authenticate reconciliation user', async ({ page, request }) => {
@@ -14,5 +15,6 @@ setup('authenticate reconciliation user', async ({ page, request }) => {
   await page.getByLabel('Password').fill(RECONCILIATION_USER.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/account/);
+  await deleteOwnedCompanies(page); // older runs' companies would otherwise pile up on this user
   await page.context().storageState({ path: RECONCILIATION_STORAGE });
 });

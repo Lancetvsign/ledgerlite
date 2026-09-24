@@ -281,6 +281,17 @@ tables directly, which would prove a state the application cannot produce — an
 `storageState`; authenticated specs opt in with `test.use({ storageState })`. The CI e2e
 job provisions its own ephemeral Neon branch, exactly like the integration job.
 
+The e2e users persist between runs and every spec creates companies, so each setup project
+first deletes every company its user owns through the Account page's own delete flow
+(`tests/e2e/company-cleanup.ts`). A run therefore starts from an empty list and the
+/account page — three forms per row — stays fast. Untouched companies are purged; any
+with history are archived and hidden (ADR-038). Only OWNER rows are touched, so the
+cleanup cannot reach anyone else's data whichever database the suite points at. A company
+that cannot go — a member of an organization is removed from it first, and one that still
+holds a Due from / Due to balance against another member can neither leave nor be deleted
+(LL-096) — is reported and skipped, so the intercompany specs' leftovers do not stall the
+run.
+
 ## Current coverage
 
 | Suite | Tests | Status |
