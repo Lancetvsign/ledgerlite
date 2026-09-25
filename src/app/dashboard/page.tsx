@@ -46,14 +46,14 @@ export default async function DashboardPage() {
       </header>
 
       <section className="grid grid-cols-2 gap-4 md:grid-cols-3" data-testid="dashboard-stats">
-        <Stat label={`Cash on hand (as of ${ctx.today})`} value={cashFlow.endingCash} testid="dashboard-cash" />
-        <Stat label="Accounts receivable" value={arAging.totals.total} testid="dashboard-ar" />
-        <Stat label="Accounts payable" value={apAging.totals.total} testid="dashboard-ap" />
-        <Stat label={`Net income (since ${fyStart})`} value={cashFlow.netIncome} testid="dashboard-net-income" />
-        <Stat label={`Cash change (since ${fyStart})`} value={cashFlow.netChangeInCash} testid="dashboard-cash-change" />
-        <Stat label="Total assets" value={balanceSheet.assets.total} testid="dashboard-assets" />
-        <Stat label="Total liabilities" value={balanceSheet.liabilities.total} testid="dashboard-liabilities" />
-        <Stat label="Total equity" value={balanceSheet.equity.total} testid="dashboard-equity" />
+        <Stat label={`Cash on hand (as of ${ctx.today})`} value={cashFlow.endingCash} testid="dashboard-cash" href={`/reports/cash-flow?from=${fyStart}&to=${ctx.today}`} />
+        <Stat label="Accounts receivable" value={arAging.totals.total} testid="dashboard-ar" href={`/reports/aging?asOf=${ctx.today}`} />
+        <Stat label="Accounts payable" value={apAging.totals.total} testid="dashboard-ap" href={`/reports/ap-aging?asOf=${ctx.today}`} />
+        <Stat label={`Net income (since ${fyStart})`} value={cashFlow.netIncome} testid="dashboard-net-income" href={`/reports/income-statement?from=${fyStart}&to=${ctx.today}`} />
+        <Stat label={`Cash change (since ${fyStart})`} value={cashFlow.netChangeInCash} testid="dashboard-cash-change" href={`/reports/cash-flow?from=${fyStart}&to=${ctx.today}`} />
+        <Stat label="Total assets" value={balanceSheet.assets.total} testid="dashboard-assets" href={`/reports/balance-sheet?asOf=${ctx.today}`} />
+        <Stat label="Total liabilities" value={balanceSheet.liabilities.total} testid="dashboard-liabilities" href={`/reports/balance-sheet?asOf=${ctx.today}`} />
+        <Stat label="Total equity" value={balanceSheet.equity.total} testid="dashboard-equity" href={`/reports/balance-sheet?asOf=${ctx.today}`} />
       </section>
 
       <section className="flex flex-col gap-2">
@@ -82,7 +82,7 @@ export default async function DashboardPage() {
                     {e.description ?? e.sourceType.replace(/_/g, ' ').toLowerCase()}
                     {e.status === 'REVERSED' && <span className="ml-2 text-xs text-neutral-400">reversed</span>}
                   </td>
-                  <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(e.total)}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums"><Link href={`/journal/${e.id}`} title="Open this entry" className="underline decoration-dotted underline-offset-2 hover:decoration-solid">{formatMoney(e.total)}</Link></td>
                 </tr>
               ))}
             </tbody>
@@ -101,11 +101,14 @@ export default async function DashboardPage() {
   );
 }
 
-function Stat({ label, value, testid }: { label: string; value: string; testid: string }) {
+function Stat({ label, value, testid, href }: { label: string; value: string; testid: string; href: string }) {
+  // LL-108: every figure opens the report that computes it.
   return (
     <div className="rounded border border-neutral-200 p-4 dark:border-neutral-800">
       <div className="text-xs text-neutral-500">{label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums" data-testid={testid}>{formatMoney(value)}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums" data-testid={testid}>
+        <Link href={href} title="Show the report behind this figure" className="underline decoration-dotted underline-offset-4 hover:decoration-solid">{formatMoney(value)}</Link>
+      </div>
     </div>
   );
 }

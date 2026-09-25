@@ -4,6 +4,7 @@ import { isCalendarDate } from '@/lib/dates';
 import { formatMoney } from '@/lib/money-format';
 import { getCashFlowStatement } from '@/server/reports';
 
+import { DrillLink, incomeStatementHref, registerHref } from '../drill';
 import { requireReportContext } from '../report-context';
 
 /**
@@ -66,21 +67,21 @@ export default async function CashFlowPage({
           </thead>
           <tbody>
             <SectionHeader label="Operating activities" />
-            <Line label="Net income" amount={cf.netIncome} />
+            <Line label="Net income" amount={cf.netIncome} href={incomeStatementHref(from, to)} />
             {cf.operatingAdjustments.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
             ))}
             <Subtotal label="Net cash from operating" amount={cf.operatingTotal} testid="cf-operating-total" />
 
             <SectionHeader label="Investing activities" />
             {cf.investing.rows.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
             ))}
             <Subtotal label="Net cash from investing" amount={cf.investing.total} testid="cf-investing-total" />
 
             <SectionHeader label="Financing activities" />
             {cf.financing.rows.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
             ))}
             <Subtotal label="Net cash from financing" amount={cf.financing.total} testid="cf-financing-total" />
 
@@ -88,7 +89,7 @@ export default async function CashFlowPage({
               <>
                 <SectionHeader label="Uncategorized (assign a cash-flow category to these accounts)" />
                 {cf.uncategorized.rows.map((l) => (
-                  <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} />
+                  <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
                 ))}
                 <Subtotal label="Uncategorized total" amount={cf.uncategorized.total} testid="cf-uncategorized-total" />
               </>
@@ -141,11 +142,11 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-function Line({ label, amount }: { label: string; amount: string }) {
+function Line({ label, amount, href }: { label: string; amount: string; href?: string }) {
   return (
     <tr data-testid="cash-flow-row" className="border-b border-neutral-100 dark:border-neutral-800">
       <td className="py-2 pr-2">{label}</td>
-      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
+      <td className="py-2 pr-2 text-right tabular-nums">{href === undefined ? formatMoney(amount) : <DrillLink href={href} amount={amount} testid="cf-drill" />}</td>
     </tr>
   );
 }

@@ -4,6 +4,7 @@ import { isCalendarDate } from '@/lib/dates';
 import { formatMoney } from '@/lib/money-format';
 import { getIncomeStatement } from '@/server/reports';
 
+import { DrillLink, registerHref } from '../drill';
 import { requireReportContext } from '../report-context';
 
 /**
@@ -74,13 +75,13 @@ export default async function IncomeStatementPage({
           <tbody>
             <SectionHeader label="Revenue" />
             {is.revenue.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
             ))}
             <SubtotalLine label="Total revenue" amount={is.revenue.total} testid="is-revenue-total" />
 
             <SectionHeader label="Cost of goods sold" />
             {is.cogs.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
             ))}
             <SubtotalLine label="Total COGS" amount={is.cogs.total} testid="is-cogs-total" />
 
@@ -91,7 +92,7 @@ export default async function IncomeStatementPage({
 
             <SectionHeader label="Operating expenses" />
             {is.expenses.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
             ))}
             <SubtotalLine label="Total operating expenses" amount={is.expenses.total} testid="is-expenses-total" />
           </tbody>
@@ -117,13 +118,13 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-function AccountLine({ number, name, amount }: { number: string | null; name: string; amount: string }) {
+function AccountLine({ number, name, amount, href }: { number: string | null; name: string; amount: string; href: string }) {
   return (
     <tr data-testid="income-statement-row" className="border-b border-neutral-100 dark:border-neutral-800">
       <td className="py-2 pr-2">
         <span className="tabular-nums text-neutral-500">{number ?? '—'}</span> {name}
       </td>
-      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
+      <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={amount} testid="is-drill" /></td>
     </tr>
   );
 }

@@ -79,6 +79,49 @@ test('trial balance is balanced and its A/R reconciles to the aging grand total'
   await expect(page.getByTestId('aging-row').filter({ hasText: 'Acme LLC' })).toContainText('60.00');
 });
 
+test('a figure on a report drills down to the transactions behind it (LL-108)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Drill Co');
+  await openInvoice(page, 'Drill Co', '200.00');
+  await receivePayment(page, 'Drill Co', '50.00'); // A/R = 150
+
+  // Trial balance → the A/R figure opens the account register, closing on the same figure.
+  await page.goto('/reports/trial-balance');
+  const arRow = page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' });
+  await expect(arRow.getByTestId('tb-drill')).toHaveText('150.00');
+  await arRow.getByTestId('tb-drill').click();
+  await expect(page).toHaveURL(/\/reports\/register\?accountId=[0-9a-f-]{36}&from=\d{4}-01-01&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page.getByTestId('register-account-name')).toContainText('Accounts Receivable');
+  await expect(page.getByTestId('register-row')).toHaveCount(2);
+  await expect(page.getByTestId('register-closing')).toHaveText('150.00');
+
+  // Balance sheet → same drill; net income → the income statement for the fiscal year.
+  await page.goto('/reports/balance-sheet');
+  await page.getByTestId('balance-sheet-row').filter({ hasText: 'Accounts Receivable' }).getByTestId('bs-drill').click();
+  await expect(page.getByTestId('register-closing')).toHaveText('150.00');
+  await page.goto('/reports/balance-sheet');
+  await page.getByTestId('bs-current-net-income').click();
+  await expect(page).toHaveURL(/\/reports\/income-statement\?from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page.getByTestId('is-net-income')).toHaveText('200.00');
+
+  // Income statement → a revenue figure opens its register for the period.
+  await page.getByTestId('income-statement-row').filter({ hasText: 'Sales Revenue' }).getByTestId('is-drill').click();
+  await expect(page.getByTestId('register-account-name')).toContainText('Sales Revenue');
+  await expect(page.getByTestId('register-closing')).toHaveText('200.00');
+
+  // A/R aging → the customer's total opens their statement.
+  await page.goto('/reports/aging');
+  await page.getByTestId('aging-row').filter({ hasText: 'Drill Co' }).getByTestId('aging-drill').click();
+  await expect(page).toHaveURL(/\/reports\/statement\?customerId=[0-9a-f-]{36}&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page.getByTestId('statement-customer')).toHaveValue(/[0-9a-f-]{36}/); // the customer is preselected
+  await expect(page.getByTestId('statement-closing')).toHaveText('150.00');
+
+  // Dashboard → a headline figure opens the report that computes it.
+  await page.goto('/dashboard');
+  await page.getByTestId('dashboard-ar').getByRole('link').click();
+  await expect(page).toHaveURL(/\/reports\/aging\?asOf=\d{4}-\d{2}-\d{2}$/);
+});
+
 test('a customer statement shows opening, activity and closing', async ({ page }) => {
   await freshCompany(page);
   await addCustomer(page, 'Beta Co');
