@@ -170,18 +170,24 @@ describe('GATE 2 — manual acceptance scenario, derived purely from journal lin
   it('stores no ACCOUNT balance anywhere — proven from the schema, not the code', async () => {
     const db = await getTestDb();
     // No column resembles a stored account/ledger balance (invariant 2). The ONLY
-    // exemptions are the DOCUMENT totals on `invoices` (subtotal/tax_total/total)
-    // and on `bills` (total, LL-061): those are a property of the source document,
-    // always service-derived from its lines (ADR-013), not an account balance — a
-    // customer's / vendor's open balance still derives from journal lines. Any
-    // balance/total column on any OTHER table is still a failure.
+    // exemptions are figures that belong to a SOURCE DOCUMENT, not to an account:
+    //  - the DOCUMENT totals on `invoices` (subtotal/tax_total/total) and on `bills`
+    //    (total, LL-061), service-derived from their lines (ADR-013);
+    //  - the balances a BANK STATEMENT PRINTS, on `bank_import_batches`
+    //    (stated_beginning_balance / stated_ending_balance, LL-109 / ADR-034): the bank's
+    //    own control figures as read from the uploaded statement, used only to check the
+    //    extracted lines. They are never read as the account's balance — the account's
+    //    balance still derives from journal lines, and the reconciliation compares the two.
+    // Each exemption is named table + column; any other balance/total column on any
+    // table is still a failure.
     const cols = await db.execute<{ table_name: string; column_name: string }>(sql`
       select table_name, column_name from information_schema.columns
       where table_schema = 'public'
         and (column_name ilike '%balance%' or column_name ilike '%running_total%'
              or column_name = 'total' or column_name ilike '%cached%')
         and not (table_name = 'invoices' and column_name in ('subtotal', 'tax_total', 'total'))
-        and not (table_name = 'bills' and column_name = 'total')`);
+        and not (table_name = 'bills' and column_name = 'total')
+        and not (table_name = 'bank_import_batches' and column_name in ('stated_beginning_balance', 'stated_ending_balance'))`);
     expect(cols.rows).toEqual([]);
   });
 });
