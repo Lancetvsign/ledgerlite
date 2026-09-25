@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { isCalendarDate } from '@/lib/dates';
+import { toMoney } from '@/lib/decimal';
 import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
@@ -215,6 +216,11 @@ export default async function AccountRegisterPage({
           <div className="flex justify-between rounded bg-neutral-900 px-3 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
             <span>Closing balance</span>
             <span className="tabular-nums" data-testid="register-closing">{formatMoney(register.closingBalance)}</span>
+          </div>
+          {/* LL-108: a period report's figure (income statement, cash flow) is the register's net movement, not its closing balance. */}
+          <div className="flex justify-between px-3 py-1 text-sm text-neutral-600 dark:text-neutral-400">
+            <span>Net change for the period (closing − opening)</span>
+            <span className="tabular-nums" data-testid="register-net-change">{formatMoney(toMoney(register.closingBalance).minus(toMoney(register.openingBalance)).toFixed(4))}</span>
           </div>
         </section>
       )}
