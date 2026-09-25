@@ -372,7 +372,7 @@ export async function assignSharedLines(
   for (const { line, accountId } of plans) {
     try {
       const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
-        if (!(await lockStagedLine(tx, ownerCompanyId, line.id))) return false;
+        if (!(await lockStagedLine(tx, ownerCompanyId, line.id, line.amount))) return false;
         const pair = await ensureIntercompanyPair(tx, actorUserId, ownerCompanyId, viewerCompanyId);
         await lockEntryCounters(tx, [ownerCompanyId, viewerCompanyId]);
         const groupId = randomUUID();

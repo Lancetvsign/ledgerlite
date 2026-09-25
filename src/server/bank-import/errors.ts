@@ -17,6 +17,10 @@ export type BankImportErrorCode =
   /** The batch has at least one POSTED line — it is part of the ledger's history now (LL-087). */
   | 'BATCH_HAS_POSTINGS'
   | 'LINE_NOT_FOUND'
+  /** LL-107: only a STAGED line can be corrected; a decided one is frozen. */
+  | 'LINE_NOT_EDITABLE'
+  /** LL-107: a line's amount was corrected between the reviewer's read and the post — reload. */
+  | 'LINE_CHANGED'
   /** A 'post' decision has no account. */
   | 'ACCOUNT_REQUIRED'
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */

@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
+import { amendImportLine, assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -915,6 +915,14 @@ const REGISTRY: IsolationDescriptor[] = [
           return await postImportLines(attacker, victim.companyId, batchId ?? '', {
             decisions: [{ lineId: lineId ?? '', action: 'post', accountId: acct.rows[0]?.id ?? victim.companyId }],
           });
+        },
+      },
+      {
+        operation: 'correct the amount of a staged line (LL-107)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId, lineId] = recordId.split(':');
+          return await amendImportLine(attacker, victim.companyId, batchId ?? '', lineId ?? '', { amount: '1.00' });
         },
       },
       {

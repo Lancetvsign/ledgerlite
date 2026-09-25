@@ -102,6 +102,15 @@ export const saveSharedDraftsInput = z.object({
 });
 export type SaveSharedDraftsInput = z.infer<typeof saveSharedDraftsInput>;
 
+/**
+ * LL-107: correct the amount of a STAGED line the extractor misread — the same signed money
+ * string the extractor's rows use (negative = money out), never a number, never zero.
+ */
+export const amendImportLineInput = z.object({
+  amount: signedMoneyString.refine((v) => /[1-9]/.test(v), 'Amount must be non-zero.'),
+});
+export type AmendImportLineInput = z.infer<typeof amendImportLineInput>;
+
 /** LL-097: from a member company, take STAGED lines of a shared card statement as its own expenses. */
 export const assignSharedLinesInput = z.object({
   decisions: z.array(z.object({ lineId: z.uuid(), accountId: z.uuid() })).min(1, 'Nothing to assign.'),

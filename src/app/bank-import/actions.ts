@@ -6,13 +6,13 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { BankImportError, deleteImportBatch, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { amendImportLine, BankImportError, deleteImportBatch, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
-import { postImportLinesInput, saveReviewDraftsInput, stageImportInput } from '@/validation/bank-import';
+import { amendImportLineInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
 
 /**
@@ -182,6 +182,27 @@ export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: 
     if (error instanceof AuthorizationDenied || error instanceof BankImportError) return { ok: false };
     throw error;
   }
+}
+
+/** Corrects the amount of a staged line the extractor misread — LL-107. */
+export async function amendImportLineAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  const lineId = opt(formData.get('lineId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  // Thousands separators and stray spaces are forgiven; the sign is the statement's (− = money out).
+  const amount = (opt(formData.get('amount')) ?? '').replace(/[,\s]/g, '');
+  const parsed = amendImportLineInput.safeParse({ amount });
+  if (!parsed.success) redirect(`/bank-import/${batchId}?error=AMOUNT_INVALID`);
+  try {
+    await amendImportLine(userId, companyId, batchId, lineId, parsed.data);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    throw error;
+  }
+  redirect(`/bank-import/${batchId}?ok=amended`);
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */
