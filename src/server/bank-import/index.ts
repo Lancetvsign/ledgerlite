@@ -19,13 +19,14 @@ import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payment
 import { isIdempotencyViolation, LedgerError, postEntryCore } from '@/server/ledger';
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
-import { extractedTransactionsSchema } from '@/validation/bank-import';
+import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
 import { auditIntercompanyLine, findIntercompanyCandidates, findOrganizationStatementMatches, markIntercompanyTransfer, matchIntercompanyTransfer, statementCounterpartFor, transferCounterparts, type IntercompanyCandidate, type OrganizationMatch } from './intercompany';
 import { BankImportError } from './errors';
-import { resolveExtractor, type TransactionExtractor } from './extract';
+import { resolveExtractor, toExtractionOutput, type TransactionExtractor } from './extract';
+import { summaryOf, verifyStatementTotals, type StatementVerification } from './verify';
 
 import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
@@ -238,11 +239,19 @@ export async function stageImport(
     bytes: input.fileBytes,
     context: { accounts: pickable.map((a) => ({ number: a.accountNumber, name: a.name, type: a.accountType })), examples, statementKind },
   });
-  const parsed = extractedTransactionsSchema.safeParse(raw);
+  const extraction = toExtractionOutput(raw);
+  // LL-109: the statement's own control figures. A malformed summary is dropped (logged as a
+  // field path), never a reason to reject the rows — the review then reads "not stated".
+  const summaryParsed = extraction.summary === undefined ? undefined : statementSummarySchema.safeParse(extraction.summary);
+  if (summaryParsed !== undefined && !summaryParsed.success) {
+    log.warn('bank-import: statement summary failed validation', { stage: 'validate', path: summaryParsed.error.issues[0]?.path.join('.') });
+  }
+  const summary = summaryParsed?.success === true ? summaryParsed.data : undefined;
+  const parsed = extractedTransactionsSchema.safeParse(extraction.transactions);
   if (!parsed.success) {
     // Field path + rule only — never the offending value (it is statement content, §9).
     const first = parsed.error.issues[0];
-    log.warn('bank-import: extracted rows failed validation', { stage: 'validate', rows: Array.isArray(raw) ? raw.length : -1, path: first?.path.join('.'), code: first?.code });
+    log.warn('bank-import: extracted rows failed validation', { stage: 'validate', rows: extraction.transactions.length, path: first?.path.join('.'), code: first?.code });
     throw new BankImportError('EXTRACTION_FAILED', `The extracted statement had a malformed row: ${first?.message ?? 'invalid'}.`);
   }
   const txns = parsed.data;
@@ -288,11 +297,24 @@ export async function stageImport(
   // Counts only — never a description or category (statement content, §9). `unmapped` is the
   // signal that the model named something the chart mapping could not resolve.
   log.info('bank-import: suggestions', { stage: 'suggest', rows: txns.length, ...tally });
+  const verification = verifyStatementTotals(txns.map((t) => t.amount), summary ?? null);
+  log.info('bank-import: statement totals', { stage: 'verify', status: verification.status, attempts: extraction.attempts ?? 1, checks: verification.checks.map((c) => `${c.name}:${c.difference}`).join(',') });
 
   return await getDbTx().transaction(async (tx) => {
     const batchRows = await tx
       .insert(schema.bankImportBatches)
-      .values({ companyId, bankAccountId: input.bankAccountId, filename: input.filename, createdBy: actorUserId, sharedWithOrganization: share })
+      .values({
+        companyId,
+        bankAccountId: input.bankAccountId,
+        filename: input.filename,
+        createdBy: actorUserId,
+        sharedWithOrganization: share,
+        statedBeginningBalance: summary?.beginningBalance ?? null,
+        statedTotalCredits: summary?.totalCredits ?? null,
+        statedTotalDebits: summary?.totalDebits ?? null,
+        statedEndingBalance: summary?.endingBalance ?? null,
+        extractionAttempts: extraction.attempts ?? 1,
+      })
       .returning();
     const batch = batchRows[0];
     if (batch === undefined) throw new Error('bank import batch insert returned no row');
@@ -373,6 +395,13 @@ export async function findTransferCandidates(
 export interface ImportBatchView {
   readonly batch: BankImportBatch;
   readonly lines: readonly ImportLineView[];
+  /** LL-109: the lines that still count (everything but IGNORED) against the statement's printed totals. */
+  readonly verification: StatementVerification;
+}
+
+/** LL-109: the verdict over the lines that still count — an IGNORED line was never a transaction. */
+export function verifyBatch(batch: BankImportBatch, lines: readonly { status: string; amount: string }[]): StatementVerification {
+  return verifyStatementTotals(lines.filter((l) => l.status !== 'IGNORED').map((l) => l.amount), summaryOf(batch));
 }
 
 /** The batch + its lines for review, or null for an unknown/other-company batch (no existence leak). */
@@ -444,6 +473,7 @@ export async function getImportBatch(
 
   return {
     batch,
+    verification: verifyBatch(batch, lines),
     lines: lines.map((l) => {
       const postedTwin = [...(postedByHash.get(l.dedupHash) ?? [])].some((id) => id !== l.id);
       const duplicateOf = postedTwin ? 'posted' : stagedElsewhereByHash.has(l.dedupHash) ? 'staged' : null;
@@ -471,6 +501,8 @@ export interface ImportBatchSummary extends BankImportBatch {
   readonly decidedCount: number;
   readonly draftCount: number;
   readonly reviewStatus: ReviewStatus;
+  /** LL-109: whether the lines that count add up to the statement's printed totals. */
+  readonly verificationStatus: StatementVerification['status'];
 }
 
 export function reviewStatusOf(c: { stagedCount: number; decidedCount: number; draftCount: number }): ReviewStatus {
@@ -491,19 +523,24 @@ export async function listImportBatches(actorUserId: string, companyId: string):
     .limit(20);
   if (batches.length === 0) return [];
   const ids = batches.map((b) => b.id);
-  const counts = new Map<string, { staged: number; decided: number }>();
-  const rows = await db.execute<{ batch_id: string; staged: string; decided: string }>(sql`
+  const counts = new Map<string, { staged: number; decided: number; credits: string; debits: string }>();
+  const rows = await db.execute<{ batch_id: string; staged: string; decided: string; credits: string; debits: string }>(sql`
     select batch_id::text as batch_id,
            count(*) filter (where status = 'STAGED')::text as staged,
-           count(*) filter (where status <> 'STAGED')::text as decided
+           count(*) filter (where status <> 'STAGED')::text as decided,
+           coalesce(sum(amount) filter (where status <> 'IGNORED' and amount > 0), 0)::numeric(19,4)::text as credits,
+           coalesce(sum(-amount) filter (where status <> 'IGNORED' and amount < 0), 0)::numeric(19,4)::text as debits
     from bank_import_lines
     where company_id = ${companyId} and batch_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
     group by batch_id`);
-  for (const r of rows.rows) counts.set(r.batch_id, { staged: Number(r.staged), decided: Number(r.decided) });
+  for (const r of rows.rows) counts.set(r.batch_id, { staged: Number(r.staged), decided: Number(r.decided), credits: r.credits, debits: r.debits });
   const drafts = await draftCountsByBatch(db, companyId, ids);
   return batches.map((b) => {
-    const c = { stagedCount: counts.get(b.id)?.staged ?? 0, decidedCount: counts.get(b.id)?.decided ?? 0, draftCount: drafts.get(b.id) ?? 0 };
-    return { ...b, ...c, reviewStatus: reviewStatusOf(c) };
+    const row = counts.get(b.id);
+    const c = { stagedCount: row?.staged ?? 0, decidedCount: row?.decided ?? 0, draftCount: drafts.get(b.id) ?? 0 };
+    // The database summed the lines that count; the verifier only needs the two sums (as one credit and one debit line).
+    const verification = verifyStatementTotals([row?.credits ?? '0', row === undefined || row.debits === '0.0000' ? '0' : `-${row.debits}`].filter((a) => a !== '0'), summaryOf(b));
+    return { ...b, ...c, reviewStatus: reviewStatusOf(c), verificationStatus: verification.status };
   });
 }
 
@@ -1033,7 +1070,9 @@ export async function postImportLines(
 export { BankImportError, PeriodClosedInCompanyError } from './errors';
 export type { BankImportErrorCode } from './errors';
 export { isExtractionConfigured } from './extract';
-export type { TransactionExtractor } from './extract';
+export type { ExtractionOutput, ExtractionResult, TransactionExtractor } from './extract';
+export { verifyStatementTotals, summaryOf } from './verify';
+export type { StatementVerification, VerificationCheck, VerificationStatus } from './verify';
 
 /**
  * LL-107 (ADR-046): correct the amount of a STAGED line the extractor misread. The figure it

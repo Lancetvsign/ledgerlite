@@ -143,6 +143,11 @@ export default async function BankImportPage({
                 <span className="text-xs text-neutral-500">
                   {String(b.stagedCount)} to review · {String(b.decidedCount)} done
                 </span>
+                {b.verificationStatus === 'mismatch' && (
+                  <span data-testid="batch-totals-mismatch" className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-800 dark:bg-red-900 dark:text-red-200">
+                    totals mismatch
+                  </span>
+                )}
               </li>
             ))}
           </ul>
