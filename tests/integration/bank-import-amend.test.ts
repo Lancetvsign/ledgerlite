@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { schema } from '@/db';
 import { getAuth } from '@/lib/auth';
 import { listAccounts } from '@/server/accounts';
-import { amendImportLine, BankImportError, getImportBatch, postImportLines, saveReviewDrafts, stageImport } from '@/server/bank-import';
+import { amendImportLine, BankImportError, getImportBatch, lockStagedLine, postImportLines, saveReviewDrafts, stageImport } from '@/server/bank-import';
 import { type TransactionExtractor } from '@/server/bank-import/extract';
 import { createCompanyWithOwner } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
@@ -156,6 +156,22 @@ describe('correcting a staged line', () => {
     const jl = await db.execute<{ debit: string; credit: string }>(sql`
       select debit::text, credit::text from journal_lines where journal_entry_id = ${posted.journalEntryId} and account_id = ${c.expenseId}`);
     expect(jl.rows[0]).toEqual({ debit: '2000.0000', credit: '0.0000' });
+  });
+
+  it('a post that planned with a figure the reviewer has since corrected is refused, never posted with the stale amount', async () => {
+    const c = await setup();
+    const { batch, lines } = await stage(c, c.bankId, MISREAD);
+    const stale = lines[2]!; // read before the correction
+    await amendImportLine(c.owner, c.companyId, batch.id, stale.id, { amount: '-2000.00' });
+    const db = await getTestDb();
+    // The lock every posting path takes compares the locked row with what the caller planned.
+    expect(await codeOf(db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, stale.amount)), BankImportError)).toBe('LINE_CHANGED');
+    expect(await db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, '-2000.0000'))).toBe(true);
+    // Through the service the fresh read wins: the corrected figure posts.
+    await postImportLines(c.owner, c.companyId, batch.id, { decisions: [{ lineId: stale.id, action: 'post', accountId: c.expenseId }] });
+    const posted = (await getImportBatch(c.owner, c.companyId, batch.id))!.lines[2]!;
+    const jl = await db.execute<{ debit: string }>(sql`select debit::text from journal_lines where journal_entry_id = ${posted.journalEntryId} and account_id = ${c.expenseId}`);
+    expect(jl.rows[0]!.debit).toBe('2000.0000');
   });
 
   it('a decided line is frozen — by the service and by the database; a line of another batch reads as not found', async () => {

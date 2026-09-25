@@ -186,6 +186,7 @@ function noticeFrom(sp: { error?: string; ok?: string; assigned?: string; closed
   if (error === 'CONTROL_ACCOUNT_NOT_ALLOWED') return 'Choose one of our active expense or asset accounts — never a control or intercompany account.';
   if (error === 'PERIOD_CLOSED') return closedInName === null ? 'A line falls in a closed accounting period.' : `A line falls in a closed accounting period in ${closedInName}.`;
   if (error === 'INTERCOMPANY_NOT_ALLOWED') return 'The two companies must be active members of one organization with the same currency.';
+  if (error === 'LINE_CHANGED') return 'A line was corrected by the cardholder while you were reviewing — check the figures and take it again.';
   if (error === 'LINE_NOT_FOUND' || error === 'BATCH_NOT_FOUND') return 'That line is no longer available — reload.';
   if (error === 'denied') return 'You need posting rights in both companies to take a line.';
   return 'The lines could not be taken.';

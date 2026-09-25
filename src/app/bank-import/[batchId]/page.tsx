@@ -479,6 +479,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
   if (sp.ok === 'amended') return 'Amount corrected. The suggestions and matches were recomputed for the new figure.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
+  if (sp.error === 'LINE_CHANGED') return 'A line was corrected while you were reviewing — the page has been reloaded; check the figures and post again.';
   if (sp.error === 'LINE_NOT_EDITABLE') return 'That line has already been decided; its amount cannot change.';
   if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';

@@ -19,6 +19,8 @@ export type BankImportErrorCode =
   | 'LINE_NOT_FOUND'
   /** LL-107: only a STAGED line can be corrected; a decided one is frozen. */
   | 'LINE_NOT_EDITABLE'
+  /** LL-107: a line's amount was corrected between the reviewer's read and the post — reload. */
+  | 'LINE_CHANGED'
   /** A 'post' decision has no account. */
   | 'ACCOUNT_REQUIRED'
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */
