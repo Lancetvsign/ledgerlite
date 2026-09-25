@@ -231,6 +231,35 @@ test('review choices survive leaving the page, and the list shows In progress â†
   await expect(page.getByTestId('batch-status')).toHaveText('Complete');
 });
 
+test('the statement\'s own totals are checked against the lines, and the check follows corrections (LL-109)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  // The canned statement prints its totals and the lines add up: verified.
+  await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'verified');
+  await expect(page.getByTestId('verification-check-ending_balance')).toHaveAttribute('data-ok', '1');
+  await expect(page.getByTestId('post-mismatch-warning')).toHaveCount(0);
+
+  // A correction to a wrong figure breaks the check â€” and the panel says by how much.
+  await page.getByTestId('amend-amount-1').click();
+  await page.getByTestId('amend-amount-input-1').fill('-1120.50');
+  await page.getByTestId('amend-amount-save-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'mismatch');
+  await expect(page.getByTestId('verification-check-debits')).toContainText('off by 1,000.00');
+  await expect(page.getByTestId('verification-check-ending_balance')).toContainText('off by -1,000.00');
+  await expect(page.getByTestId('post-mismatch-warning')).toBeVisible();
+  await page.goto('/bank-import');
+  await expect(page.getByTestId('batch-totals-mismatch')).toBeVisible();
+
+  // Correcting it back verifies again.
+  await page.getByTestId('batch-link').first().click();
+  await page.getByTestId('amend-amount-1').click();
+  await page.getByTestId('amend-amount-input-1').fill('-120.50');
+  await page.getByTestId('amend-amount-save-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'verified');
+});
+
 test('a misread amount is corrected before posting; the ledger carries the corrected figure (LL-107)', async ({ page }) => {
   await freshCompany(page);
   await uploadStatement(page);

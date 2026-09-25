@@ -8,10 +8,13 @@ import { z } from 'zod';
 import { log } from '@/lib/logging';
 
 import { BankImportError } from './errors';
-import { normalizeExtractedRow } from './normalize';
+import { normalizeAmount, normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
+import { verifyStatementTotals } from './verify';
 
-import type { ExtractedTransaction } from '@/validation/bank-import';
+import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
+
+import type { ExtractedTransaction, StatementSummary } from '@/validation/bank-import';
 
 /**
  * The transaction-extraction seam — LL-076.
@@ -75,7 +78,22 @@ export interface ExtractorInput {
   readonly context?: ExtractionContext;
 }
 
-export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractedTransaction[]>;
+/**
+ * LL-109: an extractor may return the rows alone (every test extractor does) or the rows with
+ * the statement's own control figures and how many model passes it took.
+ */
+export interface ExtractionOutput {
+  readonly transactions: ExtractedTransaction[];
+  readonly summary?: StatementSummary;
+  readonly attempts?: number;
+}
+export type ExtractionResult = ExtractedTransaction[] | ExtractionOutput;
+export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractionResult>;
+
+/** Rows-only or rows-with-summary → one shape. */
+export function toExtractionOutput(raw: ExtractionResult): ExtractionOutput {
+  return Array.isArray(raw) ? { transactions: raw } : raw;
+}
 
 export const notConfiguredExtractor: TransactionExtractor = () => {
   throw new BankImportError(
@@ -91,18 +109,27 @@ export const notConfiguredExtractor: TransactionExtractor = () => {
 export const cannedExtractor: TransactionExtractor = (input) =>
   Promise.resolve(
     input.context?.statementKind === 'credit_card'
-      ? [
+      ? {
           // A card statement (LL-088/094): two purchases and the payment that mirrors the
           // bank statement's "MONTHLY RENT PAYMENT" −2000 when that line is categorised to the card.
-          { date: '2026-06-02', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
-          { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
-          { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
-        ]
-      : [
-          { date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00', category: 'Sales Revenue' },
-          { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
-          { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
-        ],
+          transactions: [
+            { date: '2026-06-02', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+            { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
+            { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
+          ],
+          // LL-109: the statement's printed totals, in the card's sign convention (owed = negative):
+          // −1834.50 + 2000.00 − 165.50 = 0.00.
+          summary: { beginningBalance: '-1834.50', totalCredits: '2000.00', totalDebits: '165.50', endingBalance: '0.00' },
+        }
+      : {
+          transactions: [
+            { date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00', category: 'Sales Revenue' },
+            { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
+            { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
+          ],
+          // 5000.00 + 1500.00 − 2120.50 = 4379.50
+          summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '4379.50' },
+        },
   );
 
 // ---------------------------------------------------------------------------------------
@@ -118,6 +145,19 @@ export const DEFAULT_BANK_IMPORT_MODEL = 'anthropic/claude-sonnet-5';
  * `extractedTransactionsSchema` in `stageImport`, so this schema only shapes the request.
  */
 const modelOutputSchema = z.object({
+  /**
+   * LL-109: the statement's OWN printed control figures — read, never computed. Strings; all
+   * optional (omit what the statement does not print). Re-validated by `statementSummarySchema`.
+   */
+  summary: z
+    .object({
+      beginningBalance: z.string().optional().describe('The beginning / previous / opening balance the statement PRINTS, as a signed decimal string. For a credit card give the balance OWED as a NEGATIVE number.'),
+      totalCredits: z.string().optional().describe('The statement\'s printed total of money INTO the account (total deposits / credits / payments received), unsigned. Read it from the summary; never add it up yourself.'),
+      totalDebits: z.string().optional().describe('The statement\'s printed total of money OUT of the account (total withdrawals / debits / purchases / fees), unsigned. Read it; never add it up yourself.'),
+      endingBalance: z.string().optional().describe('The ending / new / closing balance the statement PRINTS, signed like the beginning balance (a card balance owed is negative).'),
+    })
+    .optional()
+    .describe('The control figures printed on the statement, or omitted when it prints none.'),
   transactions: z.array(
     z.object({
       date: z.string().describe('Transaction date as YYYY-MM-DD. Use the statement year if a line shows only month/day.'),
@@ -141,6 +181,8 @@ Rules:
 - date is YYYY-MM-DD. Infer the year from the statement period when a line shows only the month and day.
 - description is the statement's own text for the line, trimmed.
 - category is the account for the line, chosen ONLY from the company's chart of accounts given below (answer with the account number or its exact name). Follow the company's past decisions when a description matches one. Omit it rather than guess.
+- summary: also report the statement's OWN printed control figures — beginning balance, total credits (money in), total debits (money out), ending balance — exactly as printed. Never compute them from the lines; omit any the statement does not print. For a credit card, balances OWED are negative and payments received count as credits.
+The transactions you return must add up to those totals: beginning balance + total credits − total debits = ending balance. If yours do not, re-read the statement before answering.
 If the text contains no transactions, return an empty list.`;
 
 const MAX_CHART_ACCOUNTS = 300;
@@ -181,12 +223,51 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
     const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
     const contextPrompt = buildContextPrompt(context);
 
+    // One pass, checked against the statement's own totals (LL-109); on a mismatch ONE more
+    // pass with the discrepancy — figures only, never the text — fed back. The pass that
+    // verifies wins; if neither does, the second is staged and the review shows the gap.
+    const first = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`);
+    const checked = verify(first);
+    if (checked.status !== 'mismatch') return { ...first, attempts: 1 };
+    log.info('bank-import: statement totals mismatch — re-analysing', { stage: 'verify', attempt: 1, ...figures(checked) });
+    const feedback = `\n\nYour previous answer did not reconcile to the statement's own totals: ${checked.checks
+      .filter((c) => !c.ok)
+      .map((c) => `${c.name.replace('_', ' ')} — the statement states ${c.expected}, your lines give ${c.actual} (difference ${c.difference})`)
+      .join('; ')}. Re-read EVERY line of the statement: look for a line you dropped, merged, split or misread, and for a subtotal you included by mistake. Do not invent lines. Report the printed totals exactly.`;
+    const second = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`);
+    const rechecked = verify(second);
+    log.info('bank-import: re-analysis result', { stage: 'verify', attempt: 2, status: rechecked.status, ...figures(rechecked) });
+    return { ...second, attempts: 2 };
+  };
+}
+
+/** Counts and figures only (§9) — never a description, never the text. */
+function figures(v: ReturnType<typeof verifyStatementTotals>): Record<string, string> {
+  return Object.fromEntries(v.checks.map((c) => [c.name, c.difference]));
+}
+
+/**
+ * Check one model answer against its own summary. Only well-formed figures are compared: a row
+ * or a summary the strict validator would reject is left for `stageImport` to report (a
+ * malformed row rejects the batch there; a malformed summary reads as not stated) — the
+ * verifier itself must never throw on model output.
+ */
+function verify(out: ExtractionOutput): ReturnType<typeof verifyStatementTotals> {
+  const rows = extractedTransactionsSchema.safeParse(out.transactions);
+  const summary = out.summary === undefined ? undefined : statementSummarySchema.safeParse(out.summary);
+  if (!rows.success || (summary !== undefined && !summary.success)) {
+    return verifyStatementTotals([], null); // not_stated: nothing sound to check yet
+  }
+  return verifyStatementTotals(rows.data.map((t) => t.amount), summary?.data ?? null);
+}
+
+async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ExtractionOutput> {
     let output: z.infer<typeof modelOutputSchema>;
     try {
       const result = await generateText({
         model,
-        system: SYSTEM_PROMPT,
-        prompt: `${contextPrompt}Statement text:\n\n${text}`,
+        system,
+        prompt,
         output: Output.object({ schema: modelOutputSchema }),
         // No explicit temperature: some models reject one in structured-output mode, and
         // the gateway surfaces that as an opaque internal error.
@@ -218,11 +299,22 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       });
       throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
     }
-    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length });
+    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined });
     // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
     // validator sees them; anything else passes through untouched and is rejected there.
-    return output.transactions.map(normalizeExtractedRow);
-  };
+    const transactions = output.transactions.map(normalizeExtractedRow) as ExtractedTransaction[];
+    const summary = output.summary === undefined ? undefined : normalizeSummary(output.summary);
+    return summary === undefined ? { transactions } : { transactions, summary };
+}
+
+/** The four figures through the same notation canonicaliser as the lines; nothing else. */
+function normalizeSummary(raw: { beginningBalance?: string | undefined; totalCredits?: string | undefined; totalDebits?: string | undefined; endingBalance?: string | undefined }): StatementSummary {
+  const s: { -readonly [K in keyof StatementSummary]: StatementSummary[K] } = {};
+  if (raw.beginningBalance !== undefined) s.beginningBalance = normalizeAmount(raw.beginningBalance);
+  if (raw.totalCredits !== undefined) s.totalCredits = normalizeAmount(raw.totalCredits).replace(/^-/, '');
+  if (raw.totalDebits !== undefined) s.totalDebits = normalizeAmount(raw.totalDebits).replace(/^-/, '');
+  if (raw.endingBalance !== undefined) s.endingBalance = normalizeAmount(raw.endingBalance);
+  return s;
 }
 
 // ---------------------------------------------------------------------------------------

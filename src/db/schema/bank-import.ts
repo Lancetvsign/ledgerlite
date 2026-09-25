@@ -53,6 +53,18 @@ export const bankImportBatches = pgTable(
     filename: text('filename'),
     /** LL-097: a CARD statement the other companies of the organization may take lines from. */
     sharedWithOrganization: boolean('shared_with_organization').notNull().default(false),
+    /**
+     * LL-109: the statement's OWN control figures as printed (null = not printed / not found).
+     * Totals are magnitudes (≥ 0); balances are signed as the statement shows them. The
+     * verification verdict is never stored — it is derived from the lines' current amounts
+     * against these on every read, so a correction or an ignore moves it at once.
+     */
+    statedBeginningBalance: numeric('stated_beginning_balance', { precision: 19, scale: 4 }),
+    statedTotalCredits: numeric('stated_total_credits', { precision: 19, scale: 4 }),
+    statedTotalDebits: numeric('stated_total_debits', { precision: 19, scale: 4 }),
+    statedEndingBalance: numeric('stated_ending_balance', { precision: 19, scale: 4 }),
+    /** LL-109: how many model passes the extraction took (a re-analysis after a totals mismatch = 2). */
+    extractionAttempts: integer('extraction_attempts').notNull().default(1),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),

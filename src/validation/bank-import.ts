@@ -26,6 +26,25 @@ export const extractedTransactionSchema = z.object({
 export type ExtractedTransaction = z.infer<typeof extractedTransactionSchema>;
 export const extractedTransactionsSchema = z.array(extractedTransactionSchema);
 
+/** A magnitude — a statement's printed total of credits or debits is never negative. */
+const unsignedMoneyString = z
+  .string({ message: 'Amount must be a money string, never a number (ADR-004).' })
+  .regex(/^\d{1,15}(\.\d{1,4})?$/, 'A statement total is an unsigned money string.');
+
+/**
+ * LL-109: the statement's OWN control figures as printed. Totals are magnitudes; balances are
+ * in the import account's sign convention (a bank balance held is positive; a card balance
+ * OWED is negative), so `beginning + credits − debits = ending` is one rule for both. Every
+ * field is optional — a statement may print none of them.
+ */
+export const statementSummarySchema = z.object({
+  beginningBalance: signedMoneyString.optional(),
+  totalCredits: unsignedMoneyString.optional(),
+  totalDebits: unsignedMoneyString.optional(),
+  endingBalance: signedMoneyString.optional(),
+});
+export type StatementSummary = z.infer<typeof statementSummarySchema>;
+
 export const stageImportInput = z.object({
   /** The cash/bank account the statement is for (must be ACTIVE, ASSET, cashFlowCategory CASH). */
   bankAccountId: z.uuid(),

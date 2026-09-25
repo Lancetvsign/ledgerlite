@@ -1968,6 +1968,19 @@ carries CHECKs (POSTED ⇔ journal entry; targets only when POSTED; non-zero amo
 STAGED in another batch. Statement dates are read as US month/day (a locale assumption); an impossible month
 is rejected rather than swapped.
 
+**Amendment (LL-109 — the statement's own totals are the extraction's control):** the model is also asked
+for the statement's printed control figures — beginning balance, total credits, total debits, ending balance
+— read, never computed, in the import account's sign convention (a card balance owed is negative). A pure
+verifier checks the extracted lines against them: Σ credits, Σ debits, and `beginning + credits − debits =
+ending`, each only when its figures are printed; none printed is "not stated", never a mismatch. On a
+mismatch the extractor makes ONE more pass with the discrepancy fed back as figures only (never the
+statement text or the model's rows) and keeps the pass that reconciles, else the second. The figures are
+stored with the batch (`stated_*`, `extraction_attempts`); the verdict is never stored — it is derived on
+every read from the lines that still count (an IGNORED line never was a transaction), so an amount
+correction (LL-107) or an ignore moves it at once. The review screen shows every check with the statement's
+figure, the lines' figure and the difference; posting is warned, not blocked, while they disagree — a
+statement whose printed totals are themselves wrong, or that prints none, must still be importable.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner
