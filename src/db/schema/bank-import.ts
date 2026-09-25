@@ -80,6 +80,12 @@ export const bankImportLines = pgTable(
     description: text('description'),
     /** Signed statement amount, NUMERIC(19,4): positive = money INTO the bank, negative = out. */
     amount: numeric('amount', { precision: 19, scale: 4 }).notNull(),
+    /**
+     * LL-107: the figure the extractor read, kept from the FIRST correction on (null = never
+     * corrected). A STAGED line's amount may be corrected by the reviewer; once the line is
+     * decided the amount is frozen by trigger (0044).
+     */
+    amendedFrom: numeric('amended_from', { precision: 19, scale: 4 }),
     /** The category the extractor proposed (free text) — for reference and mapping. */
     aiCategory: text('ai_category'),
     /** The account initially suggested (AI-mapped, else history). Composite-FK'd, nullable. */

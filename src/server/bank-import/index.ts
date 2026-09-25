@@ -30,7 +30,7 @@ import { resolveExtractor, type TransactionExtractor } from './extract';
 import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
 import type { PostJournalEntryInput } from '@/validation/journal';
-import type { ExtractedTransaction, PostImportLinesInput, StageImportInput } from '@/validation/bank-import';
+import type { AmendImportLineInput, ExtractedTransaction, PostImportLinesInput, StageImportInput } from '@/validation/bank-import';
 
 /**
  * Bank-statement import service — LL-076.
@@ -1019,6 +1019,67 @@ export { BankImportError, PeriodClosedInCompanyError } from './errors';
 export type { BankImportErrorCode } from './errors';
 export { isExtractionConfigured } from './extract';
 export type { TransactionExtractor } from './extract';
+
+/**
+ * LL-107 (ADR-046): correct the amount of a STAGED line the extractor misread. The figure it
+ * read is kept in `amended_from` from the first correction on; the duplicate hash follows the
+ * corrected figure; the correction is audited. Every amount-derived suggestion (transfer,
+ * intercompany and organization matches, document amount-matches, duplicates) is recomputed on
+ * the next render and re-validated at post, so nothing else needs touching. A decided line is
+ * frozen — here (LINE_NOT_EDITABLE) and by trigger (0044).
+ */
+export async function amendImportLine(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+  lineId: string,
+  input: AmendImportLineInput,
+): Promise<{ amended: boolean }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  return await getDbTx().transaction(async (tx) => {
+    const batch = (
+      await tx
+        .select({ id: schema.bankImportBatches.id, bankAccountId: schema.bankImportBatches.bankAccountId })
+        .from(schema.bankImportBatches)
+        .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+        .limit(1)
+    )[0];
+    if (batch === undefined) throw new BankImportError('BATCH_NOT_FOUND', 'That import batch does not exist.');
+    const line = (
+      await tx
+        .select()
+        .from(schema.bankImportLines)
+        .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.batchId, batchId), eq(schema.bankImportLines.id, lineId)))
+        .for('update')
+        .limit(1)
+    )[0];
+    if (line === undefined) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
+    if (line.status !== 'STAGED') throw new BankImportError('LINE_NOT_EDITABLE', 'That line has already been decided; its amount cannot change.');
+    const next = toMoney(input.amount).toFixed(4);
+    if (toMoney(line.amount).eq(next)) return { amended: false };
+    const amendedFrom = line.amendedFrom ?? line.amount;
+    await tx
+      .update(schema.bankImportLines)
+      .set({
+        amount: next,
+        dedupHash: dedupHash(batch.bankAccountId, { date: line.txnDate, description: line.description ?? '', amount: next }),
+        amendedFrom,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id)));
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'BANK_IMPORT_LINE_AMENDED',
+      entityType: 'bank_import_line',
+      entityId: line.id,
+      before: { amount: line.amount },
+      after: { amount: next, amendedFrom },
+    });
+    return { amended: true };
+  });
+}
 
 /**
  * Deletes an uploaded statement (a batch and its lines) — AUTHORIZED (journal.post) —

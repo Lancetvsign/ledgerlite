@@ -18,7 +18,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { amendImportLineAction, deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
@@ -299,7 +299,35 @@ export default async function ReviewImportPage({
                       </span>
                     )}
                   </td>
-                  <td className="py-2 pr-2 text-right tabular-nums" data-testid={`import-amount-${String(i)}`}>{formatMoney(l.amount)}</td>
+                  <td className="py-2 pr-2 text-right tabular-nums">
+                    <span data-testid={`import-amount-${String(i)}`}>{formatMoney(l.amount)}</span>
+                    {l.amendedFrom !== null && (
+                      <span data-testid={`amended-flag-${String(i)}`} className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        corrected from {formatMoney(l.amendedFrom)}
+                      </span>
+                    )}
+                    {l.status === 'STAGED' && (
+                      // LL-107: a misread figure is corrected here, before anything posts. The inputs
+                      // belong to a form rendered OUTSIDE the review form (a nested form is dropped).
+                      <details className="mt-1 text-left">
+                        <summary className="cursor-pointer text-xs text-neutral-500" data-testid={`amend-amount-${String(i)}`}>Edit amount</summary>
+                        <span className="mt-1 flex items-center gap-1">
+                          <input
+                            form={`amend-${l.id}`}
+                            name="amount"
+                            defaultValue={l.amount}
+                            inputMode="decimal"
+                            aria-label="Corrected statement amount (negative = money out)"
+                            data-testid={`amend-amount-input-${String(i)}`}
+                            className="w-28 rounded border border-neutral-300 px-2 py-0.5 text-right text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                          />
+                          <button form={`amend-${l.id}`} type="submit" data-testid={`amend-amount-save-${String(i)}`} className="rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
+                            Save
+                          </button>
+                        </span>
+                      </details>
+                    )}
+                  </td>
                   {s !== null ? (
                     // Every staged row emits lineId, accountId, documentId, action — in this
                     // order, unconditionally — so the action can zip them by index.
@@ -399,6 +427,15 @@ export default async function ReviewImportPage({
             <input type="hidden" name="lineId" value={l.id} />
           </form>
         ))}
+      {view.lines
+        .filter((l) => l.status === 'STAGED')
+        .map((l) => (
+          // LL-107: the amount-correction form of each staged row (its input lives in the table).
+          <form key={`amend-${l.id}`} id={`amend-${l.id}`} action={amendImportLineAction}>
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            <input type="hidden" name="lineId" value={l.id} />
+          </form>
+        ))}
 
       {decided === 0 && (
         // Nothing from this upload has posted, so it is still a staging artifact and can be
@@ -440,6 +477,9 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
     );
   }
   if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
+  if (sp.ok === 'amended') return 'Amount corrected. The suggestions and matches were recomputed for the new figure.';
+  if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
+  if (sp.error === 'LINE_NOT_EDITABLE') return 'That line has already been decided; its amount cannot change.';
   if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
   if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';

@@ -231,6 +231,34 @@ test('review choices survive leaving the page, and the list shows In progress �
   await expect(page.getByTestId('batch-status')).toHaveText('Complete');
 });
 
+test('a misread amount is corrected before posting; the ledger carries the corrected figure (LL-107)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  // The canned statement's Office Depot line reads −120.50; suppose the parser dropped a digit.
+  await expect(page.getByTestId('import-amount-1')).toHaveText('-120.50');
+  await expect(page.getByTestId('amended-flag-1')).toHaveCount(0);
+  await page.getByTestId('amend-amount-1').click();
+  await page.getByTestId('amend-amount-input-1').fill('-1,120.50');
+  await page.getByTestId('amend-amount-save-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('import-amount-1')).toHaveText('-1,120.50');
+  await expect(page.getByTestId('amended-flag-1')).toContainText('corrected from -120.50');
+
+  // A malformed figure is refused with a clear message; the line is unchanged.
+  await page.getByTestId('amend-amount-1').click();
+  await page.getByTestId('amend-amount-input-1').fill('0');
+  await page.getByTestId('amend-amount-save-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Enter the signed statement amount');
+  await expect(page.getByTestId('import-amount-1')).toHaveText('-1,120.50');
+
+  // Post all three (suggestions preselected): the ledger carries the corrected figure.
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+  await expect(page.getByTestId('amend-amount-1')).toHaveCount(0); // decided lines cannot be edited
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('-1,620.50'); // 1500 − 1120.50 − 2000
+});
+
 test('a credit-card statement imports into the card account and increases what is owed (LL-088)', async ({ page }) => {
   await freshCompany(page);
   await page.goto('/bank-import');

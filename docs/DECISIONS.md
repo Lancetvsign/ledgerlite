@@ -2613,3 +2613,38 @@ which statements were half done. The owner hit this on the first real statement.
 - LL-106 builds on this table for a card payment that is "waiting for a match" from another
   company's statement (a transfer draft with no counterpart yet).
 
+## ADR-046 — A staged statement line may be corrected before it posts; the extracted figure is kept, the change audited, decided lines frozen
+
+**Status** Accepted · **Added by** LL-107 · **Decided by** product owner ("I need to be able to edit the amount of any item in an import. Assume the parse misread a number and I need to correct it.")
+
+### Context
+
+Statement lines are extracted by a model reading a PDF's text layer (LL-076, ADR-034). A misread digit
+could only be worked around by ignoring the line and posting a manual entry — which breaks the
+statement ↔ import tie, the duplicate detection and the reconciliation that depend on it.
+
+### Decision
+
+1. **A STAGED line's amount may be corrected by a reviewer with `journal.post`** (`amendImportLine`),
+   inside one transaction with the line locked. The correction re-derives the duplicate hash and leaves
+   every other suggestion to be recomputed on the next render and re-validated at post.
+2. **The figure the parser read is kept**: `bank_import_lines.amended_from` is set on the first
+   correction and never changed afterwards (null = never corrected). The review screen shows
+   "corrected from …" beside the amount.
+3. **Every correction is audited** (`BANK_IMPORT_LINE_AMENDED`, before/after amount). An equal figure
+   is a no-op with no audit row.
+4. **A decided line's amount is frozen structurally** (migration 0044): a BEFORE UPDATE trigger refuses
+   any change to `amount` once the status is not STAGED — the statement figure of a posted, ignored,
+   personal, taken, marked or matched line can never drift from what the ledger carries, even under raw
+   SQL. The service refuses first (`LINE_NOT_EDITABLE`).
+
+### Consequences
+
+- Only the amount is editable in this ticket; the date and description use the same mechanism and can
+  follow in a small ticket if the owner wants them.
+- A correction that changes a line's mirror relationship (transfer, intercompany, organization match,
+  document amount-match) simply produces a different suggestion on the next render; a saved draft
+  (LL-105) survives and is re-validated when it posts.
+- The duplicate check compares the corrected figure, so re-uploading the corrected statement flags the
+  twin and the misread figure no longer matches anything.
+
