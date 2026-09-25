@@ -12,6 +12,8 @@ import { normalizeAmount, normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
 import { verifyStatementTotals } from './verify';
 
+import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
+
 import type { ExtractedTransaction, StatementSummary } from '@/validation/bank-import';
 
 /**
@@ -244,9 +246,19 @@ function figures(v: ReturnType<typeof verifyStatementTotals>): Record<string, st
   return Object.fromEntries(v.checks.map((c) => [c.name, c.difference]));
 }
 
-/** Normalise and check one model answer; a summary that fails validation counts as not stated. */
+/**
+ * Check one model answer against its own summary. Only well-formed figures are compared: a row
+ * or a summary the strict validator would reject is left for `stageImport` to report (a
+ * malformed row rejects the batch there; a malformed summary reads as not stated) — the
+ * verifier itself must never throw on model output.
+ */
 function verify(out: ExtractionOutput): ReturnType<typeof verifyStatementTotals> {
-  return verifyStatementTotals(out.transactions.map((t) => t.amount), out.summary ?? null);
+  const rows = extractedTransactionsSchema.safeParse(out.transactions);
+  const summary = out.summary === undefined ? undefined : statementSummarySchema.safeParse(out.summary);
+  if (!rows.success || (summary !== undefined && !summary.success)) {
+    return verifyStatementTotals([], null); // not_stated: nothing sound to check yet
+  }
+  return verifyStatementTotals(rows.data.map((t) => t.amount), summary?.data ?? null);
 }
 
 async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ExtractionOutput> {

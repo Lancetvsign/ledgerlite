@@ -130,6 +130,19 @@ describe('createAiExtractor', () => {
     expect(out.transactions[0]!.amount).toBe('1050.00');
   });
 
+  it('never throws on a malformed figure: a bad row or summary is left for staging to report, with a single call (LL-109)', async () => {
+    const { model, calls } = modelSaying(
+      JSON.stringify({
+        summary: { beginningBalance: 'lots', totalCredits: '1500.00' },
+        transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: 'one thousand' }],
+      }),
+    );
+    const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
+    expect(calls()).toBe(1); // nothing sound to compare: no re-analysis
+    expect(out.transactions[0]!.amount).toBe('one thousand'); // stageImport's validator rejects it, with a field path only
+    expect(out.attempts).toBe(1);
+  });
+
   it('rejects a scan before calling the model', async () => {
     const { model, calls } = modelSaying('{"transactions":[]}');
     const scanned = createAiExtractor({ model, readText: () => Promise.reject(new BankImportError('SCANNED_PDF', 'no text layer')) });

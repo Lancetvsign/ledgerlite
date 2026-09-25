@@ -26,7 +26,7 @@ import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
 import { auditIntercompanyLine, findIntercompanyCandidates, findOrganizationStatementMatches, markIntercompanyTransfer, matchIntercompanyTransfer, statementCounterpartFor, transferCounterparts, type IntercompanyCandidate, type OrganizationMatch } from './intercompany';
 import { BankImportError } from './errors';
 import { resolveExtractor, toExtractionOutput, type TransactionExtractor } from './extract';
-import { summaryOf, verifyStatementTotals, type StatementVerification } from './verify';
+import { summaryOf, verifyStatementTotals, verifyTotals, type StatementVerification } from './verify';
 
 import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
@@ -538,8 +538,8 @@ export async function listImportBatches(actorUserId: string, companyId: string):
   return batches.map((b) => {
     const row = counts.get(b.id);
     const c = { stagedCount: row?.staged ?? 0, decidedCount: row?.decided ?? 0, draftCount: drafts.get(b.id) ?? 0 };
-    // The database summed the lines that count; the verifier only needs the two sums (as one credit and one debit line).
-    const verification = verifyStatementTotals([row?.credits ?? '0', row === undefined || row.debits === '0.0000' ? '0' : `-${row.debits}`].filter((a) => a !== '0'), summaryOf(b));
+    // The database summed the lines that count; the verifier only needs the two sums.
+    const verification = verifyTotals(row?.credits ?? '0', row?.debits ?? '0', summaryOf(b));
     return { ...b, ...c, reviewStatus: reviewStatusOf(c), verificationStatus: verification.status };
   });
 }

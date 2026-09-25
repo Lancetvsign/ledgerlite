@@ -57,6 +57,13 @@ function check(name: VerificationCheck['name'], expected: string, actual: Decima
 
 export function verifyStatementTotals(amounts: readonly string[], summary: StatementSummary | null | undefined): StatementVerification {
   const { credits, debits } = sums(amounts);
+  return verifyTotals(credits, debits, summary);
+}
+
+/** The same verdict from the two sums (the batch list has the database add the lines up). */
+export function verifyTotals(creditsIn: string | Decimal, debitsIn: string | Decimal, summary: StatementSummary | null | undefined): StatementVerification {
+  const credits = typeof creditsIn === 'string' ? toMoney(creditsIn) : creditsIn;
+  const debits = typeof debitsIn === 'string' ? toMoney(debitsIn) : debitsIn;
   const checks: VerificationCheck[] = [];
   if (summary?.totalCredits !== undefined) checks.push(check('credits', summary.totalCredits, credits));
   if (summary?.totalDebits !== undefined) checks.push(check('debits', summary.totalDebits, debits));
