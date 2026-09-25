@@ -27,6 +27,9 @@ import { requirePermission } from '@/server/authorization';
 export interface IntercompanyRow {
   readonly counterpartId: string;
   readonly counterpartLegalName: string;
+  /** LL-108: this company's pair accounts, for drilling into their registers (null until first used). */
+  readonly dueFromAccountId: string | null;
+  readonly dueToAccountId: string | null;
   /** This company's "Due from <counterpart>" balance (receivable, debit-natural). */
   readonly dueFrom: string;
   /** The counterpart's "Due to <this company>" balance (their payable, credit-natural). */
@@ -186,6 +189,8 @@ export async function getIntercompanyReport(
     return {
       counterpartId: r.counterpart_id,
       counterpartLegalName: r.counterpart_legal_name,
+      dueFromAccountId: r.due_from_id,
+      dueToAccountId: r.due_to_id,
       dueFrom: r.due_from,
       counterpartDueTo: r.counterpart_due_to,
       receivableDifference,

@@ -2268,6 +2268,16 @@ document screen yet, so their rows link to the journal entry.
 A multi-account general-ledger report, CSV export of the register, or drill-down from the trial
 balance / financial statements is wanted (each is a link to this page with `accountId`).
 
+**Amendment (LL-108 — drill-down):** every figure on a report is a link to what makes it up. An account's
+figure opens its register for the report's window (the register's closing balance equals the figure whatever
+the window's start, because the opening balance carries everything before it: the balance sheet uses the
+fiscal-year start, the trial balance January 1st of the as-of year, the income statement and cash flow their
+own period); a customer's or vendor's figure opens their statement as of the date; a computed line — net
+income, prior retained earnings — opens the income statement that computes it (prior retained earnings: all
+time up to the day before the fiscal year, since the ledger posts no closing entry, ADR-030); a dashboard
+headline opens its report and a recent-activity amount its entry. Subtotals and grand totals stay plain —
+they are sums of rows that link. Reads only; every target re-authorizes.
+
 ## ADR-041 — Team membership: invitations claimed on entry, the role ceiling, and last-owner protection
 
 **Status** Accepted · **Added by** LL-086 · **Decided by** product owner ("start LL-086")

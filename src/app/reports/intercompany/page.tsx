@@ -4,6 +4,7 @@ import { formatMoney } from '@/lib/money-format';
 import { getIntercompanyReport } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
+import { DrillLink, registerHref, yearStart } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -82,7 +83,7 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                 report.rows.map((r) => (
                   <tr key={r.counterpartId} data-testid="intercompany-row" data-mirrored={r.mirrored ? '1' : '0'} data-state={r.state} className="border-b border-neutral-100 dark:border-neutral-800">
                     <td className="py-2 pr-2">{r.counterpartLegalName}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueFrom)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueFromAccountId === null ? formatMoney(r.dueFrom) : <DrillLink href={registerHref(r.dueFromAccountId, yearStart(asOf), asOf)} amount={r.dueFrom} testid="intercompany-due-from-drill" />}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.receivableDifference)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500" data-testid="intercompany-receivable-in-transit">
@@ -91,7 +92,7 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                         <span className="ml-1 text-xs" data-testid="intercompany-transit-age">(oldest {String(r.inTransitOldestDays)} d)</span>
                       )}
                     </td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.dueTo)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueToAccountId === null ? formatMoney(r.dueTo) : <DrillLink href={registerHref(r.dueToAccountId, yearStart(asOf), asOf)} amount={r.dueTo} testid="intercompany-due-to-drill" />}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.payableDifference)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.payableInTransit)}</td>

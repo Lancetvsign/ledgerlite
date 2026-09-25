@@ -4,6 +4,7 @@ import { formatMoney } from '@/lib/money-format';
 import { getApAging } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
+import { DrillLink } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -64,17 +65,20 @@ export default async function ApAgingPage({
                   </td>
                 </tr>
               ) : (
-                aging!.vendors.map((v) => (
+                aging!.vendors.map((v) => {
+                  const href = `/reports/vendor-statement?vendorId=${v.vendorId}&to=${asOf}`;
+                  return (
                   <tr key={v.vendorId} data-testid="ap-aging-row" className="border-b border-neutral-100 dark:border-neutral-800">
-                    <td className="py-2 pr-2">{v.vendorName}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.current)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d1to30)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d31to60)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d61to90)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(v.buckets.d90plus)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(v.total)}</td>
+                    <td className="py-2 pr-2"><Link href={href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">{v.vendorName}</Link></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={v.buckets.current} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={v.buckets.d1to30} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={v.buckets.d31to60} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={v.buckets.d61to90} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={v.buckets.d90plus} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums font-medium"><DrillLink href={href} amount={v.total} testid="ap-aging-drill" /></td>
                   </tr>
-                ))
+                );
+                })
               )}
             </tbody>
             <tfoot>

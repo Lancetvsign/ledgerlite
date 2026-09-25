@@ -4,6 +4,7 @@ import { formatMoney } from '@/lib/money-format';
 import { getBalanceSheet } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
+import { BEGINNING_OF_TIME, dayBefore, DrillLink, incomeStatementHref, registerHref } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -54,27 +55,27 @@ export default async function BalanceSheetPage({
           <tbody>
             <SectionHeader label="Assets" />
             {bs.assets.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
             ))}
             <SubtotalLine label="Total assets" amount={bs.assets.total} testid="bs-assets-total" />
 
             <SectionHeader label="Liabilities" />
             {bs.liabilities.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
             ))}
             <SubtotalLine label="Total liabilities" amount={bs.liabilities.total} testid="bs-liabilities-total" />
 
             <SectionHeader label="Equity" />
             {bs.equity.accountRows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
             ))}
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Retained earnings (prior years)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-prior-retained">{formatMoney(bs.equity.priorRetainedEarnings)}</td>
+              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(BEGINNING_OF_TIME, dayBefore(bs.fiscalYearStart))} amount={bs.equity.priorRetainedEarnings} testid="bs-prior-retained" /></td>
             </tr>
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Net income (current year)</td>
-              <td className="py-2 pr-2 text-right tabular-nums" data-testid="bs-current-net-income">{formatMoney(bs.equity.currentNetIncome)}</td>
+              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(bs.fiscalYearStart, asOf)} amount={bs.equity.currentNetIncome} testid="bs-current-net-income" /></td>
             </tr>
             <SubtotalLine label="Total equity" amount={bs.equity.total} testid="bs-equity-total" />
           </tbody>
@@ -118,13 +119,13 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-function AccountLine({ number, name, amount }: { number: string | null; name: string; amount: string }) {
+function AccountLine({ number, name, amount, href }: { number: string | null; name: string; amount: string; href: string }) {
   return (
     <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
       <td className="py-2 pr-2">
         <span className="tabular-nums text-neutral-500">{number ?? '—'}</span> {name}
       </td>
-      <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(amount)}</td>
+      <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={href} amount={amount} testid="bs-drill" /></td>
     </tr>
   );
 }

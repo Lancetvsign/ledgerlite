@@ -4,6 +4,7 @@ import { formatMoney } from '@/lib/money-format';
 import { getTrialBalance } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
+import { DrillLink, registerHref, yearStart } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -69,9 +70,9 @@ export default async function TrialBalancePage({
                     <td className="py-2 pr-2 tabular-nums">{r.accountNumber ?? '—'}</td>
                     <td className="py-2 pr-2">{r.accountName}</td>
                     <td className="py-2 pr-2 text-neutral-500">{r.accountType}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.debits)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{formatMoney(r.credits)}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.balance)}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.debits} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.credits} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums font-medium"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.balance} testid="tb-drill" /></td>
                   </tr>
                 ))
               )}
