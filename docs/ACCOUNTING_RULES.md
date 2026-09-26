@@ -88,6 +88,14 @@ guard judges that flip too (a second trigger on the DRAFT→POSTED update). A `R
 carry `reversal_of_id`, and only a `REVERSAL` may (CHECK). Drafts remain editable. Proven in raw
 SQL, pinned by `tests/integration/ledger-schema.test.ts` and `line-immutability.test.ts`.
 
+### How to correct a posted transaction (LL-110)
+
+Never by editing it. The correction is always a reversal — the original stays visible, marked reversed:
+a manual entry is reversed from its page; a statement line is undone from its statement (entry reversed,
+line back to review, then corrected and posted again); a payment, bill payment or other document is voided
+on its own page. A posting cleared in a bank reconciliation is corrected with a manual entry between the
+two categories instead, so the reconciliation keeps agreeing with the ledger. See ADR-044's amendment.
+
 ### 4. No cross-company journal line
 
 A journal line may never reference an account belonging to a different company.

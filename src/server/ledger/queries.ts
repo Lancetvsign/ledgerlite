@@ -30,6 +30,16 @@ export interface JournalEntryLineView {
 export interface JournalEntryView {
   readonly entry: JournalEntry;
   readonly lines: readonly JournalEntryLineView[];
+  /** LL-110: the other end of a reversal (this entry's reversal, or the entry it reverses), by number. */
+  readonly reversedByNumber: number | null;
+  readonly reversalOfNumber: number | null;
+  /** LL-110: the statement batch of a BANK_IMPORT / INTERCOMPANY posting, where its Undo lives. */
+  readonly bankImportBatchId: string | null;
+  /**
+   * LL-110: the source that owns this entry's correction when a manual reversal is refused — the
+   * entry itself for a manual entry (or a reversal rooted in one), else the document / statement.
+   */
+  readonly rootSourceType: string;
 }
 
 /** A recent posted entry, summarised for the dashboard feed (LL-075). */
@@ -136,5 +146,32 @@ export async function getJournalEntry(
     .where(eq(schema.journalLines.journalEntryId, entryId))
     .orderBy(schema.journalLines.lineNumber);
 
-  return { entry, lines };
+  const numberOf = async (id: string | null): Promise<number | null> =>
+    id === null
+      ? null
+      : ((await db.select({ n: schema.journalEntries.entryNumber }).from(schema.journalEntries).where(and(eq(schema.journalEntries.companyId, companyId), eq(schema.journalEntries.id, id))).limit(1))[0]?.n ?? null);
+  // Walk a reversal chain to its root (the same rule the manual reversal applies — LL-066).
+  let rootSourceType: string = entry.sourceType;
+  let parent = entry.reversalOfId;
+  const seen = new Set<string>([entry.id]);
+  while (rootSourceType === 'REVERSAL' && parent !== null && !seen.has(parent)) {
+    seen.add(parent);
+    const p = (await db.select({ sourceType: schema.journalEntries.sourceType, reversalOfId: schema.journalEntries.reversalOfId }).from(schema.journalEntries).where(and(eq(schema.journalEntries.companyId, companyId), eq(schema.journalEntries.id, parent))).limit(1))[0];
+    if (p === undefined) break;
+    rootSourceType = p.sourceType;
+    parent = p.reversalOfId;
+  }
+  const batch =
+    entry.sourceType === 'BANK_IMPORT' || entry.sourceType === 'INTERCOMPANY'
+      ? ((await db.select({ batchId: schema.bankImportLines.batchId }).from(schema.bankImportLines).where(and(eq(schema.bankImportLines.companyId, companyId), sql`${schema.bankImportLines.id}::text = ${entry.sourceId ?? ''}`)).limit(1))[0]?.batchId ?? null)
+      : null;
+
+  return {
+    entry,
+    lines,
+    reversedByNumber: await numberOf(entry.reversedById),
+    reversalOfNumber: await numberOf(entry.reversalOfId),
+    bankImportBatchId: batch,
+    rootSourceType,
+  };
 }

@@ -18,7 +18,7 @@ import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 
-import { amendImportLineAction, deleteImportBatchAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
@@ -52,7 +52,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string; unposted?: string; detail?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -389,8 +389,21 @@ export default async function ReviewImportPage({
                           '—'
                         )}
                       </td>
-                      <td className="py-2 pr-2 text-neutral-500" data-testid={`import-status-${String(i)}`}>
-                        {l.status === 'ASSIGNED' ? `taken by ${l.assignedCompanyName ?? 'another company'}` : l.status}
+                      <td className="py-2 pr-2 text-neutral-500">
+                        <span data-testid={`import-status-${String(i)}`}>{l.status === 'ASSIGNED' ? `taken by ${l.assignedCompanyName ?? 'another company'}` : l.status}</span>
+                        {(l.status === 'POSTED' || l.status === 'PERSONAL') && l.postedSource !== 'INTERCOMPANY' && l.paymentId === null && l.billPaymentId === null && (
+                          // LL-110: a posting to the wrong account or amount is undone — the entry is
+                          // reversed and the line comes back for review. Bound to a form outside the
+                          // review form, like "Undo transfer".
+                          <button type="submit" form={`unpost-${l.id}`} data-testid={`unpost-line-${String(i)}`} className="ml-2 rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
+                            Undo posting
+                          </button>
+                        )}
+                        {(l.paymentId !== null || l.billPaymentId !== null) && (
+                          <span className="ml-2 text-xs" data-testid={`unpost-elsewhere-${String(i)}`}>
+                            (to undo, void the {l.paymentId !== null ? 'payment' : 'bill payment'})
+                          </span>
+                        )}
                         {l.status === 'POSTED' && l.postedSource === 'INTERCOMPANY' && (
                           // LL-100: a transfer marked/matched by mistake is reversed (both sides if
                           // matched). The button belongs to a form rendered OUTSIDE the review form —
@@ -436,6 +449,15 @@ export default async function ReviewImportPage({
           </form>
         ))}
       {view.lines
+        .filter((l) => (l.status === 'POSTED' || l.status === 'PERSONAL') && l.postedSource !== 'INTERCOMPANY' && l.paymentId === null && l.billPaymentId === null)
+        .map((l) => (
+          // LL-110: the "Undo posting" form of each posted row (its button lives in the table).
+          <form key={`unpost-${l.id}`} id={`unpost-${l.id}`} action={unpostImportLineAction}>
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            <input type="hidden" name="lineId" value={l.id} />
+          </form>
+        ))}
+      {view.lines
         .filter((l) => l.status === 'STAGED')
         .map((l) => (
           // LL-107: the amount-correction form of each staged row (its input lives in the table).
@@ -468,7 +490,7 @@ export default async function ReviewImportPage({
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string; unposted?: string; detail?: string }): string | null {
   if (sp.ok === 'posted') {
     const base = `Posted ${sp.posted ?? '0'} line(s), ignored ${sp.ignored ?? '0'}.`;
     const applied = sp.applied ?? '0';
@@ -485,6 +507,8 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
     );
   }
   if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
+  if (sp.ok === 'unposted') return `Posting undone: the entry is reversed and the line is back for review${sp.unposted === '2' ? ' — with the line on the other statement that was matched to it' : ''}. Correct it and post again.`;
+  if (sp.error === 'UNPOST_ELSEWHERE' || sp.error === 'LINE_RECONCILED') return sp.detail ?? 'That posting is undone elsewhere.';
   if (sp.ok === 'amended') return 'Amount corrected. The suggestions and matches were recomputed for the new figure.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
   if (sp.error === 'LINE_CHANGED') return 'A line was corrected while you were reviewing — the page has been reloaded; check the figures and post again.';

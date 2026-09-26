@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { amendImportLine, BankImportError, deleteImportBatch, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { amendImportLine, BankImportError, deleteImportBatch, unpostImportLine, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
@@ -182,6 +182,31 @@ export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: 
     if (error instanceof AuthorizationDenied || error instanceof BankImportError) return { ok: false };
     throw error;
   }
+}
+
+/**
+ * Undoes a posted import line — LL-110: its entry is reversed and it returns to review. The
+ * refusal messages (undone elsewhere, reconciled) are fixed service text naming the right place
+ * — never statement content — so they are carried to the notice as-is.
+ */
+export async function unpostImportLineAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const batchId = opt(formData.get('batchId')) ?? '';
+  const lineId = opt(formData.get('lineId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  let unposted = 0;
+  try {
+    ({ unposted } = await unpostImportLine(userId, companyId, batchId, lineId));
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof BankImportError && (error.code === 'UNPOST_ELSEWHERE' || error.code === 'LINE_RECONCILED')) {
+      redirect(`/bank-import/${batchId}?error=${error.code}&detail=${encodeURIComponent(error.message)}`);
+    }
+    if (error instanceof BankImportError || error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    throw error;
+  }
+  redirect(`/bank-import/${batchId}?ok=unposted&unposted=${String(unposted)}`);
 }
 
 /** Corrects the amount of a staged line the extractor misread — LL-107. */

@@ -21,6 +21,10 @@ export type BankImportErrorCode =
   | 'LINE_NOT_EDITABLE'
   /** LL-107: a line's amount was corrected between the reviewer's read and the post — reload. */
   | 'LINE_CHANGED'
+  /** LL-110: this line is undone somewhere else (void its payment, Undo transfer, the taker's give-back, the ignore's Undo). */
+  | 'UNPOST_ELSEWHERE'
+  /** LL-110: the line's posting is cleared in a bank reconciliation. */
+  | 'LINE_RECONCILED'
   /** A 'post' decision has no account. */
   | 'ACCOUNT_REQUIRED'
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */

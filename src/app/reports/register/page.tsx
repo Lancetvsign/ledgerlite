@@ -5,9 +5,10 @@ import { toMoney } from '@/lib/decimal';
 import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
-import { getAccountRegister, type AccountRegisterLine } from '@/server/reports';
+import { getAccountRegister } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
+import { sourceHref } from '../source-href';
 
 /**
  * Account Register screen — LL-085. Pure presentation over `getAccountRegister`:
@@ -39,27 +40,6 @@ const SOURCE_LABEL: Record<string, string> = {
   BANK_IMPORT: 'Bank import',
 };
 
-/** Where "the source" of a line lives; falls back to the journal entry's own page. */
-function sourceHref(l: AccountRegisterLine): string {
-  const id = l.sourceId !== null && isUuid(l.sourceId) ? l.sourceId : null;
-  switch (l.sourceType) {
-    case 'INVOICE':
-      return id !== null ? `/invoices/${id}` : `/journal/${l.entryId}`;
-    case 'EXPENSE':
-      return id !== null ? `/bills/${id}` : `/journal/${l.entryId}`;
-    case 'CUSTOMER_PAYMENT':
-      return id !== null ? `/payments/${id}` : `/journal/${l.entryId}`;
-    case 'BILL_PAYMENT':
-      return id !== null ? `/bill-payments/${id}` : `/journal/${l.entryId}`;
-    case 'BANK_IMPORT':
-    case 'INTERCOMPANY':
-      return l.bankImportBatchId !== null ? `/bank-import/${l.bankImportBatchId}` : `/journal/${l.entryId}`;
-    case 'REVERSAL':
-      return l.reversalOfId !== null ? `/journal/${l.reversalOfId}` : `/journal/${l.entryId}`;
-    default:
-      return `/journal/${l.entryId}`;
-  }
-}
 
 export default async function AccountRegisterPage({
   searchParams,

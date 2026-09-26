@@ -2020,7 +2020,11 @@ gates (GL-T018/T025) depend on it.
   requires `payment.create` / `bill_payment.create` (today implied by `journal.post`'s roles; checked
   explicitly). No new capabilities.
 - **Undo:** void the payment / bill payment (existing flows). The line stays POSTED and keeps its link (FK
-  restrict); the document reopens through the normal void path.
+  restrict); the document reopens through the normal void path. **Superseded by LL-110 (2026-09-26, owner-
+  approved plan):** the void now also returns the line to STAGED with its payment link cleared (audited
+  `BANK_IMPORT_LINE_UNPOSTED`, the payment id kept in the audit row). A line left POSTED against a reversed
+  entry claimed a posting that no longer stood — the bank account no longer carried the deposit while the
+  statement did — and could not be applied again.
 
 ### Consequences
 
@@ -2588,6 +2592,23 @@ setting, and no trust in the caller; it is the same shape the database already p
   one behind.
 - Not addressed: a structural "both sides" rule for intercompany groups (5c N5) — a one-member group is
   legal at the database and is what "in transit" is.
+
+**Amendment (LL-110 — every posted transaction has a correction path, and none is an edit):**
+
+| Posted by | How it is corrected |
+|---|---|
+| A manual journal entry (or a reversal rooted in one) | **Reverse** on the entry's page → its own page with a preview and a reversal date → a new entry with every debit and credit swapped; the original stays, marked reversed, with links both ways. |
+| A statement import, posted to an account or marked personal | **Undo posting** on the statement: the entry is reversed (dated the company's today, open period) and the line returns to review, where its account or amount (LL-107) can be corrected and it is posted afresh. A line on another statement that was matched to it (LL-094) returns with it. |
+| A statement line matched to another line's posting | **Undo posting** returns only this line (nothing of its own to reverse; the other posting stands). |
+| A statement line applied to an invoice or bill | **Void the payment / bill payment** — the void now also returns the line to review. |
+| An intercompany transfer / a line another company took / an ignored line | "Undo transfer" (LL-100) / the taker's give-back (LL-097) / the ignore's Undo (LL-089). |
+| An invoice, bill, credit, write-off | Void the document (ADR-025). |
+
+A posting cleared in a bank reconciliation is not undone from the statement (the ledger must keep agreeing
+with the reconciliation): in progress — unclear it first; completed — correct the category with a manual
+entry between the two accounts, which never touches the bank. Every undo is audited
+(`BANK_IMPORT_LINE_UNPOSTED`, migration 0046) and takes the same locks as posting (both statement lines in
+id order, then company → entry → counter).
 
 ## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
 

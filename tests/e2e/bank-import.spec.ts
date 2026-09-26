@@ -231,6 +231,32 @@ test('review choices survive leaving the page, and the list shows In progress �
   await expect(page.getByTestId('batch-status')).toHaveText('Complete');
 });
 
+test('a posted line is undone — reversed and back for review — then posted to the right account (LL-110)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  // Post the Office Depot line to the wrong account (Utilities), ignore the others.
+  await page.getByTestId('import-account-1').selectOption({ label: '6800 · Utilities' });
+  await page.getByTestId('import-action-0').selectOption('ignore');
+  await page.getByTestId('import-action-2').selectOption('ignore');
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
+  await expect(page.getByTestId('import-status-1')).toHaveText('POSTED');
+
+  await page.getByTestId('unpost-line-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Posting undone', { timeout: 15_000 });
+  await expect(page.getByTestId('import-action-1')).toBeVisible(); // back in review, with its controls
+
+  await page.getByTestId('import-account-1').selectOption({ label: '6300 · Office Supplies' });
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s)', { timeout: 15_000 });
+
+  // Only the right account carries it; the wrong one nets to zero through the reversal.
+  await page.goto('/reports/trial-balance');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Office Supplies' })).toContainText('120.50');
+  await expect(page.getByTestId('trial-balance-row').filter({ hasText: 'Utilities' })).toContainText('0.00');
+  await expect(page.getByTestId('tb-balanced')).toContainText('Balanced');
+});
+
 test('the statement\'s own totals are checked against the lines, and the check follows corrections (LL-109)', async ({ page }) => {
   await freshCompany(page);
   await uploadStatement(page);
