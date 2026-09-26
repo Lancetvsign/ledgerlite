@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 
 import Decimal from 'decimal.js';
 
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 
 import '@/lib/decimal'; // configure decimal.js globally (ADR-004)
 import { getDb, getDbTx, schema } from '@/db';
@@ -1086,7 +1086,7 @@ export type { StatementVerification, VerificationCheck, VerificationStatus } fro
  *  - Applied to an invoice/bill, an intercompany transfer, taken by another company, or ignored:
  *    undone elsewhere (void the payment, Undo transfer, the taker's give-back, the ignore's Undo).
  *  - A posting cleared in a bank reconciliation is refused: the ledger must keep agreeing with it.
- * Lock order: both lines FOR UPDATE in id order (a concurrent match locks the same pair), then
+ * Lock order: this line and the lines matched to it FOR UPDATE in one statement (id order), then
  * `reverseEntryCore` (company KEY SHARE → entry → counter), as every posting.
  */
 export async function unpostImportLine(
@@ -1144,17 +1144,6 @@ export async function unpostImportLine(
     }
   }
 
-  // The line matched TO this one (LL-094), if any: it shares this entry and goes back with it.
-  const mirror = matched
-    ? undefined
-    : (
-        await db
-          .select({ id: schema.bankImportLines.id })
-          .from(schema.bankImportLines)
-          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.mirrorOfLineId, line.id)))
-          .limit(1)
-      )[0];
-
   const company = (await db.select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
   const reversalDate = todayInTimeZone(company?.timezone ?? 'UTC');
   if (!matched && (await getAccountingPeriod(companyId, reversalDate)).status !== 'OPEN') {
@@ -1163,22 +1152,32 @@ export async function unpostImportLine(
 
   try {
     return await getDbTx().transaction(async (tx) => {
-      const ids = [line.id, ...(mirror === undefined ? [] : [mirror.id])].sort();
-      const locked = new Map<string, BankImportLine>();
-      for (const id of ids) {
-        const row = (await tx.select().from(schema.bankImportLines).where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, id))).for('update'))[0];
-        if (row !== undefined) locked.set(id, row);
-      }
-      const me = locked.get(line.id);
+      // This line and any line matched TO it (LL-094 — it shares this entry and goes back with it),
+      // locked in ONE statement, read inside the transaction. A match of this line still in flight
+      // holds only its own (STAGED, unlinked) row and then waits for this one: it cannot be
+      // selected here, so no lock cycle; once this line is STAGED that match is refused.
+      const lockedRows = await tx
+        .select()
+        .from(schema.bankImportLines)
+        .where(
+          and(
+            eq(schema.bankImportLines.companyId, companyId),
+            matched ? eq(schema.bankImportLines.id, line.id) : or(eq(schema.bankImportLines.id, line.id), eq(schema.bankImportLines.mirrorOfLineId, line.id)),
+          ),
+        )
+        .orderBy(schema.bankImportLines.id)
+        .for('update');
+      const me = lockedRows.find((r) => r.id === line.id);
       // Decided or undone concurrently: nothing to do (the loser of a race changes nothing).
       if (me === undefined || me.status === 'STAGED' || me.journalEntryId !== entryId) return { unposted: 0, reversalEntryId: null };
+      const mirrors = lockedRows.filter((r) => r.id !== line.id && r.status !== 'STAGED' && r.journalEntryId === entryId);
 
       let reversalEntryId: string | null = null;
       if (!matched) {
         const reversal = await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: `Import line undone: ${line.description ?? `line ${String(line.lineNumber)}`}` }, reversalDate);
         reversalEntryId = reversal.entry.id;
       }
-      const back = [me, ...(mirror === undefined ? [] : [locked.get(mirror.id)].filter((x): x is BankImportLine => x !== undefined && x.status !== 'STAGED' && x.journalEntryId === entryId))];
+      const back = [me, ...mirrors];
       for (const l of back) {
         await tx
           .update(schema.bankImportLines)
