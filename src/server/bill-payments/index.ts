@@ -392,6 +392,27 @@ export async function voidBillPayment(
       reversalDate,
     );
 
+    // LL-110: a bank-statement line applied to this bill payment (LL-077) returns to review with the
+    // void — it points at the entry just reversed, so leaving it POSTED would claim a posting
+    // that no longer stands. It can then be categorised or applied again.
+    const importLines = await tx
+      .update(schema.bankImportLines)
+      .set({ status: 'STAGED', billPaymentId: null, journalEntryId: null, chosenAccountId: null, updatedAt: sql`now()` })
+      .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.billPaymentId, billPaymentId), eq(schema.bankImportLines.status, 'POSTED')))
+      .returning({ id: schema.bankImportLines.id });
+    for (const l of importLines) {
+      await recordAuditEvent({
+        tx,
+        companyId,
+        actorUserId,
+        action: 'BANK_IMPORT_LINE_UNPOSTED',
+        entityType: 'bank_import_line',
+        entityId: l.id,
+        before: { status: 'POSTED', billPaymentId: billPaymentId },
+        after: { status: 'STAGED', reason: 'bill payment voided' },
+      });
+    }
+
     // Any bill this payment had fully paid is no longer fully paid → back to OPEN.
     if (appliedBillIds.length > 0) {
       await tx

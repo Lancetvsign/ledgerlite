@@ -64,6 +64,36 @@ test('posts a balanced entry and lands on the immutable detail', async ({ page }
   await expect(page.locator('input')).toHaveCount(0); // nothing editable
 });
 
+test('a posted manual entry is corrected by reversal, never by editing (LL-110)', async ({ page }) => {
+  await freshCompany(page);
+  await page.goto('/journal/new');
+  await page.getByLabel('Transaction date').fill('2026-02-10');
+  await page.getByLabel('Posting date').fill('2026-02-10');
+  await page.getByLabel('Reference / description').fill('Booked to the wrong account');
+  await fillLine(page, 0, 'Checking', { debit: '75.00' });
+  await fillLine(page, 1, 'Sales Revenue', { credit: '75.00' });
+  await page.getByTestId('post-entry').click();
+  await expect(page).toHaveURL(/\/journal\/[0-9a-f-]{36}$/);
+  const originalUrl = page.url();
+  await expect(page.locator('input')).toHaveCount(0); // the entry page itself stays free of any field
+
+  await page.getByTestId('reverse-entry-open').click();
+  await expect(page).toHaveURL(/\/journal\/[0-9a-f-]{36}\/reverse$/);
+  await expect(page.getByTestId('reverse-preview')).toContainText('Checking');
+  await page.getByTestId('reverse-entry-reason').fill('Wrong account');
+  await page.getByTestId('reverse-entry-confirm').click();
+
+  // Lands on the NEW reversal, which links back; the original is kept, marked reversed.
+  await expect(page.getByTestId('notice')).toContainText('Reversal posted', { timeout: 15_000 });
+  await expect(page.getByTestId('entry-status')).toHaveText('POSTED');
+  await expect(page.getByTestId('reversal-of-link')).toBeVisible();
+  await expect(page.getByTestId('reverse-entry-open')).toHaveCount(1); // a reversal of a manual entry is itself reversible
+  await page.goto(originalUrl);
+  await expect(page.getByTestId('entry-status')).toHaveText('REVERSED');
+  await expect(page.getByTestId('reversed-by-link')).toBeVisible();
+  await expect(page.getByTestId('reverse-entry-open')).toHaveCount(0);
+});
+
 test('the server rejects an unbalanced entry even when Submit is bypassed', async ({ page }) => {
   await freshCompany(page);
   await page.goto('/journal/new');

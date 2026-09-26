@@ -6,9 +6,10 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { LedgerError, postJournalEntry } from '@/server/ledger';
+import { LedgerError, postJournalEntry, reverseJournalEntry } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
-import { postJournalEntryInput } from '@/validation/journal';
+import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
+import { isUuid } from '@/lib/uuid';
 
 /**
  * Manual journal-entry posting action — LL-035.
@@ -96,3 +97,36 @@ function emptyToUndefined(v: FormDataEntryValue | null): string | undefined {
   const s = typeof v === 'string' ? v.trim() : '';
   return s === '' ? undefined : s;
 }
+
+/**
+ * Reverses a posted MANUAL journal entry — LL-110. The service (`reverseJournalEntry`, LL-033)
+ * re-authorizes `journal.post`, refuses a document's entry (its correction is the document's
+ * void — ADR-025), checks the reversal date's period, and posts the swap as a new entry. Lands
+ * on the new reversal.
+ */
+export async function reverseJournalEntryAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const rawEntryId = formData.get('entryId');
+  const entryId = typeof rawEntryId === 'string' ? rawEntryId.trim() : '';
+  if (!isUuid(entryId)) redirect('/journal/new');
+  const rawDate = formData.get('reversalDate');
+  const rawReason = formData.get('reason');
+  const parsed = reverseJournalEntryInput.safeParse({
+    companyId,
+    actorUserId: userId,
+    entryId,
+    ...(typeof rawDate === 'string' && rawDate.trim() !== '' ? { reversalDate: rawDate.trim() } : {}),
+    ...(typeof rawReason === 'string' && rawReason.trim() !== '' ? { description: rawReason.trim() } : {}),
+  });
+  if (!parsed.success) redirect(`/journal/${entryId}?error=invalid`);
+  let reversalId: string;
+  try {
+    reversalId = (await reverseJournalEntry(parsed.data)).entry.id;
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(`/journal/${entryId}?error=denied`);
+    if (error instanceof LedgerError) redirect(`/journal/${entryId}?error=${error.code}`);
+    throw error;
+  }
+  redirect(`/journal/${reversalId}?ok=reversed`);
+}
+

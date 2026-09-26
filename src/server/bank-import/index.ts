@@ -16,9 +16,10 @@ import { isStatementAccount } from '@/server/accounts/statement-account';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
-import { isIdempotencyViolation, LedgerError, postEntryCore } from '@/server/ledger';
+import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, toLedgerDomainError } from '@/server/ledger';
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
+import { todayInTimeZone } from '@/lib/dates';
 import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
@@ -1073,6 +1074,134 @@ export { isExtractionConfigured } from './extract';
 export type { ExtractionOutput, ExtractionResult, TransactionExtractor } from './extract';
 export { verifyStatementTotals, summaryOf } from './verify';
 export type { StatementVerification, VerificationCheck, VerificationStatus } from './verify';
+
+/**
+ * LL-110 (ADR-044 amendment): undo a posted import line — the correction for a line posted to the
+ * wrong account or amount. Nothing is edited: the line's own entry is REVERSED (dated the
+ * company's today, in an open period) and the line returns to STAGED, where it can be corrected
+ * (account, amount — LL-107) and posted afresh.
+ *  - Posted to an account / PERSONAL: reverse its BANK_IMPORT entry; a line on another statement
+ *    that was MATCHED to it (LL-094) goes back to STAGED too — both sides of the one movement.
+ *  - Matched to another line's posting: no reversal; only this line goes back (the other stands).
+ *  - Applied to an invoice/bill, an intercompany transfer, taken by another company, or ignored:
+ *    undone elsewhere (void the payment, Undo transfer, the taker's give-back, the ignore's Undo).
+ *  - A posting cleared in a bank reconciliation is refused: the ledger must keep agreeing with it.
+ * Lock order: both lines FOR UPDATE in id order (a concurrent match locks the same pair), then
+ * `reverseEntryCore` (company KEY SHARE → entry → counter), as every posting.
+ */
+export async function unpostImportLine(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+  lineId: string,
+): Promise<{ unposted: number; reversalEntryId: string | null }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  const db = getDb();
+  const line = (
+    await db
+      .select()
+      .from(schema.bankImportLines)
+      .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.batchId, batchId), eq(schema.bankImportLines.id, lineId)))
+      .limit(1)
+  )[0];
+  if (line === undefined) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
+  if (line.status === 'STAGED') return { unposted: 0, reversalEntryId: null }; // already back: idempotent
+  if (line.status === 'IGNORED') throw new BankImportError('UNPOST_ELSEWHERE', 'That line was ignored, not posted — use its Undo to bring it back.');
+  if (line.status === 'ASSIGNED') throw new BankImportError('UNPOST_ELSEWHERE', 'Another company took that line — it gives it back from its own "Shared with you" page.');
+  if (line.paymentId !== null) throw new BankImportError('UNPOST_ELSEWHERE', 'That line was applied to an invoice — void the customer payment it created; the line then comes back for review.');
+  if (line.billPaymentId !== null) throw new BankImportError('UNPOST_ELSEWHERE', 'That line was applied to a bill — void the bill payment it created; the line then comes back for review.');
+  if (line.journalEntryId === null) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
+  const entryId = line.journalEntryId;
+  const matched = line.mirrorOfLineId !== null; // posted against the OTHER line's entry
+  const entry = (
+    await db
+      .select({ sourceType: schema.journalEntries.sourceType, status: schema.journalEntries.status })
+      .from(schema.journalEntries)
+      .where(and(eq(schema.journalEntries.companyId, companyId), eq(schema.journalEntries.id, entryId)))
+      .limit(1)
+  )[0];
+  if (entry?.sourceType === 'INTERCOMPANY') throw new BankImportError('UNPOST_ELSEWHERE', 'That line is an intercompany transfer — use "Undo transfer" on it.');
+  if (!matched && entry?.sourceType !== 'BANK_IMPORT') throw new BankImportError('UNPOST_ELSEWHERE', 'That line was not posted by this import; correct it where it was posted.');
+
+  // Reconciled postings stay as they are (the statement was matched to them).
+  if (!matched) {
+    const cleared = await db.execute<{ status: string; statement_date: string }>(sql`
+      select r.status::text as status, r.statement_date::text as statement_date
+      from bank_reconciliation_lines rl
+      join bank_reconciliations r on r.company_id = rl.company_id and r.id = rl.reconciliation_id
+      join journal_lines l on l.company_id = rl.company_id and l.id = rl.journal_line_id
+      where rl.company_id = ${companyId} and l.journal_entry_id = ${entryId}
+      order by (r.status::text = 'COMPLETED') desc
+      limit 1`);
+    const rec = cleared.rows[0];
+    if (rec !== undefined) {
+      throw new BankImportError(
+        'LINE_RECONCILED',
+        rec.status === 'COMPLETED'
+          ? `That posting is part of the reconciliation completed for ${rec.statement_date}. Correct the category with a journal entry between the two accounts instead.`
+          : `That posting is cleared in the reconciliation in progress for ${rec.statement_date} — unclear it there first.`,
+      );
+    }
+  }
+
+  // The line matched TO this one (LL-094), if any: it shares this entry and goes back with it.
+  const mirror = matched
+    ? undefined
+    : (
+        await db
+          .select({ id: schema.bankImportLines.id })
+          .from(schema.bankImportLines)
+          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.mirrorOfLineId, line.id)))
+          .limit(1)
+      )[0];
+
+  const company = (await db.select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
+  const reversalDate = todayInTimeZone(company?.timezone ?? 'UTC');
+  if (!matched && (await getAccountingPeriod(companyId, reversalDate)).status !== 'OPEN') {
+    throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${reversalDate} is closed.`);
+  }
+
+  try {
+    return await getDbTx().transaction(async (tx) => {
+      const ids = [line.id, ...(mirror === undefined ? [] : [mirror.id])].sort();
+      const locked = new Map<string, BankImportLine>();
+      for (const id of ids) {
+        const row = (await tx.select().from(schema.bankImportLines).where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, id))).for('update'))[0];
+        if (row !== undefined) locked.set(id, row);
+      }
+      const me = locked.get(line.id);
+      // Decided or undone concurrently: nothing to do (the loser of a race changes nothing).
+      if (me === undefined || me.status === 'STAGED' || me.journalEntryId !== entryId) return { unposted: 0, reversalEntryId: null };
+
+      let reversalEntryId: string | null = null;
+      if (!matched) {
+        const reversal = await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: `Import line undone: ${line.description ?? `line ${String(line.lineNumber)}`}` }, reversalDate);
+        reversalEntryId = reversal.entry.id;
+      }
+      const back = [me, ...(mirror === undefined ? [] : [locked.get(mirror.id)].filter((x): x is BankImportLine => x !== undefined && x.status !== 'STAGED' && x.journalEntryId === entryId))];
+      for (const l of back) {
+        await tx
+          .update(schema.bankImportLines)
+          .set({ status: 'STAGED', chosenAccountId: null, journalEntryId: null, mirrorOfLineId: null, updatedAt: sql`now()` })
+          .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, l.id)));
+        await recordAuditEvent({
+          tx,
+          companyId,
+          actorUserId,
+          action: 'BANK_IMPORT_LINE_UNPOSTED',
+          entityType: 'bank_import_line',
+          entityId: l.id,
+          before: { status: l.status, chosenAccountId: l.chosenAccountId, journalEntryId: l.journalEntryId, mirrorOfLineId: l.mirrorOfLineId },
+          after: { status: 'STAGED', reversalEntryId, ...(l.id === line.id ? {} : { returnedWith: line.id }) },
+        });
+      }
+      return { unposted: back.length, reversalEntryId };
+    });
+  } catch (error) {
+    if (error instanceof BankImportError) throw error;
+    throw toLedgerDomainError(error);
+  }
+}
 
 /**
  * LL-107 (ADR-046): correct the amount of a STAGED line the extractor misread. The figure it
