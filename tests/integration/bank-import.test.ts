@@ -497,19 +497,31 @@ describe('postImportLines — apply to open invoices / bills (LL-077)', () => {
     expect(await paymentCount(c.companyId, 'payments')).toBe(0);
   });
 
-  it('voiding the payment reopens the invoice; the import line stays POSTED and linked', async () => {
+  it('voiding the payment reopens the invoice and returns the import line to review, where it can be applied again (LL-110 supersedes ADR-035\'s "stays POSTED")', async () => {
     const c = await setup();
     const invoiceId = await openInvoice(c, '1500.00');
     const batch = await stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, STATEMENT);
     const dep = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
     await postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: dep.id, action: 'apply_invoice', documentId: invoiceId }] });
     const line = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
+    expect(line.status).toBe('POSTED');
+    expect(await balance(c, c.bankId)).toBe('1500.0000');
     await voidPayment(c.userId, c.companyId, line.paymentId!, voidPaymentInput.parse({ reversalDate: '2026-06-30' }));
     expect(await docStatus('invoices', invoiceId)).toBe('OPEN');
-    const after = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
-    expect(after.status).toBe('POSTED');
-    expect(after.paymentId).toBe(line.paymentId);
     expect(await balance(c, await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'))).toBe('1500.0000');
+    // The void reversed the deposit's entry, so the line no longer claims a posting: it is back in
+    // review, unlinked, and the bank account no longer carries the deposit until it is applied again.
+    const after = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
+    expect(after).toMatchObject({ status: 'STAGED', paymentId: null, journalEntryId: null, chosenAccountId: null });
+    expect(await balance(c, c.bankId)).toBe('0.0000');
+    // Re-applied to the same invoice, it settles it again through a new payment.
+    await postImportLines(c.userId, c.companyId, batch.id, { decisions: [{ lineId: dep.id, action: 'apply_invoice', documentId: invoiceId }] });
+    const reapplied = (await getImportBatch(c.userId, c.companyId, batch.id))!.lines[0]!;
+    expect(reapplied.status).toBe('POSTED');
+    expect(reapplied.paymentId).not.toBe(line.paymentId);
+    expect(await docStatus('invoices', invoiceId)).toBe('PAID');
+    expect(await balance(c, c.bankId)).toBe('1500.0000');
+    expect(await balance(c, await sysAccount(c.companyId, 'ACCOUNTS_RECEIVABLE'))).toBe('0.0000');
   });
 });
 

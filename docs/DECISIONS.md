@@ -2020,7 +2020,11 @@ gates (GL-T018/T025) depend on it.
   requires `payment.create` / `bill_payment.create` (today implied by `journal.post`'s roles; checked
   explicitly). No new capabilities.
 - **Undo:** void the payment / bill payment (existing flows). The line stays POSTED and keeps its link (FK
-  restrict); the document reopens through the normal void path.
+  restrict); the document reopens through the normal void path. **Superseded by LL-110 (2026-09-26, owner-
+  approved plan):** the void now also returns the line to STAGED with its payment link cleared (audited
+  `BANK_IMPORT_LINE_UNPOSTED`, the payment id kept in the audit row). A line left POSTED against a reversed
+  entry claimed a posting that no longer stood — the bank account no longer carried the deposit while the
+  statement did — and could not be applied again.
 
 ### Consequences
 
