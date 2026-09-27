@@ -63,6 +63,8 @@ export const bankImportBatches = pgTable(
     statedTotalCredits: numeric('stated_total_credits', { precision: 19, scale: 4 }),
     statedTotalDebits: numeric('stated_total_debits', { precision: 19, scale: 4 }),
     statedEndingBalance: numeric('stated_ending_balance', { precision: 19, scale: 4 }),
+    /** LL-111: the statement's printed closing ("statement") date — the reconciliation's default date. */
+    statedStatementDate: date('stated_statement_date'),
     /** LL-109: how many model passes the extraction took (a re-analysis after a totals mismatch = 2). */
     extractionAttempts: integer('extraction_attempts').notNull().default(1),
     createdBy: uuid('created_by')

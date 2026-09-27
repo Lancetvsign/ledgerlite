@@ -243,9 +243,14 @@ export async function stageImport(
   const extraction = toExtractionOutput(raw);
   // LL-109: the statement's own control figures. A malformed summary is dropped (logged as a
   // field path), never a reason to reject the rows — the review then reads "not stated".
-  const summaryParsed = extraction.summary === undefined ? undefined : statementSummarySchema.safeParse(extraction.summary);
+  let summaryParsed = extraction.summary === undefined ? undefined : statementSummarySchema.safeParse(extraction.summary);
   if (summaryParsed !== undefined && !summaryParsed.success) {
     log.warn('bank-import: statement summary failed validation', { stage: 'validate', path: summaryParsed.error.issues[0]?.path.join('.') });
+    // LL-111: an unreadable closing date must not cost the totals check — retry without it.
+    if (extraction.summary !== undefined && summaryParsed.error.issues.every((i) => i.path[0] === 'statementDate')) {
+      const { statementDate: _dropped, ...rest } = extraction.summary;
+      summaryParsed = statementSummarySchema.safeParse(rest);
+    }
   }
   const summary = summaryParsed?.success === true ? summaryParsed.data : undefined;
   const parsed = extractedTransactionsSchema.safeParse(extraction.transactions);
@@ -314,6 +319,7 @@ export async function stageImport(
         statedTotalCredits: summary?.totalCredits ?? null,
         statedTotalDebits: summary?.totalDebits ?? null,
         statedEndingBalance: summary?.endingBalance ?? null,
+        statedStatementDate: summary?.statementDate ?? null,
         extractionAttempts: extraction.attempts ?? 1,
       })
       .returning();

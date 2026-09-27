@@ -3,12 +3,14 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getAuth } from '@/lib/auth';
+import { toMoney } from '@/lib/decimal';
 import { formatMoney } from '@/lib/money-format';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { companyToday } from '@/server/companies';
 import { roleHasCapability } from '@/server/rbac';
-import { isReconcilableAccount, listReconciliations } from '@/server/reconciliation';
+import { isReconcilableAccount, listReconciliations, reconciliationDefaultsFromImport } from '@/server/reconciliation';
+import { isUuid } from '@/lib/uuid';
 import { ensureAppUser } from '@/server/users';
 
 import { startReconciliationAction } from './actions';
@@ -22,7 +24,7 @@ import { startReconciliationAction } from './actions';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export default async function ReconciliationListPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+export default async function ReconciliationListPage({ searchParams }: { searchParams: Promise<{ error?: string; fromImport?: string }> }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
   const user = await ensureAppUser(session.user);
@@ -42,6 +44,8 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
     a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name;
   const nameById = new Map(accounts.map((a) => [a.id, label(a)]));
   const bankAccounts = accounts.filter(isReconcilableAccount); // cash/bank assets and credit-card liabilities (LL-081)
+  // LL-111: started from an imported statement — the form is prefilled from what it printed.
+  const fromImport = sp.fromImport !== undefined && isUuid(sp.fromImport) ? await reconciliationDefaultsFromImport(user.id, membership.companyId, sp.fromImport) : null;
   const inputClass = 'rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
 
   return (
@@ -63,11 +67,21 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
         </p>
       )}
 
+      {canWrite && fromImport !== null && (
+        <p className="rounded bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-100" data-testid="from-import-note">
+          From the statement <strong>{fromImport.filename ?? 'import'}</strong>: the date is{' '}
+          {fromImport.statementDateSource === 'printed' ? 'as printed on the statement' : 'its latest transaction — check it against the statement'}
+          {fromImport.statementEndingAmount !== null ? ', the ending figure as printed' : '; the statement printed no ending figure — enter it'}.
+          Starting ticks the {String(fromImport.decidedLines)} line(s) posted from it; you review and complete.
+        </p>
+      )}
+
       {canWrite && (
         <form action={startReconciliationAction} data-testid="start-form" className="flex flex-wrap items-end gap-3 rounded border border-neutral-200 p-4 text-sm dark:border-neutral-800">
+          {fromImport !== null && <input type="hidden" name="fromImport" value={fromImport.batchId} />}
           <label className="flex flex-col gap-1">
             <span>Account (bank or credit card)</span>
-            <select name="bankAccountId" required defaultValue="" data-testid="recon-account" className={inputClass}>
+            <select name="bankAccountId" required defaultValue={fromImport?.bankAccountId ?? ''} data-testid="recon-account" className={inputClass}>
               <option value="" disabled>Choose…</option>
               {bankAccounts.map((a) => (
                 <option key={a.id} value={a.id}>{label(a)}</option>
@@ -76,11 +90,11 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
           </label>
           <label className="flex flex-col gap-1">
             <span>Statement date</span>
-            <input type="date" name="statementDate" required defaultValue={today} data-testid="recon-date" className={inputClass} />
+            <input type="date" name="statementDate" required defaultValue={fromImport?.statementDate ?? today} data-testid="recon-date" className={inputClass} />
           </label>
           <label className="flex flex-col gap-1">
             <span>Statement ending balance (for a card: balance owed)</span>
-            <input type="text" inputMode="decimal" name="statementEndingAmount" required placeholder="0.00" data-testid="recon-amount" className={inputClass} />
+            <input type="text" inputMode="decimal" name="statementEndingAmount" required placeholder="0.00" defaultValue={fromImport?.statementEndingAmount == null ? undefined : toMoney(fromImport.statementEndingAmount).toFixed(2)} data-testid="recon-amount" className={inputClass} />
           </label>
           <button type="submit" data-testid="recon-start" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
             Start

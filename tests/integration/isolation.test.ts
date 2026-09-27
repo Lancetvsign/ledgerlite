@@ -25,7 +25,7 @@ import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/ser
 import { recordAuditEvent } from '@/server/audit';
 import { amendImportLine, assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine, unpostImportLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
-import { completeReconciliation, getReconciliation, listReconciliations, setCleared, startReconciliation } from '@/server/reconciliation';
+import { clearImportedLines, completeReconciliation, getReconciliation, listReconciliations, reconciliationDefaultsFromImport, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
 import { createCustomerInput, updateCustomerInput } from '@/validation/customer';
 import { createVendorInput, updateVendorInput } from '@/validation/vendor';
@@ -983,6 +983,11 @@ const REGISTRY: IsolationDescriptor[] = [
         run: (attacker, victim, recordId) => getReconciliation(attacker, victim.companyId, recordId) },
       { operation: 'list reconciliations (authorized front door)', expect: 'denied',
         run: (attacker, victim) => listReconciliations(attacker, victim.companyId) },
+      // LL-111: the defaults read a batch of the victim company; the pre-tick writes its reconciliation.
+      { operation: 'read reconciliation defaults from a victim statement', expect: 'denied',
+        run: (attacker, victim, recordId) => reconciliationDefaultsFromImport(attacker, victim.companyId, recordId) },
+      { operation: 'tick a statement\'s lines in the victim reconciliation', expect: 'denied',
+        run: (attacker, victim, recordId) => clearImportedLines(attacker, victim.companyId, recordId, recordId) },
       { operation: 'complete a reconciliation (state transition)', expect: 'denied',
         run: (attacker, victim, recordId) => completeReconciliation(attacker, victim.companyId, recordId) },
       { operation: 'start a reconciliation in the victim company', expect: 'denied',

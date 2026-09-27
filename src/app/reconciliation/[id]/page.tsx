@@ -31,7 +31,7 @@ export default async function ReconciliationPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; cleared?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; cleared?: string; skipped?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -190,7 +190,9 @@ function Figure({ label, value, testid, emphasis = false }: { label: string; val
   );
 }
 
-function noticeFrom(sp: { error?: string; ok?: string; cleared?: string }): string | null {
+function noticeFrom(sp: { error?: string; ok?: string; cleared?: string; skipped?: string }): string | null {
+  if (sp.ok === 'prefilled') return `Ticked ${sp.cleared ?? '0'} line(s) posted from the statement${sp.skipped !== undefined && sp.skipped !== '0' ? `; ${sp.skipped} dated after the statement date or already cleared elsewhere were left unticked` : ''}. Check the difference, then complete.`;
+  if (sp.error === 'IMPORT_NOT_FOR_ACCOUNT') return 'That statement is for a different account than this reconciliation.';
   if (sp.ok === 'saved') return `Saved ${sp.cleared ?? '0'} cleared line(s).`;
   if (sp.ok === 'updated') return 'Statement details updated.';
   if (sp.ok === 'completed') return 'Reconciliation completed.';

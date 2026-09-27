@@ -143,6 +143,17 @@ describe('createAiExtractor', () => {
     expect(out.attempts).toBe(1);
   });
 
+  it('reads the statement\'s printed closing date and normalises its notation (LL-111)', async () => {
+    const { model } = modelSaying(
+      JSON.stringify({
+        summary: { beginningBalance: '0.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '1379.50', statementDate: '06/30/2026' },
+        transactions: [{ date: '2026-06-01', description: 'DEPOSIT', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT', amount: '-120.50' }],
+      }),
+    );
+    const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
+    expect(out.summary?.statementDate).toBe('2026-06-30');
+  });
+
   it('rejects a scan before calling the model', async () => {
     const { model, calls } = modelSaying('{"transactions":[]}');
     const scanned = createAiExtractor({ model, readText: () => Promise.reject(new BankImportError('SCANNED_PDF', 'no text layer')) });

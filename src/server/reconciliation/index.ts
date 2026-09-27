@@ -415,3 +415,111 @@ export async function completeReconciliation(actorUserId: string, companyId: str
 
 export { ReconciliationError } from './errors';
 export type { ReconciliationErrorCode } from './errors';
+
+// ---------------------------------------------------------------------------------------
+// LL-111 — reconcile from an imported statement
+// ---------------------------------------------------------------------------------------
+
+export interface ReconciliationDefaults {
+  readonly batchId: string;
+  readonly filename: string | null;
+  readonly bankAccountId: string;
+  /** The statement's printed closing date, else the latest line date (flagged, to be checked). */
+  readonly statementDate: string;
+  readonly statementDateSource: 'printed' | 'latest_line';
+  /**
+   * The statement's printed ending balance in the RECONCILIATION's convention: a bank as printed; a
+   * card negated — the import stores a balance owed as negative (LL-109), the reconciliation takes
+   * the amount owed as positive (charges positive). Null when the statement printed none.
+   */
+  readonly statementEndingAmount: string | null;
+  /** Lines decided from the statement (posted, personal, taken) — what pre-ticking can clear. */
+  readonly decidedLines: number;
+}
+
+/**
+ * What a reconciliation of this imported statement should start with — LL-111. Reads only; the
+ * start form shows the figures for the reviewer to confirm or change. A foreign or unknown batch
+ * reads as null (no existence leak).
+ */
+export async function reconciliationDefaultsFromImport(actorUserId: string, companyId: string, batchId: string): Promise<ReconciliationDefaults | null> {
+  await requirePermission(actorUserId, companyId, 'reconciliation.view');
+  const db = getDbTx();
+  const batch = (
+    await db
+      .select()
+      .from(schema.bankImportBatches)
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+      .limit(1)
+  )[0];
+  if (batch === undefined) return null;
+  const stats = (
+    await db.execute<{ latest: string | null; decided: string }>(sql`
+      select max(txn_date)::text as latest,
+             count(*) filter (where status::text in ('POSTED', 'PERSONAL', 'ASSIGNED'))::text as decided
+      from bank_import_lines where company_id = ${companyId} and batch_id = ${batchId}`)
+  ).rows[0];
+  const liability = await accountIsLiability(db, companyId, batch.bankAccountId);
+  const printed = batch.statedEndingBalance;
+  return {
+    batchId,
+    filename: batch.filename,
+    bankAccountId: batch.bankAccountId,
+    statementDate: batch.statedStatementDate ?? stats?.latest ?? batch.createdAt.toISOString().slice(0, 10),
+    statementDateSource: batch.statedStatementDate !== null ? 'printed' : 'latest_line',
+    statementEndingAmount: printed === null ? null : liability ? toMoney(printed).negated().toFixed(4) : toMoney(printed).toFixed(4),
+    decidedLines: Number(stats?.decided ?? '0'),
+  };
+}
+
+/**
+ * Tick every ledger line this imported statement posted to the reconciled account — LL-111. The
+ * lines are the account's journal lines in the entries the batch's decided lines point at (a
+ * matched line's entry is the other statement's, which moves this account too), dated on or before
+ * the statement date and not cleared by another reconciliation. ADDED to what is already ticked,
+ * through `setCleared` — one eligibility rule for both paths, re-checked under its lock. Never
+ * completes anything.
+ */
+export async function clearImportedLines(
+  actorUserId: string,
+  companyId: string,
+  reconciliationId: string,
+  batchId: string,
+): Promise<{ cleared: number; skipped: number }> {
+  await requirePermission(actorUserId, companyId, 'reconciliation.complete');
+  const db = getDbTx();
+  const rec = await loadHeader(db, companyId, reconciliationId, false);
+  if (rec === undefined) throw new ReconciliationError('NOT_FOUND', 'Reconciliation not found.');
+  if (rec.status !== 'IN_PROGRESS') throw new ReconciliationError('NOT_IN_PROGRESS', 'A completed reconciliation is final.');
+  const batch = (
+    await db
+      .select({ bankAccountId: schema.bankImportBatches.bankAccountId })
+      .from(schema.bankImportBatches)
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+      .limit(1)
+  )[0];
+  if (batch === undefined || batch.bankAccountId !== rec.bankAccountId) {
+    throw new ReconciliationError('IMPORT_NOT_FOR_ACCOUNT', 'That statement is for a different account than this reconciliation.');
+  }
+  const rows = await db.execute<{ id: string; eligible: boolean; here: boolean }>(sql`
+    select distinct l.id::text as id,
+           (e.status::text in ('POSTED', 'REVERSED') and e.posting_date <= ${rec.statementDate} and other.id is null) as eligible,
+           (mine.id is not null) as here
+    from bank_import_lines b
+    join journal_lines l on l.company_id = b.company_id and l.journal_entry_id = b.journal_entry_id and l.account_id = ${rec.bankAccountId}
+    join journal_entries e on e.id = l.journal_entry_id
+    left join bank_reconciliation_lines other on other.company_id = l.company_id and other.journal_line_id = l.id and other.reconciliation_id <> ${rec.id}
+    left join bank_reconciliation_lines mine on mine.company_id = l.company_id and mine.journal_line_id = l.id and mine.reconciliation_id = ${rec.id}
+    where b.company_id = ${companyId} and b.batch_id = ${batchId} and b.status::text in ('POSTED', 'PERSONAL', 'ASSIGNED')`);
+  const current = (
+    await db
+      .select({ id: schema.bankReconciliationLines.journalLineId })
+      .from(schema.bankReconciliationLines)
+      .where(and(eq(schema.bankReconciliationLines.companyId, companyId), eq(schema.bankReconciliationLines.reconciliationId, rec.id)))
+  ).map((r) => r.id);
+  const toAdd = rows.rows.filter((r) => r.eligible && !r.here).map((r) => r.id);
+  const skipped = rows.rows.filter((r) => !r.eligible && !r.here).length;
+  if (toAdd.length > 0) await setCleared(actorUserId, companyId, rec.id, { journalLineIds: [...new Set([...current, ...toAdd])] });
+  return { cleared: toAdd.length, skipped };
+}
+

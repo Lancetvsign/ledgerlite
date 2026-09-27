@@ -1,0 +1,1 @@
+ALTER TABLE "bank_import_batches" ADD COLUMN "stated_statement_date" date;
