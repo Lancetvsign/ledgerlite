@@ -94,7 +94,7 @@ export default async function ReconciliationListPage({ searchParams }: { searchP
           </label>
           <label className="flex flex-col gap-1">
             <span>Statement ending balance (for a card: balance owed)</span>
-            <input type="text" inputMode="decimal" name="statementEndingAmount" required placeholder="0.00" defaultValue={fromImport?.statementEndingAmount == null ? undefined : toMoney(fromImport.statementEndingAmount).toFixed(2)} data-testid="recon-amount" className={inputClass} />
+            <input type="text" inputMode="decimal" name="statementEndingAmount" required placeholder="0.00" defaultValue={fromImport?.statementEndingAmount == null ? undefined : plainAmount(fromImport.statementEndingAmount)} data-testid="recon-amount" className={inputClass} />
           </label>
           <button type="submit" data-testid="recon-start" className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
             Start
@@ -146,3 +146,10 @@ function noticeFrom(error: string | undefined): string | null {
   if (error === 'denied') return 'You do not have permission to reconcile.';
   return 'The reconciliation could not be started.';
 }
+
+/** A money string for an input: two decimals when that is exact, else all four — never rounded (ADR-004). */
+function plainAmount(v: string): string {
+  const m = toMoney(v);
+  return m.decimalPlaces() <= 2 ? m.toFixed(2) : m.toFixed(4);
+}
+
