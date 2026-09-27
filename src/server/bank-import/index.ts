@@ -20,7 +20,7 @@ import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, t
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
-import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
+import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
@@ -1232,9 +1232,12 @@ export async function amendImportLine(
   companyId: string,
   batchId: string,
   lineId: string,
-  input: AmendImportLineInput,
+  rawInput: AmendImportLineInput,
 ): Promise<{ amended: boolean }> {
   await requirePermission(actorUserId, companyId, 'journal.post');
+  // Normalised here, not only at the form: the stored description is always trimmed and the date
+  // a real calendar date, whoever calls (the comparisons below rely on it).
+  const input = amendImportLineInput.parse(rawInput);
   return await getDbTx().transaction(async (tx) => {
     const batch = (
       await tx
