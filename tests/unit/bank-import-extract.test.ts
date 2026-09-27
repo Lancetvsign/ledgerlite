@@ -4,11 +4,12 @@
  * a scan is rejected before any model call; a failed/malformed model response surfaces as
  * EXTRACTION_FAILED carrying no model output or file text (§9); environment resolution.
  */
+import { APICallError, RetryError } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BankImportError } from '@/server/bank-import/errors';
-import { buildContextPrompt, cannedExtractor, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor, toExtractionOutput } from '@/server/bank-import/extract';
+import { buildContextPrompt, cannedExtractor, classifyModelFailure, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor, toExtractionOutput } from '@/server/bank-import/extract';
 import { extractPdfText } from '@/server/bank-import/pdf-text';
 
 const usage = {
@@ -174,6 +175,50 @@ describe('createAiExtractor', () => {
     const model = new MockLanguageModelV4({ doGenerate: () => Promise.reject(new Error('gateway 503: upstream unavailable; body=ACME')) });
     const err = await errOf(createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
     expect(err.code).toBe('EXTRACTION_FAILED');
+    expect(err.message).not.toContain('ACME');
+  });
+});
+
+/** An API error as the provider SDK raises it; the body stands in for anything the provider sent. */
+const apiError = (statusCode: number | undefined, message = 'provider said no', isRetryable = false): APICallError =>
+  new APICallError({ message, url: 'https://api.example.test/v1/messages', requestBodyValues: {}, ...(statusCode === undefined ? {} : { statusCode }), isRetryable, responseBody: 'body=ACME' });
+
+describe('classifyModelFailure (LL-113): the AI service, or the statement', () => {
+  it('names the service problem from the status, never the statement', () => {
+    expect(classifyModelFailure(apiError(401))).toBe('EXTRACTION_KEY_REJECTED');
+    expect(classifyModelFailure(apiError(403))).toBe('EXTRACTION_KEY_REJECTED');
+    expect(classifyModelFailure(apiError(402))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    expect(classifyModelFailure(apiError(404))).toBe('EXTRACTION_MODEL_UNAVAILABLE');
+    expect(classifyModelFailure(apiError(429))).toBe('EXTRACTION_RATE_LIMITED');
+    for (const s of [500, 502, 503, 529]) expect(classifyModelFailure(apiError(s)), String(s)).toBe('EXTRACTION_SERVICE_UNAVAILABLE');
+  });
+
+  it('recognises the providers\' credit refusals whatever their status', () => {
+    expect(classifyModelFailure(apiError(400, 'Your credit balance is too low to access the Anthropic API.'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    expect(classifyModelFailure(apiError(429, 'You exceeded your current quota (insufficient_quota).'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    // A 400 that merely echoes statement text mentioning billing is still the statement's problem.
+    expect(classifyModelFailure(apiError(400, 'invalid request near "BILLING STATEMENT — CREDIT BALANCE"'))).toBe('EXTRACTION_FAILED');
+  });
+
+  it('judges a retried failure by its last attempt; an unreachable service is unavailable', () => {
+    const retried = new RetryError({ message: 'Failed after 3 attempts', reason: 'maxRetriesExceeded', errors: [apiError(529, 'overloaded', true), apiError(529, 'overloaded', true), apiError(429, 'slow down', true)] });
+    expect(classifyModelFailure(retried)).toBe('EXTRACTION_RATE_LIMITED');
+    expect(classifyModelFailure(apiError(undefined, 'fetch failed', true))).toBe('EXTRACTION_SERVICE_UNAVAILABLE');
+  });
+
+  it('leaves everything else as the statement\'s problem', () => {
+    expect(classifyModelFailure(apiError(400))).toBe('EXTRACTION_FAILED');
+    expect(classifyModelFailure(apiError(422))).toBe('EXTRACTION_FAILED');
+    expect(classifyModelFailure(apiError(undefined, 'no response', false))).toBe('EXTRACTION_FAILED');
+    expect(classifyModelFailure(new Error('gateway 503: upstream unavailable'))).toBe('EXTRACTION_FAILED'); // no status, not an API error
+    expect(classifyModelFailure('boom')).toBe('EXTRACTION_FAILED');
+  });
+
+  it('the extractor raises the service code with its own message — never the provider\'s text or the statement\'s', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: () => Promise.reject(apiError(401, 'invalid x-api-key: sk-ant-SECRET')) });
+    const err = await errOf(createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
+    expect(err.code).toBe('EXTRACTION_KEY_REJECTED');
+    expect(err.message).not.toContain('SECRET');
     expect(err.message).not.toContain('ACME');
   });
 });

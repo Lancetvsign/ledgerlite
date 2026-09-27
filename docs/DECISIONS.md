@@ -1981,6 +1981,15 @@ correction (LL-107) or an ignore moves it at once. The review screen shows every
 figure, the lines' figure and the difference; posting is warned, not blocked, while they disagree — a
 statement whose printed totals are themselves wrong, or that prints none, must still be importable.
 
+**Amendment (LL-113 — an AI-service failure is not the statement's fault):** a failed model call is classified
+by `classifyModelFailure` from its HTTP status and error class only (a retried call by its last attempt):
+401/403 `EXTRACTION_KEY_REJECTED`, 402 or the provider's specific credit refusal
+`EXTRACTION_OUT_OF_CREDIT`, 404 `EXTRACTION_MODEL_UNAVAILABLE`, 429 `EXTRACTION_RATE_LIMITED`, 5xx or no
+response `EXTRACTION_SERVICE_UNAVAILABLE`; everything else stays `EXTRACTION_FAILED`. The upload page tells
+the reviewer the statement is not the problem and what fixes it. The error's message is the application's
+own; the provider's text never reaches the reviewer, and is logged only for the config statuses as before.
+The credit-refusal match uses deliberately specific phrases, because a 400 body can echo prompt text.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner

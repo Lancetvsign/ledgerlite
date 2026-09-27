@@ -9,6 +9,20 @@ export type BankImportErrorCode =
   | 'EXTRACTION_NOT_CONFIGURED'
   /** The extractor returned nothing usable, or a malformed row (batch rejected, never partially staged). */
   | 'EXTRACTION_FAILED'
+  /**
+   * LL-113: the AI service could not read the statement for a reason that is NOT the statement —
+   * so the upload page says what is wrong instead of blaming the file. See `classifyModelFailure`.
+   */
+  /** The service rejected this app's API key (401 / 403) — an administrator must replace it and redeploy. */
+  | 'EXTRACTION_KEY_REJECTED'
+  /** The service account is out of credit (402, or the provider's "credit balance" / quota refusal). */
+  | 'EXTRACTION_OUT_OF_CREDIT'
+  /** The configured model was not found (404) — a configuration problem. */
+  | 'EXTRACTION_MODEL_UNAVAILABLE'
+  /** Too many requests (429) — wait and upload again. */
+  | 'EXTRACTION_RATE_LIMITED'
+  /** The service is down or unreachable (5xx, overloaded, network) — try again later. */
+  | 'EXTRACTION_SERVICE_UNAVAILABLE'
   /** The uploaded PDF has no text layer (a scan/image) — unsupported in v1. */
   | 'SCANNED_PDF'
   /** The chosen bank account is missing, inactive, not an asset, or not a cash account. */

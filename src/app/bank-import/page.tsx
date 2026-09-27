@@ -13,6 +13,7 @@ import { ensureAppUser } from '@/server/users';
 
 import { uploadStatementAction } from './actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from './review-status';
+import { uploadNoticeFrom } from './upload-notice';
 import { UploadSubmitButton } from './upload-submit-button';
 
 /**
@@ -36,7 +37,7 @@ export default async function BankImportPage({
   if (!roleHasCapability(membership.role, 'journal.post')) redirect('/account?error=denied');
 
   const params = await searchParams;
-  const notice = noticeFrom(params.error);
+  const notice = uploadNoticeFrom(params.error);
   const ok = params.ok === 'deleted' ? 'Import deleted. Nothing had posted from it.' : null;
   const configured = isExtractionConfigured();
 
@@ -155,19 +156,4 @@ export default async function BankImportPage({
       </section>
     </main>
   );
-}
-
-function noticeFrom(error: string | undefined): string | null {
-  if (error === undefined) return null;
-  if (error === 'invalid_file') return 'Please choose a PDF statement under 10 MB.';
-  if (error === 'invalid') return 'Please choose a bank account and a PDF, then try again.';
-  if (error === 'EXTRACTION_NOT_CONFIGURED') return 'Statement extraction is not configured yet.';
-  if (error === 'EXTRACTION_FAILED') return 'No usable transactions could be extracted from that statement.';
-  if (error === 'SCANNED_PDF') return 'That PDF appears to be a scanned image; a text-based statement is needed.';
-  if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active bank account or credit card.';
-  if (error === 'ONLY_CARDS_SHAREABLE') return 'Only a credit-card statement can be shared with the organization — upload it without sharing, or choose the card account.';
-  if (error === 'NOT_IN_ORGANIZATION') return 'Put this company in an organization (Account page) before sharing a statement.';
-  if (error === 'BATCH_NOT_FOUND') return 'That import batch does not exist.';
-  if (error === 'denied') return 'You do not have permission to import statements.';
-  return 'The statement could not be imported.';
 }

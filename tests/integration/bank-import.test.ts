@@ -193,6 +193,14 @@ describe('stageImport — validates and stages with suggestions', () => {
     expect(err.code).toBe('INVALID_BANK_ACCOUNT');
   });
 
+  it('an AI-service failure keeps its own code and stages nothing (LL-113)', async () => {
+    const c = await setup();
+    const refused: TransactionExtractor = () => Promise.reject(new BankImportError('EXTRACTION_KEY_REJECTED', 'The AI service rejected this application\'s API key.'));
+    const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, refused));
+    expect(err.code).toBe('EXTRACTION_KEY_REJECTED');
+    expect(await listImportBatches(c.userId, c.companyId)).toHaveLength(0);
+  });
+
   it('reports not-configured when no extractor is wired (the production default until LL-076b)', async () => {
     const c = await setup();
     const err = await errOf(stageImport(c.userId, c.companyId, { bankAccountId: c.bankId, fileBytes: EMPTY }, notConfiguredExtractor));
