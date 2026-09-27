@@ -209,7 +209,7 @@ export async function unpostImportLineAction(formData: FormData): Promise<void> 
   redirect(`/bank-import/${batchId}?ok=unposted&unposted=${String(unposted)}`);
 }
 
-/** Corrects the amount of a staged line the extractor misread — LL-107. */
+/** Corrects the amount, date or description of a staged line the extractor misread — LL-107 / LL-112. */
 export async function amendImportLineAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
   const batchId = opt(formData.get('batchId')) ?? '';
@@ -218,8 +218,18 @@ export async function amendImportLineAction(formData: FormData): Promise<void> {
   if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
   // Thousands separators and stray spaces are forgiven; the sign is the statement's (− = money out).
   const amount = (opt(formData.get('amount')) ?? '').replace(/[,\s]/g, '');
-  const parsed = amendImportLineInput.safeParse({ amount });
-  if (!parsed.success) redirect(`/bank-import/${batchId}?error=AMOUNT_INVALID`);
+  // A field the form did not send is left as it is; one it sent empty is invalid, not "unchanged".
+  const rawDate = formData.get('txnDate');
+  const rawDescription = formData.get('description');
+  const parsed = amendImportLineInput.safeParse({
+    amount,
+    ...(typeof rawDate === 'string' ? { txnDate: rawDate.trim() } : {}),
+    ...(typeof rawDescription === 'string' ? { description: rawDescription } : {}),
+  });
+  if (!parsed.success) {
+    const field = parsed.error.issues[0]?.path[0];
+    redirect(`/bank-import/${batchId}?error=${field === 'txnDate' ? 'DATE_INVALID' : field === 'description' ? 'DESCRIPTION_INVALID' : 'AMOUNT_INVALID'}`);
+  }
   try {
     await amendImportLine(userId, companyId, batchId, lineId, parsed.data);
   } catch (error) {

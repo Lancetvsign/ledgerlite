@@ -7,6 +7,12 @@
  * the duplicate hash follows the corrected figure; a misread transfer finds its mirror once
  * corrected; drafts survive; a decided line is refused by the service AND by the database; a
  * line of another batch reads as not found; the ledger posts the corrected figure.
+ *
+ * LL-112: the date and description are corrected the same way — what the parser read is kept
+ * (from the first correction of each on), only the changed fields are audited, unchanged values
+ * are a no-op, the duplicate hash follows, the entry posts on the corrected date with the
+ * corrected description, a post that planned with the old date is refused (LINE_CHANGED), and a decided
+ * line's date and description are frozen by the service and by the database.
  */
 import { and, eq } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
@@ -165,8 +171,8 @@ describe('correcting a staged line', () => {
     await amendImportLine(c.owner, c.companyId, batch.id, stale.id, { amount: '-2000.00' });
     const db = await getTestDb();
     // The lock every posting path takes compares the locked row with what the caller planned.
-    expect(await codeOf(db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, stale.amount)), BankImportError)).toBe('LINE_CHANGED');
-    expect(await db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, '-2000.0000'))).toBe(true);
+    expect(await codeOf(db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, stale)), BankImportError)).toBe('LINE_CHANGED');
+    expect(await db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, { ...stale, amount: '-2000.0000' }))).toBe(true);
     // Through the service the fresh read wins: the corrected figure posts.
     await postImportLines(c.owner, c.companyId, batch.id, { decisions: [{ lineId: stale.id, action: 'post', accountId: c.expenseId }] });
     const posted = (await getImportBatch(c.owner, c.companyId, batch.id))!.lines[2]!;
@@ -195,5 +201,88 @@ describe('correcting a staged line', () => {
     // Untouched figures.
     const view = (await getImportBatch(c.owner, c.companyId, batch.id))!;
     expect(view.lines.map((l) => l.amount)).toEqual(['1500.0000', '-120.5000', '-200.0000']);
+  });
+});
+
+describe('correcting a staged line\'s date and description (LL-112)', () => {
+  it('changes the date and description, keeps what the parser read, audits only the changed fields; unchanged values are a no-op', async () => {
+    const c = await setup();
+    const { batch, lines } = await stage(c, c.bankId, MISREAD);
+    const depot = lines[1]!;
+    expect(await amendImportLine(c.owner, c.companyId, batch.id, depot.id, { amount: '-120.50', txnDate: '2026-06-12', description: '  OFFICE DEPOT #4471 ' })).toEqual({ amended: true });
+    let view = (await getImportBatch(c.owner, c.companyId, batch.id))!;
+    expect(view.lines[1]).toMatchObject({
+      amount: '-120.5000', amendedFrom: null,
+      txnDate: '2026-06-12', amendedDateFrom: '2026-06-02',
+      description: 'OFFICE DEPOT #4471', amendedDescriptionFrom: 'OFFICE DEPOT',
+    });
+    let audit = await amendments(c.companyId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.before).toEqual({ txnDate: '2026-06-02', description: 'OFFICE DEPOT' });
+    expect(audit[0]!.after).toEqual({ txnDate: '2026-06-12', amendedDateFrom: '2026-06-02', description: 'OFFICE DEPOT #4471', amendedDescriptionFrom: 'OFFICE DEPOT' });
+
+    // The same values again: nothing changes, nothing is audited.
+    expect(await amendImportLine(c.owner, c.companyId, batch.id, depot.id, { amount: '-120.5', txnDate: '2026-06-12', description: 'OFFICE DEPOT #4471' })).toEqual({ amended: false });
+    // Omitted fields are left as they are.
+    expect(await amendImportLine(c.owner, c.companyId, batch.id, depot.id, { amount: '-120.50' })).toEqual({ amended: false });
+    expect(await amendments(c.companyId)).toHaveLength(1);
+
+    // A second date correction keeps the date the parser read; the description is untouched.
+    await amendImportLine(c.owner, c.companyId, batch.id, depot.id, { amount: '-120.50', txnDate: '2026-06-13' });
+    view = (await getImportBatch(c.owner, c.companyId, batch.id))!;
+    expect(view.lines[1]).toMatchObject({ txnDate: '2026-06-13', amendedDateFrom: '2026-06-02', description: 'OFFICE DEPOT #4471', amendedDescriptionFrom: 'OFFICE DEPOT' });
+    audit = await amendments(c.companyId);
+    expect(audit).toHaveLength(2);
+    expect(audit.map((a) => a.before)).toContainEqual({ txnDate: '2026-06-12' });
+  });
+
+  it('the duplicate hash follows the corrected date and description; the entry posts on the corrected date with the corrected description', async () => {
+    const c = await setup();
+    const { batch, lines } = await stage(c, c.bankId, MISREAD);
+    await amendImportLine(c.owner, c.companyId, batch.id, lines[1]!.id, { amount: '-120.50', txnDate: '2026-06-12', description: 'OFFICE DEPOT #4471' });
+
+    const corrected = await stage(c, c.bankId, [{ date: '2026-06-12', description: 'OFFICE DEPOT #4471', amount: '-120.50' }]);
+    expect(corrected.lines[0]!.duplicateOf).toBe('staged');
+    const misread = await stage(c, c.bankId, [MISREAD[1]!]);
+    expect(misread.lines[0]!.duplicateOf).toBeNull();
+
+    await postImportLines(c.owner, c.companyId, batch.id, { decisions: [{ lineId: lines[1]!.id, action: 'post', accountId: c.expenseId }] });
+    const posted = (await getImportBatch(c.owner, c.companyId, batch.id))!.lines[1]!;
+    const db = await getTestDb();
+    const entry = await db.execute<{ transaction_date: string; posting_date: string; description: string | null }>(sql`
+      select transaction_date::text, posting_date::text, description from journal_entries where id = ${posted.journalEntryId}`);
+    expect(entry.rows[0]).toEqual({ transaction_date: '2026-06-12', posting_date: '2026-06-12', description: 'OFFICE DEPOT #4471' });
+  });
+
+  it('a post that planned with the old date or description is refused (LINE_CHANGED)', async () => {
+    const c = await setup();
+    const { batch, lines } = await stage(c, c.bankId, MISREAD);
+    const stale = lines[0]!;
+    await amendImportLine(c.owner, c.companyId, batch.id, stale.id, { amount: '1500.00', txnDate: '2026-06-09' });
+    const db = await getTestDb();
+    expect(await codeOf(db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, stale)), BankImportError)).toBe('LINE_CHANGED');
+    expect(await db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, { ...stale, txnDate: '2026-06-09' }))).toBe(true);
+    await amendImportLine(c.owner, c.companyId, batch.id, stale.id, { amount: '1500.00', description: 'DEPOSIT 0042' });
+    expect(await codeOf(db.transaction((tx) => lockStagedLine(tx, c.companyId, stale.id, { ...stale, txnDate: '2026-06-09' })), BankImportError)).toBe('LINE_CHANGED');
+  });
+
+  it('a decided line\'s date and description are frozen — by the service and by the database', async () => {
+    const c = await setup();
+    const { batch, lines } = await stage(c, c.bankId, MISREAD);
+    await postImportLines(c.owner, c.companyId, batch.id, { decisions: [
+      { lineId: lines[0]!.id, action: 'post', accountId: c.expenseId },
+      { lineId: lines[1]!.id, action: 'ignore' },
+    ] });
+    expect(await codeOf(amendImportLine(c.owner, c.companyId, batch.id, lines[0]!.id, { amount: '1500.00', txnDate: '2026-06-09' }), BankImportError)).toBe('LINE_NOT_EDITABLE');
+    expect(await codeOf(amendImportLine(c.owner, c.companyId, batch.id, lines[1]!.id, { amount: '-120.50', description: 'X' }), BankImportError)).toBe('LINE_NOT_EDITABLE');
+    const db = await getTestDb();
+    for (const id of [lines[0]!.id, lines[1]!.id]) {
+      expect(await rejection(db.execute(sql`update bank_import_lines set txn_date = '2026-06-09' where id = ${id}`))).toMatch(/LINE_NOT_STAGED/);
+      expect(await rejection(db.execute(sql`update bank_import_lines set description = 'X' where id = ${id}`))).toMatch(/LINE_NOT_STAGED/);
+    }
+    // A status change alone (Undo, un-ignore) still passes the widened trigger.
+    await db.execute(sql`update bank_import_lines set status = 'STAGED' where id = ${lines[1]!.id}`);
+    const view = (await getImportBatch(c.owner, c.companyId, batch.id))!;
+    expect(view.lines.map((l) => [l.txnDate, l.description])).toEqual([['2026-06-01', 'DEPOSIT'], ['2026-06-02', 'OFFICE DEPOT'], ['2026-06-03', 'RENT']]);
   });
 });

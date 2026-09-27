@@ -100,6 +100,13 @@ export const bankImportLines = pgTable(
      * decided the amount is frozen by trigger (0044).
      */
     amendedFrom: numeric('amended_from', { precision: 19, scale: 4 }),
+    /**
+     * LL-112: the date and description the extractor read, kept from the FIRST correction of each
+     * (null = never corrected). Like the amount, both are frozen by trigger once the line is
+     * decided (0044, widened by 0048).
+     */
+    amendedDateFrom: date('amended_date_from'),
+    amendedDescriptionFrom: text('amended_description_from'),
     /** The category the extractor proposed (free text) — for reference and mapping. */
     aiCategory: text('ai_category'),
     /** The account initially suggested (AI-mapped, else history). Composite-FK'd, nullable. */
