@@ -65,6 +65,34 @@ test('reconcile Checking against the statement: pre-ticked imports, zero differe
   await expect(page.getByTestId('recon-row')).toHaveAttribute('data-status', 'COMPLETED');
 });
 
+test('reconcile straight from an imported statement: prefilled from what it printed, its lines ticked, zero difference (LL-111)', async ({ page }) => {
+  await freshCompany(page);
+  await page.goto('/bank-import');
+  await page.getByTestId('upload-bank-account').selectOption({ label: '1000 · Checking' });
+  await page.getByTestId('upload-file').setInputFiles({ name: 'june.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 x') });
+  await page.getByTestId('upload-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('reconcile-statement-link')).toHaveCount(0); // nothing posted yet
+  await page.getByTestId('post-import-lines').click(); // all three, suggestions preselected
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+
+  await page.getByTestId('reconcile-statement-link').click();
+  await expect(page).toHaveURL(/\/reconciliation\?fromImport=[0-9a-f-]{36}$/);
+  await expect(page.getByTestId('from-import-note')).toContainText('as printed on the statement');
+  // Prefilled from the statement: its account, its printed closing date, its printed ending balance.
+  await expect(page.getByTestId('recon-account').locator('option:checked')).toHaveText('1000 · Checking');
+  await expect(page.getByTestId('recon-date')).toHaveValue('2026-06-30');
+  await expect(page.getByTestId('recon-amount')).toHaveValue('-620.50');
+  await page.getByTestId('recon-start').click();
+
+  // Started with the statement's lines already ticked and saved: the difference is zero straight away.
+  await expect(page.getByTestId('notice')).toContainText('Ticked 3 line(s) posted from the statement', { timeout: 15_000 });
+  await expect(page.getByTestId('recon-difference')).toHaveText('0.00');
+  await expect(page.getByTestId('recon-complete')).toBeEnabled();
+  await page.getByTestId('recon-complete').click();
+  await expect(page.getByTestId('recon-status')).toHaveText('COMPLETED');
+});
+
 test('a wrong statement figure leaves a difference and Complete disabled; correcting it fixes both', async ({ page }) => {
   await freshCompany(page);
   await importTwoLines(page);

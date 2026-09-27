@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { log } from '@/lib/logging';
 
 import { BankImportError } from './errors';
-import { normalizeAmount, normalizeExtractedRow } from './normalize';
+import { normalizeAmount, normalizeDate, normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
 import { verifyStatementTotals } from './verify';
 
@@ -117,9 +117,10 @@ export const cannedExtractor: TransactionExtractor = (input) =>
             { date: '2026-06-04', description: 'SHELL FUEL', amount: '-45.00', category: 'Travel & Meals' },
             { date: '2026-06-05', description: 'PAYMENT - THANK YOU', amount: '2000.00' },
           ],
-          // LL-109: the statement's printed totals, in the card's sign convention (owed = negative):
-          // −1834.50 + 2000.00 − 165.50 = 0.00.
-          summary: { beginningBalance: '-1834.50', totalCredits: '2000.00', totalDebits: '165.50', endingBalance: '0.00' },
+          // LL-109/111: the statement's printed figures, in the import account's convention (a balance owed
+          // is negative). A fresh card: 0.00 + 2000.00 − 165.50 = 1834.50 paid ahead — so a fresh company's
+          // reconciliation of this statement ties to the cent once its lines are posted.
+          summary: { beginningBalance: '0.00', totalCredits: '2000.00', totalDebits: '165.50', endingBalance: '1834.50', statementDate: '2026-06-30' },
         }
       : {
           transactions: [
@@ -127,8 +128,8 @@ export const cannedExtractor: TransactionExtractor = (input) =>
             { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50', category: 'Office Supplies' },
             { date: '2026-06-05', description: 'MONTHLY RENT PAYMENT', amount: '-2000.00', category: 'Rent' },
           ],
-          // 5000.00 + 1500.00 − 2120.50 = 4379.50
-          summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '4379.50' },
+          // A fresh bank account: 0.00 + 1500.00 − 2120.50 = −620.50 (LL-111: ties a fresh company's reconciliation).
+          summary: { beginningBalance: '0.00', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '-620.50', statementDate: '2026-06-30' },
         },
   );
 
@@ -155,6 +156,7 @@ const modelOutputSchema = z.object({
       totalCredits: z.string().optional().describe('The statement\'s printed total of money INTO the account (total deposits / credits / payments received), unsigned. Read it from the summary; never add it up yourself.'),
       totalDebits: z.string().optional().describe('The statement\'s printed total of money OUT of the account (total withdrawals / debits / purchases / fees), unsigned. Read it; never add it up yourself.'),
       endingBalance: z.string().optional().describe('The ending / new / closing balance the statement PRINTS, signed like the beginning balance (a card balance owed is negative).'),
+      statementDate: z.string().optional().describe('The statement\'s closing date as printed (statement date / period end / closing date), YYYY-MM-DD. Read it; never infer it from the transaction dates.'),
     })
     .optional()
     .describe('The control figures printed on the statement, or omitted when it prints none.'),
@@ -181,7 +183,7 @@ Rules:
 - date is YYYY-MM-DD. Infer the year from the statement period when a line shows only the month and day.
 - description is the statement's own text for the line, trimmed.
 - category is the account for the line, chosen ONLY from the company's chart of accounts given below (answer with the account number or its exact name). Follow the company's past decisions when a description matches one. Omit it rather than guess.
-- summary: also report the statement's OWN printed control figures — beginning balance, total credits (money in), total debits (money out), ending balance — exactly as printed. Never compute them from the lines; omit any the statement does not print. For a credit card, balances OWED are negative and payments received count as credits.
+- summary: also report the statement's OWN printed control figures — beginning balance, total credits (money in), total debits (money out), ending balance, and the statement's closing date — exactly as printed. Never compute them from the lines; omit any the statement does not print. For a credit card, balances OWED are negative and payments received count as credits.
 The transactions you return must add up to those totals: beginning balance + total credits − total debits = ending balance. If yours do not, re-read the statement before answering.
 If the text contains no transactions, return an empty list.`;
 
@@ -308,12 +310,13 @@ async function callModel(model: LanguageModel, system: string, prompt: string): 
 }
 
 /** The four figures through the same notation canonicaliser as the lines; nothing else. */
-function normalizeSummary(raw: { beginningBalance?: string | undefined; totalCredits?: string | undefined; totalDebits?: string | undefined; endingBalance?: string | undefined }): StatementSummary {
+function normalizeSummary(raw: { beginningBalance?: string | undefined; totalCredits?: string | undefined; totalDebits?: string | undefined; endingBalance?: string | undefined; statementDate?: string | undefined }): StatementSummary {
   const s: { -readonly [K in keyof StatementSummary]: StatementSummary[K] } = {};
   if (raw.beginningBalance !== undefined) s.beginningBalance = normalizeAmount(raw.beginningBalance);
   if (raw.totalCredits !== undefined) s.totalCredits = normalizeAmount(raw.totalCredits).replace(/^-/, '');
   if (raw.totalDebits !== undefined) s.totalDebits = normalizeAmount(raw.totalDebits).replace(/^-/, '');
   if (raw.endingBalance !== undefined) s.endingBalance = normalizeAmount(raw.endingBalance);
+  if (raw.statementDate !== undefined) s.statementDate = normalizeDate(raw.statementDate);
   return s;
 }
 

@@ -11,6 +11,7 @@ import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, type StatementVerification } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
+import { listReconciliations } from '@/server/reconciliation';
 import { listOpenBills } from '@/server/bill-payments';
 import { listCustomers } from '@/server/customers';
 import { listOpenInvoices } from '@/server/payments';
@@ -20,6 +21,7 @@ import { listVendors } from '@/server/vendors';
 
 import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
+import { addImportedLinesAction } from '../../reconciliation/actions';
 import { Autosave } from './autosave';
 import { BulkControls } from './bulk-controls';
 import { LineAccountSelect } from './line-account';
@@ -196,6 +198,11 @@ export default async function ReviewImportPage({
   const assigned = view.lines.filter((l) => l.status === 'ASSIGNED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
   const decided = posted + personal + assigned;
+  // LL-111: an open reconciliation of this statement's account, if any (one at a time per account).
+  const canReconcile = roleHasCapability(membership.role, 'reconciliation.complete');
+  const openReconciliation = canReconcile
+    ? (await listReconciliations(user.id, membership.companyId)).find((r) => r.bankAccountId === view.batch.bankAccountId && r.status === 'IN_PROGRESS')
+    : undefined;
   const reviewStatus = reviewStatusOf({ stagedCount: staged, decidedCount: decided + ignored, draftCount });
 
   const selectClass = 'max-w-56 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900';
@@ -220,6 +227,27 @@ export default async function ReviewImportPage({
 
       {/* LL-109: the lines that count against the statement's own printed totals; updates on every render. */}
       <StatementVerificationPanel v={view.verification} attempts={view.batch.extractionAttempts} />
+
+      {canReconcile && decided > 0 && (
+        // LL-111: reconcile this statement — the start form prefilled from what it printed, its posted
+        // lines ticked on start; or, when a reconciliation of this account is already open, add them to it.
+        <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="reconcile-statement">
+          {openReconciliation === undefined ? (
+            <Link href={`/reconciliation?fromImport=${view.batch.id}`} data-testid="reconcile-statement-link" className="rounded border border-neutral-300 px-3 py-1.5 dark:border-neutral-700">
+              Reconcile this statement…
+            </Link>
+          ) : (
+            <>
+              <Link href={`/reconciliation/${openReconciliation.id}`} data-testid="reconcile-continue-link" className="underline">
+                Continue the reconciliation in progress ({openReconciliation.statementDate})
+              </Link>
+              <button type="submit" form="add-imported-lines" data-testid="reconcile-add-lines" className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700">
+                Tick this statement&apos;s lines in it
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {isCard && inOrganization && (
         // LL-097: share this card statement so the other companies of the organization can take
@@ -448,6 +476,12 @@ export default async function ReviewImportPage({
             <input type="hidden" name="lineId" value={l.id} />
           </form>
         ))}
+      {openReconciliation !== undefined && (
+        <form id="add-imported-lines" action={addImportedLinesAction}>
+          <input type="hidden" name="reconciliationId" value={openReconciliation.id} />
+          <input type="hidden" name="batchId" value={view.batch.id} />
+        </form>
+      )}
       {view.lines
         .filter((l) => (l.status === 'POSTED' || l.status === 'PERSONAL') && l.postedSource !== 'INTERCOMPANY' && l.paymentId === null && l.billPaymentId === null)
         .map((l) => (

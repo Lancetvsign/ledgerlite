@@ -330,6 +330,13 @@
       "when": 1790427840082,
       "tag": "0046_unpost_import_line",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790509996630,
+      "tag": "0047_statement_date",
+      "breakpoints": true
     }
   ]
 }

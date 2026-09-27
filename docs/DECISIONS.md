@@ -2100,6 +2100,19 @@ to imported statement lines, a printable reconciliation report, or coupling to p
 `startReconciliation` decides the statement-sequence rule under the bank account's row lock, which
 `completeReconciliation` also takes, so a backdated statement cannot slip past a concurrent completion.
 
+**Amendment (LL-111 — reconcile from an imported statement):** a statement's review page offers "Reconcile
+this statement". The start form is prefilled from what the statement printed (LL-109): its account, its
+printed closing date (else its latest line, flagged for checking) and its printed ending balance, converted
+into the reconciliation's convention (a bank as printed; a card's balance owed, stored negative by the import,
+entered as the positive amount owed). Starting it ticks — and saves — every journal line on the account in the
+entries the statement's decided lines point at (a matched line's entry is the other statement's, which moves
+this account too), dated on or before the statement date and not cleared by another reconciliation; the rest
+are counted as skipped. The ticks go through `setCleared`, so one eligibility rule governs both paths and is
+re-checked under its lock. With a reconciliation of the account already open, the page offers to tick the
+statement's lines in it instead. Nothing is completed automatically: the reviewer sees the difference and
+completes. The printed date is stored as `bank_import_batches.stated_statement_date` (migration 0047); an
+unreadable date is dropped on its own, never at the cost of the totals check.
+
 ## ADR-037 — Money is displayed at two decimals with thousands separators; stored and computed at four
 
 **Status** Accepted · **Added by** LL-079 · **Decided by** product owner

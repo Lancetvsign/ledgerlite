@@ -42,6 +42,8 @@ export const statementSummarySchema = z.object({
   totalCredits: unsignedMoneyString.optional(),
   totalDebits: unsignedMoneyString.optional(),
   endingBalance: signedMoneyString.optional(),
+  /** LL-111: the statement's printed closing date — read, never inferred from the lines. */
+  statementDate: calendarDate.optional(),
 });
 export type StatementSummary = z.infer<typeof statementSummarySchema>;
 

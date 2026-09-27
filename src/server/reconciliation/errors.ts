@@ -15,6 +15,8 @@ export type ReconciliationErrorCode =
   | 'NOT_FOUND'
   /** The reconciliation is COMPLETED; it is final. */
   | 'NOT_IN_PROGRESS'
+  /** LL-111: that imported statement is for a different account than this reconciliation. */
+  | 'IMPORT_NOT_FOR_ACCOUNT'
   /** A ticked line is not this account's, not in the ledger, dated after the statement, or already cleared. */
   | 'LINE_INVALID'
   /** Cleared lines do not sum to the statement figure. The message carries the difference. */

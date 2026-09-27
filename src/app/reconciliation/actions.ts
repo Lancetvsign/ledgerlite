@@ -8,6 +8,7 @@ import { isUuid } from '@/lib/uuid';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import {
+  clearImportedLines,
   completeReconciliation,
   ReconciliationError,
   setCleared,
@@ -52,15 +53,43 @@ export async function startReconciliationAction(formData: FormData): Promise<voi
     statementDate: formData.get('statementDate'),
     statementEndingAmount: opt(formData.get('statementEndingAmount')),
   });
-  if (!parsed.success) redirect('/reconciliation?error=invalid');
+  // LL-111: started from an imported statement — its posted lines are ticked right after the start.
+  const fromImport = opt(formData.get('fromImport'));
+  const back = fromImport !== undefined && isUuid(fromImport) ? `/reconciliation?fromImport=${fromImport}&error=` : '/reconciliation?error=';
+  if (!parsed.success) redirect(`${back}invalid`);
 
   let id: string;
   try {
     id = (await startReconciliation(userId, companyId, parsed.data)).id;
   } catch (error) {
+    if (error instanceof ReconciliationError) redirect(`${back}${error.code}`);
     failTo('/reconciliation', error);
   }
-  redirect(`/reconciliation/${id}`);
+  if (fromImport === undefined || !isUuid(fromImport)) redirect(`/reconciliation/${id}`);
+  let result: { cleared: number; skipped: number } = { cleared: 0, skipped: 0 };
+  try {
+    result = await clearImportedLines(userId, companyId, id, fromImport);
+  } catch (error) {
+    // The reconciliation exists; a pre-tick failure (another account's statement) is reported there.
+    failTo(`/reconciliation/${id}`, error);
+  }
+  redirect(`/reconciliation/${id}?ok=prefilled&cleared=${String(result.cleared)}&skipped=${String(result.skipped)}`);
+}
+
+/** LL-111: tick an imported statement's posted lines in a reconciliation already in progress. */
+export async function addImportedLinesAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const id = opt(formData.get('reconciliationId')) ?? '';
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(id)) redirect('/reconciliation?error=NOT_FOUND');
+  if (!isUuid(batchId)) redirect(`/reconciliation/${id}?error=IMPORT_NOT_FOR_ACCOUNT`);
+  let result: { cleared: number; skipped: number } = { cleared: 0, skipped: 0 };
+  try {
+    result = await clearImportedLines(userId, companyId, id, batchId);
+  } catch (error) {
+    failTo(`/reconciliation/${id}`, error);
+  }
+  redirect(`/reconciliation/${id}?ok=prefilled&cleared=${String(result.cleared)}&skipped=${String(result.skipped)}`);
 }
 
 export async function updateReconciliationAction(formData: FormData): Promise<void> {
