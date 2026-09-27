@@ -297,9 +297,21 @@ export default async function ReviewImportPage({
               const s = l.status === 'STAGED' ? suggestionFor(l) : null;
               return (
                 <tr key={l.id} data-testid="import-line-row" data-status={l.status} className="border-b border-neutral-100 dark:border-neutral-800">
-                  <td className="py-2 pr-2 tabular-nums">{l.txnDate}</td>
+                  <td className="py-2 pr-2 tabular-nums">
+                    {l.txnDate}
+                    {l.amendedDateFrom !== null && (
+                      <span data-testid={`amended-date-flag-${String(i)}`} className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        corrected from {l.amendedDateFrom}
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 pr-2">
                     {l.description}
+                    {l.amendedDescriptionFrom !== null && (
+                      <span data-testid={`amended-description-flag-${String(i)}`} className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        corrected from “{l.amendedDescriptionFrom}”
+                      </span>
+                    )}
                     {l.aiCategory !== null && <span className="ml-2 text-xs text-neutral-400">suggested: {l.aiCategory}</span>}
                     {l.duplicateOf !== null && (
                       <span data-testid="duplicate-flag" className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
@@ -338,23 +350,46 @@ export default async function ReviewImportPage({
                       </span>
                     )}
                     {l.status === 'STAGED' && (
-                      // LL-107: a misread figure is corrected here, before anything posts. The inputs
-                      // belong to a form rendered OUTSIDE the review form (a nested form is dropped).
+                      // LL-107 / LL-112: a misread amount, date or description is corrected here, before
+                      // anything posts. The inputs belong to a form rendered OUTSIDE the review form (a
+                      // nested form is dropped).
                       <details className="mt-1 text-left">
-                        <summary className="cursor-pointer text-xs text-neutral-500" data-testid={`amend-amount-${String(i)}`}>Edit amount</summary>
-                        <span className="mt-1 flex items-center gap-1">
+                        <summary className="cursor-pointer text-xs text-neutral-500" data-testid={`amend-amount-${String(i)}`}>Edit line</summary>
+                        <span className="mt-1 flex flex-col items-start gap-1">
                           <input
                             form={`amend-${l.id}`}
-                            name="amount"
-                            defaultValue={l.amount}
-                            inputMode="decimal"
-                            aria-label="Corrected statement amount (negative = money out)"
-                            data-testid={`amend-amount-input-${String(i)}`}
-                            className="w-28 rounded border border-neutral-300 px-2 py-0.5 text-right text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                            name="txnDate"
+                            type="date"
+                            required
+                            defaultValue={l.txnDate}
+                            aria-label="Corrected statement date"
+                            data-testid={`amend-date-input-${String(i)}`}
+                            className="rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
                           />
-                          <button form={`amend-${l.id}`} type="submit" data-testid={`amend-amount-save-${String(i)}`} className="rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
-                            Save
-                          </button>
+                          <input
+                            form={`amend-${l.id}`}
+                            name="description"
+                            required
+                            maxLength={500}
+                            defaultValue={l.description ?? ''}
+                            aria-label="Corrected description"
+                            data-testid={`amend-description-input-${String(i)}`}
+                            className="w-48 rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                          />
+                          <span className="flex items-center gap-1">
+                            <input
+                              form={`amend-${l.id}`}
+                              name="amount"
+                              defaultValue={l.amount}
+                              inputMode="decimal"
+                              aria-label="Corrected statement amount (negative = money out)"
+                              data-testid={`amend-amount-input-${String(i)}`}
+                              className="w-28 rounded border border-neutral-300 px-2 py-0.5 text-right text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                            />
+                            <button form={`amend-${l.id}`} type="submit" data-testid={`amend-amount-save-${String(i)}`} className="rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
+                              Save
+                            </button>
+                          </span>
                         </span>
                       </details>
                     )}
@@ -494,7 +529,7 @@ export default async function ReviewImportPage({
       {view.lines
         .filter((l) => l.status === 'STAGED')
         .map((l) => (
-          // LL-107: the amount-correction form of each staged row (its input lives in the table).
+          // LL-107 / LL-112: the correction form of each staged row (its inputs live in the table).
           <form key={`amend-${l.id}`} id={`amend-${l.id}`} action={amendImportLineAction}>
             <input type="hidden" name="batchId" value={view.batch.id} />
             <input type="hidden" name="lineId" value={l.id} />
@@ -543,10 +578,12 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
   if (sp.ok === 'unposted') return `Posting undone: the entry is reversed and the line is back for review${sp.unposted === '2' ? ' — with the line on the other statement that was matched to it' : ''}. Correct it and post again.`;
   if (sp.error === 'UNPOST_ELSEWHERE' || sp.error === 'LINE_RECONCILED') return sp.detail ?? 'That posting is undone elsewhere.';
-  if (sp.ok === 'amended') return 'Amount corrected. The suggestions and matches were recomputed for the new figure.';
+  if (sp.ok === 'amended') return 'Line corrected. The suggestions and matches were recomputed for the new values.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
+  if (sp.error === 'DATE_INVALID') return 'Enter the date as printed on the statement.';
+  if (sp.error === 'DESCRIPTION_INVALID') return 'Enter the description as printed on the statement (up to 500 characters).';
   if (sp.error === 'LINE_CHANGED') return 'A line was corrected while you were reviewing — the page has been reloaded; check the figures and post again.';
-  if (sp.error === 'LINE_NOT_EDITABLE') return 'That line has already been decided; its amount cannot change.';
+  if (sp.error === 'LINE_NOT_EDITABLE') return 'That line has already been decided; it cannot be changed.';
   if (sp.ok === 'unmarked') return 'Transfer un-marked: the entries are reversed and the line is back for review (in both companies if it had been matched).';
   if (sp.ok === 'shared') return 'Shared with your organization. The other companies can now take the lines that are theirs.';
   if (sp.ok === 'unshared') return 'No longer shared. A company that already took lines keeps them (and can give them back).';

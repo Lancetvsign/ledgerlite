@@ -12,4 +12,18 @@ describe('LL-107 amend input', () => {
     }
     expect(amendImportLineInput.safeParse({ amount: 1500 }).success).toBe(false);
   });
+
+  it('LL-112: a date and description are optional, under the extractor\'s rules', () => {
+    expect(amendImportLineInput.parse({ amount: '-1.00' })).toEqual({ amount: '-1.00' });
+    expect(amendImportLineInput.parse({ amount: '-1.00', txnDate: '2026-06-12', description: '  OFFICE DEPOT #4471 ' })).toEqual({
+      amount: '-1.00', txnDate: '2026-06-12', description: 'OFFICE DEPOT #4471',
+    });
+    for (const bad of ['', '2026-13-01', '2026-02-30', '06/12/2026', 'yesterday']) {
+      expect(amendImportLineInput.safeParse({ amount: '-1.00', txnDate: bad }).success, bad).toBe(false);
+    }
+    for (const bad of ['', '   ', 'x'.repeat(501)]) {
+      expect(amendImportLineInput.safeParse({ amount: '-1.00', description: bad }).success, `${String(bad.length)} chars`).toBe(false);
+    }
+    expect(amendImportLineInput.parse({ amount: '-1.00', description: 'x'.repeat(500) }).description).toHaveLength(500);
+  });
 });

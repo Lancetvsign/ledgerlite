@@ -20,7 +20,7 @@ import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, t
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
-import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
+import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
@@ -586,21 +586,30 @@ export async function lockStagedLine(
   companyId: string,
   lineId: string,
   /**
-   * LL-107: the amount the caller planned with. A correction (`amendImportLine`) that landed
-   * between the caller's read and this lock would otherwise post the stale figure; the locked
-   * row is compared and a change is refused (LINE_CHANGED) rather than silently skipped.
+   * LL-107 / LL-112: the line as the caller planned with it. A correction (`amendImportLine`)
+   * that landed between the caller's read and this lock would otherwise post a stale amount,
+   * date (the posting date) or description (the memo); the locked row is compared and any
+   * change is refused (LINE_CHANGED) rather than silently skipped.
    */
-  expectedAmount?: string,
+  expected?: Pick<BankImportLine, 'amount' | 'txnDate' | 'description'>,
 ): Promise<boolean> {
   const rows = await tx
-    .select({ status: schema.bankImportLines.status, amount: schema.bankImportLines.amount })
+    .select({
+      status: schema.bankImportLines.status,
+      amount: schema.bankImportLines.amount,
+      txnDate: schema.bankImportLines.txnDate,
+      description: schema.bankImportLines.description,
+    })
     .from(schema.bankImportLines)
     .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, lineId)))
     .for('update')
     .limit(1);
   const row = rows[0];
   if (row?.status !== 'STAGED') return false;
-  if (expectedAmount !== undefined && !toMoney(row.amount).eq(toMoney(expectedAmount))) {
+  if (
+    expected !== undefined &&
+    (!toMoney(row.amount).eq(toMoney(expected.amount)) || row.txnDate !== expected.txnDate || row.description !== expected.description)
+  ) {
     throw new BankImportError('LINE_CHANGED', 'A line was corrected while you were reviewing — reload and try again.');
   }
   return true;
@@ -872,7 +881,7 @@ export async function postImportLines(
       // LL-094: no new entry. The line is marked posted against the counterpart's entry so
       // both statements reconcile to the one movement. Exactly one mirror per entry.
       const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
-        if (!(await lockStagedLine(tx, companyId, line.id, line.amount))) return false;
+        if (!(await lockStagedLine(tx, companyId, line.id, line))) return false;
         const cpNow = await tx
           .select({ status: schema.bankImportLines.status, journalEntryId: schema.bankImportLines.journalEntryId })
           .from(schema.bankImportLines)
@@ -923,7 +932,7 @@ export async function postImportLines(
       // LL-099: one INTERCOMPANY posting on this company's pair account against its own bank.
       try {
         const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
-          if (!(await lockStagedLine(tx, companyId, line.id, line.amount))) return false;
+          if (!(await lockStagedLine(tx, companyId, line.id, line))) return false;
           const r = plan.kind === 'ic_mark'
             ? await markIntercompanyTransfer(tx, actorUserId, companyId, batch.bankAccountId, line, plan.counterpartCompanyId)
             : await matchIntercompanyTransfer(tx, actorUserId, companyId, batch.bankAccountId, line, plan.counterpartEntryId);
@@ -948,7 +957,7 @@ export async function postImportLines(
     if (plan.kind === 'post') {
       try {
         const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
-          if (!(await lockStagedLine(tx, companyId, line.id, line.amount))) return false; // decided concurrently
+          if (!(await lockStagedLine(tx, companyId, line.id, line))) return false; // decided concurrently
           const amt = toMoney(line.amount);
           const abs = amt.abs().toFixed(4);
           // money in (+): Dr bank / Cr category ; money out (−): Cr bank / Dr category
@@ -1006,7 +1015,7 @@ export async function postImportLines(
     // flip commit together — a line can never be applied twice or left half-done. Never a
     // BANK_IMPORT entry touching A/R or A/P (ADR-016/018/023/035).
     const done = await getDbTx().transaction(async (tx): Promise<boolean> => {
-      if (!(await lockStagedLine(tx, companyId, line.id, line.amount))) return false; // decided concurrently
+      if (!(await lockStagedLine(tx, companyId, line.id, line))) return false; // decided concurrently
       const fields = paymentFieldsFor(line);
       if (plan.kind === 'apply_invoice') {
         const { result, journalEntryId } = await receivePaymentCore(
@@ -1209,21 +1218,26 @@ export async function unpostImportLine(
 }
 
 /**
- * LL-107 (ADR-046): correct the amount of a STAGED line the extractor misread. The figure it
- * read is kept in `amended_from` from the first correction on; the duplicate hash follows the
- * corrected figure; the correction is audited. Every amount-derived suggestion (transfer,
- * intercompany and organization matches, document amount-matches, duplicates) is recomputed on
- * the next render and re-validated at post, so nothing else needs touching. A decided line is
- * frozen — here (LINE_NOT_EDITABLE) and by trigger (0044).
+ * LL-107 / LL-112 (ADR-046): correct the amount, date or description of a STAGED line the
+ * extractor misread. What it read is kept from the FIRST correction of each field on
+ * (`amended_from`, `amended_date_from`, `amended_description_from`); the duplicate hash follows
+ * the corrected values; the correction is audited with the changed fields only. Every derived
+ * suggestion (transfer, intercompany and organization matches, document matches, duplicates) is
+ * recomputed on the next render and re-validated at post, and a review that planned with the old
+ * values is refused at post (LINE_CHANGED). A decided line is frozen — here (LINE_NOT_EDITABLE)
+ * and by trigger (0044, widened by 0048).
  */
 export async function amendImportLine(
   actorUserId: string,
   companyId: string,
   batchId: string,
   lineId: string,
-  input: AmendImportLineInput,
+  rawInput: AmendImportLineInput,
 ): Promise<{ amended: boolean }> {
   await requirePermission(actorUserId, companyId, 'journal.post');
+  // Normalised here, not only at the form: the stored description is always trimmed and the date
+  // a real calendar date, whoever calls (the comparisons below rely on it).
+  const input = amendImportLineInput.parse(rawInput);
   return await getDbTx().transaction(async (tx) => {
     const batch = (
       await tx
@@ -1242,16 +1256,28 @@ export async function amendImportLine(
         .limit(1)
     )[0];
     if (line === undefined) throw new BankImportError('LINE_NOT_FOUND', 'Import line not found.');
-    if (line.status !== 'STAGED') throw new BankImportError('LINE_NOT_EDITABLE', 'That line has already been decided; its amount cannot change.');
-    const next = toMoney(input.amount).toFixed(4);
-    if (toMoney(line.amount).eq(next)) return { amended: false };
-    const amendedFrom = line.amendedFrom ?? line.amount;
+    if (line.status !== 'STAGED') throw new BankImportError('LINE_NOT_EDITABLE', 'That line has already been decided; it cannot be changed.');
+
+    const amount = toMoney(input.amount).toFixed(4);
+    const txnDate = input.txnDate ?? line.txnDate;
+    const description = input.description ?? line.description;
+    const amountChanged = !toMoney(line.amount).eq(amount);
+    const dateChanged = txnDate !== line.txnDate;
+    const descriptionChanged = description !== line.description;
+    if (!amountChanged && !dateChanged && !descriptionChanged) return { amended: false };
+
+    const amendedFrom = amountChanged ? (line.amendedFrom ?? line.amount) : line.amendedFrom;
+    const amendedDateFrom = dateChanged ? (line.amendedDateFrom ?? line.txnDate) : line.amendedDateFrom;
+    const amendedDescriptionFrom = descriptionChanged ? (line.amendedDescriptionFrom ?? line.description) : line.amendedDescriptionFrom;
+    const next = { amount: amountChanged ? amount : line.amount, txnDate, description };
     await tx
       .update(schema.bankImportLines)
       .set({
-        amount: next,
-        dedupHash: dedupHash(batch.bankAccountId, { date: line.txnDate, description: line.description ?? '', amount: next }),
+        ...next,
+        dedupHash: dedupHash(batch.bankAccountId, { date: next.txnDate, description: next.description ?? '', amount: next.amount }),
         amendedFrom,
+        amendedDateFrom,
+        amendedDescriptionFrom,
         updatedAt: sql`now()`,
       })
       .where(and(eq(schema.bankImportLines.companyId, companyId), eq(schema.bankImportLines.id, line.id)));
@@ -1262,8 +1288,16 @@ export async function amendImportLine(
       action: 'BANK_IMPORT_LINE_AMENDED',
       entityType: 'bank_import_line',
       entityId: line.id,
-      before: { amount: line.amount },
-      after: { amount: next, amendedFrom },
+      before: {
+        ...(amountChanged ? { amount: line.amount } : {}),
+        ...(dateChanged ? { txnDate: line.txnDate } : {}),
+        ...(descriptionChanged ? { description: line.description } : {}),
+      },
+      after: {
+        ...(amountChanged ? { amount, amendedFrom } : {}),
+        ...(dateChanged ? { txnDate, amendedDateFrom } : {}),
+        ...(descriptionChanged ? { description, amendedDescriptionFrom } : {}),
+      },
     });
     return { amended: true };
   });

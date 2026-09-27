@@ -126,9 +126,13 @@ export type SaveSharedDraftsInput = z.infer<typeof saveSharedDraftsInput>;
 /**
  * LL-107: correct the amount of a STAGED line the extractor misread — the same signed money
  * string the extractor's rows use (negative = money out), never a number, never zero.
+ * LL-112: the date and description may be corrected too, under the extractor's own rules;
+ * either may be omitted (left as it is).
  */
 export const amendImportLineInput = z.object({
-  amount: signedMoneyString.refine((v) => /[1-9]/.test(v), 'Amount must be non-zero.'),
+  amount: extractedTransactionSchema.shape.amount,
+  txnDate: extractedTransactionSchema.shape.date.optional(),
+  description: extractedTransactionSchema.shape.description.optional(),
 });
 export type AmendImportLineInput = z.infer<typeof amendImportLineInput>;
 

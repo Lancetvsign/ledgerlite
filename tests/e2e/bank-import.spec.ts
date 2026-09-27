@@ -269,7 +269,7 @@ test('the statement\'s own totals are checked against the lines, and the check f
   await page.getByTestId('amend-amount-1').click();
   await page.getByTestId('amend-amount-input-1').fill('-1120.50');
   await page.getByTestId('amend-amount-save-1').click();
-  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('notice')).toContainText('Line corrected', { timeout: 15_000 });
   await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'mismatch');
   await expect(page.getByTestId('verification-check-debits')).toContainText('off by 1,000.00');
   await expect(page.getByTestId('verification-check-ending_balance')).toContainText('off by -1,000.00');
@@ -282,7 +282,7 @@ test('the statement\'s own totals are checked against the lines, and the check f
   await page.getByTestId('amend-amount-1').click();
   await page.getByTestId('amend-amount-input-1').fill('-120.50');
   await page.getByTestId('amend-amount-save-1').click();
-  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('notice')).toContainText('Line corrected', { timeout: 15_000 });
   await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'verified');
 });
 
@@ -295,7 +295,7 @@ test('a misread amount is corrected before posting; the ledger carries the corre
   await page.getByTestId('amend-amount-1').click();
   await page.getByTestId('amend-amount-input-1').fill('-1,120.50');
   await page.getByTestId('amend-amount-save-1').click();
-  await expect(page.getByTestId('notice')).toContainText('Amount corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('notice')).toContainText('Line corrected', { timeout: 15_000 });
   await expect(page.getByTestId('import-amount-1')).toHaveText('-1,120.50');
   await expect(page.getByTestId('amended-flag-1')).toContainText('corrected from -120.50');
 
@@ -312,6 +312,36 @@ test('a misread amount is corrected before posting; the ledger carries the corre
   await expect(page.getByTestId('amend-amount-1')).toHaveCount(0); // decided lines cannot be edited
   await page.goto('/dashboard');
   await expect(page.getByTestId('dashboard-cash')).toHaveText('-1,620.50'); // 1500 − 1120.50 − 2000
+});
+
+test('a misread date and description are corrected before posting; the entry carries them (LL-112)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  // The canned Office Depot line: suppose the parser misread the day and mangled the payee.
+  await page.getByTestId('amend-amount-1').click();
+  await expect(page.getByTestId('amend-date-input-1')).toHaveValue('2026-06-03');
+  await expect(page.getByTestId('amend-description-input-1')).toHaveValue('OFFICE DEPOT #1234');
+  await page.getByTestId('amend-date-input-1').fill('2026-06-13');
+  await page.getByTestId('amend-description-input-1').fill('OFFICE DEPOT #4471');
+  await page.getByTestId('amend-amount-save-1').click();
+  await expect(page.getByTestId('notice')).toContainText('Line corrected', { timeout: 15_000 });
+  const row = page.getByTestId('import-line-row').nth(1);
+  await expect(row).toContainText('2026-06-13');
+  await expect(row).toContainText('OFFICE DEPOT #4471');
+  await expect(page.getByTestId('amended-date-flag-1')).toContainText('corrected from 2026-06-03');
+  await expect(page.getByTestId('amended-description-flag-1')).toContainText('corrected from “OFFICE DEPOT #1234”');
+  await expect(page.getByTestId('amended-flag-1')).toHaveCount(0); // the amount was not touched
+
+  // Post all three: the entry lands on the corrected date with the corrected description.
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+  await expect(page.getByTestId('amended-date-flag-1')).toBeVisible(); // the history stays visible once decided
+  await page.goto('/reports/trial-balance');
+  await page.getByTestId('trial-balance-row').filter({ hasText: 'Office Supplies' }).getByTestId('tb-drill').click();
+  const reg = page.getByTestId('register-row');
+  await expect(reg).toHaveCount(1);
+  await expect(reg.first()).toContainText('2026-06-13');
+  await expect(reg.first()).toContainText('OFFICE DEPOT #4471');
 });
 
 test('a credit-card statement imports into the card account and increases what is owed (LL-088)', async ({ page }) => {

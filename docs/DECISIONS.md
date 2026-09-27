@@ -2705,3 +2705,25 @@ statement ↔ import tie, the duplicate detection and the reconciliation that de
 - The duplicate check compares the corrected figure, so re-uploading the corrected statement flags the
   twin and the misread figure no longer matches anything.
 
+### Amendment — LL-112 (2026-09-27): the date and description are correctable too
+
+**Decided by** product owner (chose LL-107's recommended follow-up for LL-112).
+
+1. `amendImportLine` also takes an optional `txnDate` and `description` (the extractor's own rules: an ISO
+   calendar date; 1–500 characters, trimmed). An omitted field is left as it is; unchanged values are a
+   no-op with no audit row.
+2. What the parser read is kept per field from the first correction of that field on:
+   `amended_date_from` and `amended_description_from` (migration 0048), beside LL-107's `amended_from`.
+   The review screen shows "corrected from …" beside each corrected value, before and after posting.
+3. The audit row (`BANK_IMPORT_LINE_AMENDED`) carries only the fields that changed, before and after.
+4. The freeze is widened structurally: the 0044 trigger now fires on `UPDATE OF amount, txn_date,
+   description` and refuses a change to any of them once the line is not STAGED (the date is the
+   entry's posting date and the description its text). No existing path writes these columns on a
+   decided line.
+5. The race guard follows: every posting path's `lockStagedLine` compares the locked row's amount,
+   date and description with the line it planned with, so a correction landing mid-review is refused
+   (`LINE_CHANGED`) instead of posting a stale date or description.
+
+Consequence: a corrected date may move a line into a closed period; that is refused when it posts, as for
+any line (the period guard), never at correction time.
+
