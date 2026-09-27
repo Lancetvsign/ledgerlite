@@ -228,6 +228,9 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
     // One pass, checked against the statement's own totals (LL-109); on a mismatch ONE more
     // pass with the discrepancy — figures only, never the text — fed back. The pass that
     // verifies wins; if neither does, the second is staged and the review shows the gap.
+    // LL-114: the second pass is an attempt to improve a sound first answer, never a condition
+    // of it — if it fails (the AI service refused or was unreachable, or answered unusably),
+    // the first pass is staged and the review shows its gap, rather than losing the upload.
     const first = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`);
     const checked = verify(first);
     if (checked.status !== 'mismatch') return { ...first, attempts: 1 };
@@ -236,7 +239,15 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       .filter((c) => !c.ok)
       .map((c) => `${c.name.replace('_', ' ')} — the statement states ${c.expected}, your lines give ${c.actual} (difference ${c.difference})`)
       .join('; ')}. Re-read EVERY line of the statement: look for a line you dropped, merged, split or misread, and for a subtotal you included by mistake. Do not invent lines. Report the printed totals exactly.`;
-    const second = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`);
+    let second: ExtractionOutput;
+    try {
+      second = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`);
+    } catch (error) {
+      if (!(error instanceof BankImportError)) throw error;
+      // callModel has already logged the failure (stage, status, outcome); say what happens next.
+      log.warn('bank-import: re-analysis failed — staging the first pass', { stage: 'verify', attempt: 2, outcome: error.code });
+      return { ...first, attempts: 1 };
+    }
     const rechecked = verify(second);
     log.info('bank-import: re-analysis result', { stage: 'verify', attempt: 2, status: rechecked.status, ...figures(rechecked) });
     return { ...second, attempts: 2 };
