@@ -242,6 +242,9 @@ test('a posted line is undone — reversed and back for review — then posted t
   await expect(page.getByTestId('notice')).toContainText('Posted 1 line(s), ignored 2', { timeout: 15_000 });
   await expect(page.getByTestId('import-status-1')).toHaveText('POSTED');
 
+  // LL-116: the reversal is proposed on the posting's own date (its period is open), so the
+  // correction lands in June with the mistake rather than today.
+  await expect(page.getByTestId('unpost-date-1')).toHaveValue('2026-06-03');
   await page.getByTestId('unpost-line-1').click();
   await expect(page.getByTestId('notice')).toContainText('Posting undone', { timeout: 15_000 });
   await expect(page.getByTestId('import-action-1')).toBeVisible(); // back in review, with its controls

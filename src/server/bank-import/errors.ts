@@ -39,6 +39,8 @@ export type BankImportErrorCode =
   | 'UNPOST_ELSEWHERE'
   /** LL-110: the line's posting is cleared in a bank reconciliation. */
   | 'LINE_RECONCILED'
+  /** LL-116: the chosen reversal date is before the original posting or after today. */
+  | 'UNDO_DATE_INVALID'
   /** A 'post' decision has no account. */
   | 'ACCOUNT_REQUIRED'
   /** The chosen account is A/R, A/P, Opening Balance Equity, or the bank account itself. */

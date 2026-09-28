@@ -20,7 +20,7 @@ import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, t
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { getAccountingPeriod } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
-import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
+import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema, unpostImportLineInput } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
@@ -32,7 +32,7 @@ import { summaryOf, verifyStatementTotals, verifyTotals, type StatementVerificat
 import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
 import type { PostJournalEntryInput } from '@/validation/journal';
-import type { AmendImportLineInput, ExtractedTransaction, PostImportLinesInput, StageImportInput } from '@/validation/bank-import';
+import type { AmendImportLineInput, ExtractedTransaction, PostImportLinesInput, StageImportInput, UnpostImportLineInput } from '@/validation/bank-import';
 
 /**
  * Bank-statement import service — LL-076.
@@ -1103,14 +1103,19 @@ export type { StatementVerification, VerificationCheck, VerificationStatus } fro
  *  - A posting cleared in a bank reconciliation is refused: the ledger must keep agreeing with it.
  * Lock order: this line and the lines matched to it FOR UPDATE in one statement (id order), then
  * `reverseEntryCore` (company KEY SHARE → entry → counter), as every posting.
+ * LL-116: the reversal may be dated by the reviewer — back to the original posting date (so the
+ * correction lands in the same period, while it is open) and never after today; omitted, today.
+ * A line matched to another's posting has no reversal, so its date is not used.
  */
 export async function unpostImportLine(
   actorUserId: string,
   companyId: string,
   batchId: string,
   lineId: string,
+  rawInput: UnpostImportLineInput = {},
 ): Promise<{ unposted: number; reversalEntryId: string | null }> {
   await requirePermission(actorUserId, companyId, 'journal.post');
+  const input = unpostImportLineInput.parse(rawInput);
   const db = getDb();
   const line = (
     await db
@@ -1130,7 +1135,7 @@ export async function unpostImportLine(
   const matched = line.mirrorOfLineId !== null; // posted against the OTHER line's entry
   const entry = (
     await db
-      .select({ sourceType: schema.journalEntries.sourceType, status: schema.journalEntries.status })
+      .select({ sourceType: schema.journalEntries.sourceType, status: schema.journalEntries.status, postingDate: schema.journalEntries.postingDate })
       .from(schema.journalEntries)
       .where(and(eq(schema.journalEntries.companyId, companyId), eq(schema.journalEntries.id, entryId)))
       .limit(1)
@@ -1160,7 +1165,14 @@ export async function unpostImportLine(
   }
 
   const company = (await db.select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
-  const reversalDate = todayInTimeZone(company?.timezone ?? 'UTC');
+  const today = todayInTimeZone(company?.timezone ?? 'UTC');
+  const reversalDate = input.reversalDate ?? today;
+  if (!matched && entry !== undefined && (reversalDate < entry.postingDate || reversalDate > today)) {
+    throw new BankImportError(
+      'UNDO_DATE_INVALID',
+      `Date the reversal between the original posting (${entry.postingDate}) and today (${today}).`,
+    );
+  }
   if (!matched && (await getAccountingPeriod(companyId, reversalDate)).status !== 'OPEN') {
     throw new LedgerError('PERIOD_CLOSED', `The accounting period for ${reversalDate} is closed.`);
   }
@@ -1215,6 +1227,35 @@ export async function unpostImportLine(
     if (error instanceof BankImportError) throw error;
     throw toLedgerDomainError(error);
   }
+}
+
+/**
+ * LL-116: the date the review screen proposes for each undoable line's reversal — the line's own
+ * posting date while its period is open (the correction then lands where the mistake is), else
+ * the company's today. A read only: it never creates a period (a posted line's period exists).
+ * Gated like the review it serves (`journal.post`, as `getImportBatch`).
+ */
+export async function undoDateDefaults(
+  actorUserId: string,
+  companyId: string,
+  lines: readonly { id: string; txnDate: string }[],
+): Promise<{ today: string; byLine: ReadonlyMap<string, string> }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  const db = getDb();
+  const company = (await db.select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
+  const today = todayInTimeZone(company?.timezone ?? 'UTC');
+  const dates = [...new Set(lines.map((l) => l.txnDate))];
+  const closed = new Set<string>();
+  if (dates.length > 0) {
+    const rows = await db.execute<{ d: string }>(sql`
+      select d::text as d
+      from unnest(array[${sql.join(dates.map((d) => sql`${d}`), sql`, `)}]::date[]) as d
+      where exists (
+        select 1 from accounting_periods p
+        where p.company_id = ${companyId} and p.status = 'CLOSED' and d between p.start_date and p.end_date)`);
+    for (const r of rows.rows) closed.add(r.d);
+  }
+  return { today, byLine: new Map(lines.map((l) => [l.id, closed.has(l.txnDate) || l.txnDate > today ? today : l.txnDate])) };
 }
 
 /**

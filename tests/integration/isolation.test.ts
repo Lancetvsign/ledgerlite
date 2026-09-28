@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { amendImportLine, assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine, unpostImportLine } from '@/server/bank-import';
+import { amendImportLine, assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine, undoDateDefaults, unpostImportLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { clearImportedLines, completeReconciliation, getReconciliation, listReconciliations, reconciliationDefaultsFromImport, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -923,6 +923,14 @@ const REGISTRY: IsolationDescriptor[] = [
         run: async (attacker, victim, recordId) => {
           const [batchId, lineId] = recordId.split(':');
           return await unpostImportLine(attacker, victim.companyId, batchId ?? '', lineId ?? '');
+        },
+      },
+      {
+        operation: 'read the proposed undo dates of lines (LL-116)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [, lineId] = recordId.split(':');
+          return await undoDateDefaults(attacker, victim.companyId, [{ id: lineId ?? '', txnDate: '2026-06-01' }]);
         },
       },
       {

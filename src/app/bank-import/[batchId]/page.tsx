@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, type StatementVerification } from '@/server/bank-import';
+import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, type StatementVerification, undoDateDefaults } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listReconciliations } from '@/server/reconciliation';
 import { listOpenBills } from '@/server/bill-payments';
@@ -95,6 +95,9 @@ export default async function ReviewImportPage({
   const label = (a: { accountNumber: string | null; name: string }) =>
     a.accountNumber !== null && a.accountNumber !== '' ? `${a.accountNumber} · ${a.name}` : a.name;
   const nameById = new Map(accounts.map((a) => [a.id, label(a)]));
+  // LL-116: an undoable posting proposes its own date for the reversal (while its period is open).
+  const undoable = view.lines.filter((l) => (l.status === 'POSTED' || l.status === 'PERSONAL') && l.postedSource !== 'INTERCOMPANY' && l.paymentId === null && l.billPaymentId === null);
+  const undoDates = await undoDateDefaults(user.id, companyId, undoable.filter((l) => l.mirrorOfLineId === null));
   // A credit-card statement (LL-088): lines post to accounts only — no apply-to-document.
   const isCard = accounts.find((a) => a.id === view.batch.bankAccountId)?.accountType === 'LIABILITY';
   const pickable = accounts
@@ -458,9 +461,28 @@ export default async function ReviewImportPage({
                           // LL-110: a posting to the wrong account or amount is undone — the entry is
                           // reversed and the line comes back for review. Bound to a form outside the
                           // review form, like "Undo transfer".
-                          <button type="submit" form={`unpost-${l.id}`} data-testid={`unpost-line-${String(i)}`} className="ml-2 rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
-                            Undo posting
-                          </button>
+                          <span className="ml-2 inline-flex items-center gap-1">
+                            {l.mirrorOfLineId === null && (
+                              // LL-116: the reversal's date — the posting's own date while its period is open,
+                              // never before it, never after today.
+                              <input
+                                type="date"
+                                form={`unpost-${l.id}`}
+                                name="reversalDate"
+                                defaultValue={undoDates.byLine.get(l.id) ?? undoDates.today}
+                                min={l.txnDate}
+                                max={undoDates.today}
+                                required
+                                aria-label="Date of the reversal"
+                                title="Date of the reversal"
+                                data-testid={`unpost-date-${String(i)}`}
+                                className="rounded border border-neutral-300 px-1 py-0.5 text-xs dark:border-neutral-700 dark:bg-neutral-900"
+                              />
+                            )}
+                            <button type="submit" form={`unpost-${l.id}`} data-testid={`unpost-line-${String(i)}`} className="rounded border border-neutral-300 px-2 py-0.5 text-xs dark:border-neutral-700">
+                              Undo posting
+                            </button>
+                          </span>
                         )}
                         {(l.paymentId !== null || l.billPaymentId !== null) && (
                           <span className="ml-2 text-xs" data-testid={`unpost-elsewhere-${String(i)}`}>
@@ -517,15 +539,13 @@ export default async function ReviewImportPage({
           <input type="hidden" name="batchId" value={view.batch.id} />
         </form>
       )}
-      {view.lines
-        .filter((l) => (l.status === 'POSTED' || l.status === 'PERSONAL') && l.postedSource !== 'INTERCOMPANY' && l.paymentId === null && l.billPaymentId === null)
-        .map((l) => (
-          // LL-110: the "Undo posting" form of each posted row (its button lives in the table).
-          <form key={`unpost-${l.id}`} id={`unpost-${l.id}`} action={unpostImportLineAction}>
-            <input type="hidden" name="batchId" value={view.batch.id} />
-            <input type="hidden" name="lineId" value={l.id} />
-          </form>
-        ))}
+      {undoable.map((l) => (
+        // LL-110: the "Undo posting" form of each posted row (its button and date live in the table).
+        <form key={`unpost-${l.id}`} id={`unpost-${l.id}`} action={unpostImportLineAction}>
+          <input type="hidden" name="batchId" value={view.batch.id} />
+          <input type="hidden" name="lineId" value={l.id} />
+        </form>
+      ))}
       {view.lines
         .filter((l) => l.status === 'STAGED')
         .map((l) => (
@@ -578,6 +598,7 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (sp.error === 'COUNTERPART_REQUIRED') return 'A transfer line is still waiting for the other company\'s statement — it cannot post yet.';
   if (sp.ok === 'unposted') return `Posting undone: the entry is reversed and the line is back for review${sp.unposted === '2' ? ' — with the line on the other statement that was matched to it' : ''}. Correct it and post again.`;
   if (sp.error === 'UNPOST_ELSEWHERE' || sp.error === 'LINE_RECONCILED') return sp.detail ?? 'That posting is undone elsewhere.';
+  if (sp.error === 'UNDO_DATE_INVALID') return sp.detail ?? 'Choose a reversal date between the original posting and today.';
   if (sp.ok === 'amended') return 'Line corrected. The suggestions and matches were recomputed for the new values.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
   if (sp.error === 'DATE_INVALID') return 'Enter the date as printed on the statement.';

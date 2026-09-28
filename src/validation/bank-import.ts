@@ -136,6 +136,15 @@ export const amendImportLineInput = z.object({
 });
 export type AmendImportLineInput = z.infer<typeof amendImportLineInput>;
 
+/**
+ * LL-116: the date the reversal of an undone posting carries. Omitted = the company's today
+ * (LL-110). The service checks the range (the original posting date … today) and the period.
+ */
+export const unpostImportLineInput = z.object({
+  reversalDate: calendarDate.optional(),
+});
+export type UnpostImportLineInput = z.infer<typeof unpostImportLineInput>;
+
 /** LL-097: from a member company, take STAGED lines of a shared card statement as its own expenses. */
 export const assignSharedLinesInput = z.object({
   decisions: z.array(z.object({ lineId: z.uuid(), accountId: z.uuid() })).min(1, 'Nothing to assign.'),
