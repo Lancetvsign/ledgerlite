@@ -8,6 +8,7 @@ import { formatMoney } from '@/lib/money-format';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
 import { listCompaniesForUser } from '@/server/companies';
 import { getJournalEntry } from '@/server/ledger';
+import { closedDates, proposedReversalDate } from '@/server/periods';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
@@ -39,6 +40,10 @@ export default async function ReverseEntryPage({ params }: { params: Promise<{ i
 
   const companies = await listCompaniesForUser(user.id);
   const today = todayInTimeZone(companies.find((c) => c.company.id === membership.companyId)?.company.timezone ?? 'UTC');
+  // LL-119: proposed on the entry's own date while its period is open — the correction then lands
+  // in the period of the mistake — else today (as "Undo posting" does, LL-116).
+  const closed = await closedDates(membership.companyId, [entry.postingDate]);
+  const proposed = proposedReversalDate(entry.postingDate, today, closed);
   const label = (l: { accountNumber: string | null; accountName: string }) =>
     l.accountNumber !== null && l.accountNumber !== '' ? `${l.accountNumber} · ${l.accountName}` : l.accountName;
 
@@ -77,8 +82,15 @@ export default async function ReverseEntryPage({ params }: { params: Promise<{ i
         <input type="hidden" name="entryId" value={entry.id} />
         <label className="flex items-center gap-2">
           <span className="w-28 text-neutral-500">Reversal date</span>
-          <input type="date" name="reversalDate" defaultValue={today} required data-testid="reverse-entry-date" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
+          <input type="date" name="reversalDate" defaultValue={proposed} required data-testid="reverse-entry-date" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
         </label>
+        <p className="text-xs text-neutral-500" data-testid="reverse-entry-date-note">
+          {proposed === entry.postingDate
+            ? `Proposed on the entry's own date (${entry.postingDate}), so the correction lands in the same period. Choose another date if you need to.`
+            : closed.has(entry.postingDate)
+              ? `The entry's own date (${entry.postingDate}) is in a closed period, so today is proposed.`
+              : `The entry is dated after today (${entry.postingDate}), so today is proposed.`}
+        </p>
         <label className="flex items-center gap-2">
           <span className="w-28 text-neutral-500">Reason</span>
           <input name="reason" maxLength={1000} placeholder="Optional" data-testid="reverse-entry-reason" className="flex-1 rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
