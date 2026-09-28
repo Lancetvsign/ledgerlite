@@ -8,17 +8,19 @@
  * a malformed summary is dropped, not a reason to reject the rows; the batch list carries the
  * verdict; the re-analysis count is stored.
  */
+import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getAuth } from '@/lib/auth';
+import { errorChainText } from '@/lib/error-chain';
 import { listAccounts } from '@/server/accounts';
 import { amendImportLine, getImportBatch, listImportBatches, postImportLines, stageImport } from '@/server/bank-import';
-import { type TransactionExtractor } from '@/server/bank-import/extract';
+import { MODEL_FAILURE_CODES, type TransactionExtractor } from '@/server/bank-import/extract';
 import { createCompanyWithOwner } from '@/server/companies';
 import { ensureAppUser } from '@/server/users';
 import { createCompanyInput } from '@/validation/company';
 
-import { truncateAll } from '../helpers/database';
+import { getTestDb, truncateAll } from '../helpers/database';
 
 const EMPTY = new Uint8Array();
 type Row = { date: string; description: string; amount: string };
@@ -107,5 +109,33 @@ describe('statement totals (LL-109)', () => {
     expect(junk.batch.statedEndingBalance).toBeNull();
     expect(junk.lines).toHaveLength(3);
     expect((await listImportBatches(c.owner, c.companyId)).map((b) => b.verificationStatus)).toEqual(['not_stated', 'not_stated']);
+  });
+});
+
+describe('a re-check that could not run (LL-118)', () => {
+  const MISMATCHED: Row[] = [ROWS[0]!, ROWS[1]!]; // the rent line dropped: debits and ending disagree
+  const failed = (reanalysisFailure: unknown): TransactionExtractor => () =>
+    Promise.resolve({ transactions: MISMATCHED, summary: SUMMARY, attempts: 1, reanalysisFailure } as never);
+
+  it('stores why the re-check failed; a statement whose re-check ran or was not needed stores nothing', async () => {
+    const c = await setup();
+    const view = await stage(c, failed('EXTRACTION_RATE_LIMITED'));
+    expect(view.batch).toMatchObject({ reanalysisFailure: 'EXTRACTION_RATE_LIMITED', extractionAttempts: 1 });
+    expect(view.verification.status).toBe('mismatch');
+    expect((await stage(c, withSummary(ROWS, SUMMARY, 2))).batch.reanalysisFailure).toBeNull();
+    expect((await stage(c, withSummary(ROWS, SUMMARY))).batch.reanalysisFailure).toBeNull();
+  });
+
+  it('an unknown value is never stored, and the database refuses one written directly', async () => {
+    const c = await setup();
+    expect((await stage(c, failed('SOMETHING_ELSE'))).batch.reanalysisFailure).toBeNull();
+    expect((await stage(c, failed(42))).batch.reanalysisFailure).toBeNull();
+    const db = await getTestDb();
+    const refused = await db.execute(sql`update bank_import_batches set reanalysis_failure = 'NOPE' where company_id = ${c.companyId}`).then(() => 'OK', (e: unknown) => errorChainText(e));
+    expect(refused).toMatch(/bank_import_batches_reanalysis_failure_known/);
+    // The CHECK and the application's list agree: every code the extractor can record is accepted.
+    for (const code of MODEL_FAILURE_CODES) {
+      await db.execute(sql`update bank_import_batches set reanalysis_failure = ${code} where company_id = ${c.companyId}`);
+    }
   });
 });

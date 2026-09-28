@@ -67,6 +67,12 @@ export const bankImportBatches = pgTable(
     statedStatementDate: date('stated_statement_date'),
     /** LL-109: how many model passes the extraction took (a re-analysis after a totals mismatch = 2). */
     extractionAttempts: integer('extraction_attempts').notNull().default(1),
+    /**
+     * LL-118: why the AI's re-check (LL-109's second pass) could not run, as our own error code —
+     * null when no re-check was needed or it ran. LL-114 then staged the first reading; the review
+     * says so while the lines still disagree. Closed list by CHECK.
+     */
+    reanalysisFailure: text('reanalysis_failure'),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
@@ -80,6 +86,10 @@ export const bankImportBatches = pgTable(
       name: 'bank_import_batches_account_same_company_fk',
     }).onDelete('restrict'),
     index('bank_import_batches_company_idx').on(table.companyId, table.createdAt),
+    check(
+      'bank_import_batches_reanalysis_failure_known',
+      sql`${table.reanalysisFailure} is null or ${table.reanalysisFailure} in ('EXTRACTION_FAILED', 'EXTRACTION_KEY_REJECTED', 'EXTRACTION_OUT_OF_CREDIT', 'EXTRACTION_MODEL_UNAVAILABLE', 'EXTRACTION_RATE_LIMITED', 'EXTRACTION_SERVICE_UNAVAILABLE')`,
+    ),
   ],
 );
 

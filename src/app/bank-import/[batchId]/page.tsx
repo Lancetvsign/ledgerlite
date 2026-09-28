@@ -21,6 +21,7 @@ import { listVendors } from '@/server/vendors';
 import { BackTo } from '@/app/reports/drill';
 
 import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { reanalysisNote } from '../reanalysis-note';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { addImportedLinesAction } from '../../reconciliation/actions';
 import { Autosave } from './autosave';
@@ -233,7 +234,7 @@ export default async function ReviewImportPage({
       </p>
 
       {/* LL-109: the lines that count against the statement's own printed totals; updates on every render. */}
-      <StatementVerificationPanel v={view.verification} attempts={view.batch.extractionAttempts} />
+      <StatementVerificationPanel v={view.verification} attempts={view.batch.extractionAttempts} reanalysisFailure={view.batch.reanalysisFailure} />
 
       {canReconcile && decided > 0 && (
         // LL-111: reconcile this statement — the start form prefilled from what it printed, its posted
@@ -642,7 +643,8 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   return 'The lines could not be posted.';
 }
 
-function StatementVerificationPanel({ v, attempts }: { v: StatementVerification; attempts: number }) {
+function StatementVerificationPanel({ v, attempts, reanalysisFailure }: { v: StatementVerification; attempts: number; reanalysisFailure: string | null }) {
+  const failedRecheck = v.status === 'mismatch' ? reanalysisNote(reanalysisFailure) : null;
   const label = { credits: 'Total credits (money in)', debits: 'Total debits (money out)', ending_balance: 'Ending balance (beginning + credits − debits)' } as const;
   const tone =
     v.status === 'verified'
@@ -674,10 +676,16 @@ function StatementVerificationPanel({ v, attempts }: { v: StatementVerification;
               ))}
             </tbody>
           </table>
+          {failedRecheck !== null && (
+            // LL-118: the re-check was tried and failed (LL-114 kept the first reading).
+            <p className="mt-1 text-xs font-medium" data-testid="verification-reanalysis-failed">
+              {failedRecheck}
+            </p>
+          )}
           {v.status === 'mismatch' && (
             <p className="mt-1 text-xs">
-              Correct a misread amount with “Edit amount”, or ignore a line that is not a transaction (a subtotal the reader picked
-              up); this panel updates as you go.
+              Correct a misread amount, date or description with “Edit line”, or ignore a line that is not a transaction (a subtotal
+              the reader picked up); this panel updates as you go.
             </p>
           )}
         </>
