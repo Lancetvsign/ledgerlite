@@ -21,6 +21,8 @@ const REPORTS = [
   { href: '/reports/ap-aging', testid: 'ap-aging-link', title: 'A/P Aging', blurb: 'Open payables per vendor, bucketed by age, reconciling to the A/P control.' },
   { href: '/reports/vendor-statement', testid: 'vendor-statement-link', title: 'Vendor Statement', blurb: 'One vendor’s opening balance, activity, and closing balance over a period.' },
   { href: '/reports/intercompany', testid: 'intercompany-link', title: 'Intercompany Balances', blurb: 'What each company of your organization owes this one and is owed by it, checked against the other company’s books.' },
+  { href: '/reports/consolidated-balance-sheet', testid: 'consolidated-balance-sheet-link', title: 'Consolidated Balance Sheet', blurb: 'Your whole organization’s position: every company side by side, intercompany balances eliminated.' },
+  { href: '/reports/consolidated-income-statement', testid: 'consolidated-income-statement-link', title: 'Consolidated Income Statement', blurb: 'Your whole organization’s income and expenses over a period, every company side by side.' },
 ] as const;
 
 export default async function ReportsPage() {

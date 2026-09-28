@@ -42,7 +42,7 @@ import {
 } from '@/server/ledger';
 import { addCompanyToOrganization, createOrganization } from '@/server/organizations';
 import { closePeriod } from '@/server/periods';
-import { getApAging, getArAging, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
+import { getApAging, getArAging, getBalanceSheet, getConsolidatedBalanceSheet, getConsolidatedIncomeStatement, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -995,6 +995,26 @@ describe('GL regression suite (release-blocking)', () => {
     const settledRow = (await getIntercompanyReport(userId, a, '2026-12-31')).rows.find((r) => r.counterpartId === b)!;
     expect(settledRow).toMatchObject({ receivableDifference: '0.0000', receivableInTransit: '0.0000', state: 'mirrored', mirrored: true });
     await expect(assertIntercompanyMirror()).resolves.toBeUndefined();
+
+    // GL-T030 (LL-122, ADR-047) — the group consolidates: every pair balance (including C's negative
+    // payable) is eliminated to zero, nothing is left in transit, and assets = liabilities + equity for
+    // the group and for each company's column; each column is that company's own statement.
+    const cbs = await getConsolidatedBalanceSheet(userId, a, '2026-12-31');
+    expect(cbs.members.map((m) => m.legalName)).toEqual(['GL Card Co', 'GL Other Co', 'GL Taker Co']); // the active company first
+    expect(cbs.intercompanyInTransit).toBe('0.0000');
+    expect(cbs.intercompanyState).toBe('mirrored');
+    for (const key of ['ic:receivable', 'ic:payable']) {
+      const icRow = [...cbs.assets.rows, ...cbs.liabilities.rows].find((r) => r.key === key)!;
+      expect(icRow.total, key).toBe('0.0000');
+    }
+    for (const companyId of [a, b, c]) {
+      const own = await getBalanceSheet(userId, companyId, '2026-12-31');
+      expect(cbs.assets.byCompany[companyId]).toBe(own.assets.total);
+      expect(cbs.equity.byCompany[companyId]).toBe(own.equity.total);
+    }
+    expect(cbs.balanced).toBe(true);
+    const cis = await getConsolidatedIncomeStatement(userId, a, '2026-01-01', '2026-12-31');
+    expect(cis.netIncome.total).toBe(toMoney(cbs.equity.rows.find((r) => r.key === 'derived:current')!.total).toFixed(4));
     await assertLedgerIntegrity();
   });
 

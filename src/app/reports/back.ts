@@ -21,6 +21,9 @@ export const BACK_TITLES = {
   '/reports/intercompany': 'Intercompany Balances',
   // LL-117: the register's rows open journal entries and source documents, which lead back to it.
   '/reports/register': 'Account Register',
+  // LL-122: the consolidated worksheets drill into the active company's registers.
+  '/reports/consolidated-balance-sheet': 'Consolidated Balance Sheet',
+  '/reports/consolidated-income-statement': 'Consolidated Income Statement',
 } as const;
 export type BackPath = keyof typeof BACK_TITLES;
 

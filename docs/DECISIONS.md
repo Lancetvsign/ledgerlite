@@ -2500,7 +2500,7 @@ intercompany_company_id` + pairing/self CHECKs; the single-role partial unique n
 rows and a per-pair unique joins it; `INTERCOMPANY` source; three audit actions; both trigger
 functions replaced. Expand-only. Existing companies start with no organization. Consolidated
 statements are a later sprint (they require eliminating these balances; GL-T029 in LL-098 is the
-prerequisite).
+prerequisite). **Update (LL-122, 2026-09-28):** consolidated statements now exist — see ADR-047.
 
 ### Revisit if
 
@@ -2788,4 +2788,43 @@ statement ↔ import tie, the duplicate detection and the reconciliation that de
 
 Consequence: a corrected date may move a line into a closed period; that is refused when it posts, as for
 any line (the period guard), never at correction time.
+
+## ADR-047 — Consolidated organization statements: a worksheet over every member, intercompany pairs eliminated
+
+**Status** Accepted · **Added by** LL-122 · **Decided by** product owner (2026-09-28: access, layout, account matching, in-transit presentation)
+
+### Context
+
+Sprint 7 grouped companies into organizations (ADR-043) and deferred consolidated statements. Every statement was
+single-company. Intercompany exists only as balance-sheet pair accounts ("Due from X" in one company, "Due to Y" in the
+other), identified by role and `intercompany_company_id`; there is no intercompany revenue or expense. Authorization is
+per company — there is no organization-level role — and account numbers can differ between companies.
+
+### Decision
+
+1. **Scope and access.** A consolidated statement covers every ACTIVE member of the active company's organization.
+   The viewer needs `report.view` in **every** member; otherwise nothing is shown except the members they cannot view
+   (a partial consolidation would mislead). A company outside any organization has nothing to consolidate.
+2. **Worksheet.** One row per account line, a column per member (the active company first, then by legal name), an
+   Eliminations column and the Consolidated total. Each company's column equals its own statement.
+3. **Rows.** Accounts combine by account number; control and equity accounts by system role (a renumbered A/R still
+   combines); an account without a number stays on its own row per company. A number used for accounts of different
+   types never combines across types and is flagged. The row is labelled with the active company's name for it;
+   differing names are listed.
+4. **Eliminations.** Every intercompany pair account is eliminated in full (receivables and payables each on their own
+   row). What does not net across the group — a transfer one side has posted and the other not yet matched (LL-099) — is
+   shown on its own **Intercompany in transit** line (an asset; an unmatched surplus of payables shows as a liability),
+   flagged with the pair state from the intercompany report, never hidden. The income statement eliminates nothing.
+5. **Fiscal year.** The earnings split uses the active company's fiscal-year start; members with another month are
+   named in a note (their split follows the group's here; their totals do not change).
+6. **Reads only**, computed from `journal_lines` exactly as the single-company statements are (ADR-002, ADR-004). The
+   active company's cells drill into its registers; other companies' cells do not (a register is active-company scoped).
+
+### Consequences
+
+- GL-T030 (in the GL-T029 scenario) is a release-gate check that the group consolidates balanced with every pair
+  eliminated to zero.
+- Membership is current, not historical (ADR-043): an as-of date in the past consolidates today's members.
+- Revisit if: organization-level roles arrive (access), intercompany P&L appears (income-statement eliminations), or
+  multi-currency groups are allowed (translation).
 
