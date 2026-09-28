@@ -11,6 +11,7 @@ import { LedgerError } from '@/server/ledger';
 import { PaymentError, receivePayment, voidPayment } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
 import { receivePaymentInput, voidPaymentInput } from '@/validation/payment';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Payment UI actions — LL-045. Everything the browser sends is untrusted. The
@@ -80,6 +81,7 @@ export async function receivePaymentAction(formData: FormData): Promise<void> {
 
 export async function voidPaymentAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const paymentId = idOf(formData, 'paymentId');
   if (!isUuid(paymentId)) redirect('/payments?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidPaymentInput.safeParse({ reason: opt(formData.get('reason')) });
@@ -87,9 +89,9 @@ export async function voidPaymentAction(formData: FormData): Promise<void> {
   try {
     await voidPayment(userId, companyId, paymentId, reason);
   } catch (error) {
-    redirect(`/payments/${paymentId}?error=${codeOf(error)}`);
+    redirect(withBack(`/payments/${paymentId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/payments/${paymentId}?voided=1`);
+  redirect(withBack(`/payments/${paymentId}?voided=1`, back));
 }
 
 /** Map a service error to a redirect code; rethrow anything unrecognized. */

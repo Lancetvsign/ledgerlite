@@ -73,3 +73,11 @@ export function withBack(href: string, back: string | undefined): string {
   if (back === undefined) return href;
   return `${href}${href.includes('?') ? '&' : '?'}back=${encodeURIComponent(back)}`;
 }
+
+/**
+ * LL-120: the valid `back` a form carried (its hidden `back` field, see `BackField`), for an action
+ * to keep on the page it redirects to — or undefined. Never trusted beyond `parseBack`.
+ */
+export function backFrom(formData: FormData): string | undefined {
+  return parseBack(formData.get('back'))?.href;
+}

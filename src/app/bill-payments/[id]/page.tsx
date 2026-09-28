@@ -12,7 +12,7 @@ import { listBills } from '@/server/bills';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
-import { BackTo } from '@/app/reports/drill';
+import { BackField, BackTo } from '@/app/reports/drill';
 
 import { voidBillPaymentAction } from '../actions';
 import { billPaymentNotice } from '../notice';
@@ -112,6 +112,7 @@ export default async function BillPaymentDetailPage({
 
       {payment.status === 'POSTED' && canVoid && (
         <form action={voidBillPaymentAction}>
+          <BackField back={sp.back} />
           <input type="hidden" name="paymentId" value={payment.id} />
           <button type="submit" data-testid="void-bill-payment"
             className="self-start rounded border border-red-300 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:text-red-300">

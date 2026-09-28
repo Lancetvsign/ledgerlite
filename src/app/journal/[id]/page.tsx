@@ -7,6 +7,7 @@ import { getActiveCompanyMembership } from '@/server/authorization/company-conte
 import { getJournalEntry } from '@/server/ledger';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
+import { parseBack, withBack } from '@/app/reports/back';
 import { BackTo } from '@/app/reports/drill';
 
 import { sourceHref } from '../../reports/source-href';
@@ -86,7 +87,7 @@ export default async function JournalEntryPage({
       {canReverse && (
         // LL-110: the correction of a posted manual entry — never an edit, a reversing entry. The
         // form lives on its own page: this page stays free of any input (nothing here is editable).
-        <Link href={`/journal/${entry.id}/reverse`} data-testid="reverse-entry-open" className="self-start rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700">
+        <Link href={withBack(`/journal/${entry.id}/reverse`, parseBack(sp.back)?.href)} data-testid="reverse-entry-open" className="self-start rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700">
           Reverse this entry…
         </Link>
       )}

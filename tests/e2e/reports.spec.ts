@@ -208,6 +208,26 @@ test('an entry or document opened from the register links back to it, and on up 
   await expect(back).toHaveCount(0);
 });
 
+test('an action on a document opened from the register keeps the way back (LL-120)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Keep Co');
+  await openInvoice(page, 'Keep Co', '90.00');
+  const back = page.getByTestId('back-to-report');
+
+  // Register → the invoice → Void: the reloaded invoice still leads back to the register.
+  await page.goto('/reports/trial-balance');
+  await page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' }).getByTestId('tb-drill').click();
+  await page.getByTestId('register-source-link').first().click();
+  await expect(back).toHaveText('← Back to Account Register');
+  await page.getByTestId('void-invoice').click();
+  await expect(page.getByTestId('invoice-status')).toHaveText('VOID');
+  await expect(page).toHaveURL(/\/invoices\/[0-9a-f-]{36}\?voided=1&back=%2Freports%2Fregister/);
+  await expect(back).toHaveText('← Back to Account Register');
+  await back.click();
+  await expect(page.getByTestId('register-row')).toHaveCount(2); // the invoice and its void
+  await expect(back).toHaveText('← Back to Trial Balance');
+});
+
 test('a customer statement shows opening, activity and closing', async ({ page }) => {
   await freshCompany(page);
   await addCustomer(page, 'Beta Co');
