@@ -86,6 +86,33 @@ export async function getAccountingPeriod(
 }
 
 /**
+ * LL-116 / LL-119: which of `dates` fall in a CLOSED period of the company. A read only — unlike
+ * `getAccountingPeriod` it never creates a period (a date with no period is open). Not
+ * authorization-gated for the same reason as `getAccountingPeriod`: it is always called with a
+ * company the caller was already authorized for, and it exposes nothing cross-company.
+ */
+export async function closedDates(companyId: string, dates: readonly string[]): Promise<ReadonlySet<string>> {
+  const distinct = [...new Set(dates)].filter((d) => isCalendarDate(d));
+  if (distinct.length === 0) return new Set();
+  const rows = await getDbTx().execute<{ d: string }>(sql`
+    select d::text as d
+    from unnest(array[${sql.join(distinct.map((d) => sql`${d}`), sql`, `)}]::date[]) as d
+    where exists (
+      select 1 from accounting_periods p
+      where p.company_id = ${companyId} and p.status = 'CLOSED' and d between p.start_date and p.end_date)`);
+  return new Set(rows.rows.map((r) => r.d));
+}
+
+/**
+ * LL-116 / LL-119: the date a correction's reversal is proposed on — the original entry's own date
+ * while its period is open (the correction then lands in the period of the mistake), else today.
+ * A future-dated original also gets today. The reviewer can always change it.
+ */
+export function proposedReversalDate(postingDate: string, today: string, closed: ReadonlySet<string>): string {
+  return closed.has(postingDate) || postingDate > today ? today : postingDate;
+}
+
+/**
  * The single home of the closed-period rule (LL-031 depends on it). Resolves the
  * period for `date` and throws typed PERIOD_CLOSED if it is closed. Never
  * duplicated in a UI check.

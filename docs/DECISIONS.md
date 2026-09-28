@@ -2662,6 +2662,11 @@ The review screen proposes the posting's own date while its period is open, else
 in the period of the mistake. The period of the chosen date must be open (`PERIOD_CLOSED` otherwise); a date
 outside the range is `UNDO_DATE_INVALID`. A line matched to another's posting has no reversal and ignores it.
 
+**Amendment (LL-119 — the manual Reverse proposes the same date):** the Reverse page of a manual journal entry
+proposes the entry's own posting date while its period is open (else today), with a note saying which and why,
+exactly as "Undo posting" does. One rule (`proposedReversalDate`) and one read-only lookup (`closedDates`, which
+never creates a period) serve both. The reviewer can still choose any date the ledger accepts.
+
 ## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
 
 **Status** Accepted · **Added by** LL-105 · **Decided by** product owner ("have it save and mark as in progress instead of resetting if I leave the statement before completion")

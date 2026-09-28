@@ -18,7 +18,7 @@ import { recordAuditEvent } from '@/server/audit';
 import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
 import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, toLedgerDomainError } from '@/server/ledger';
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
-import { getAccountingPeriod } from '@/server/periods';
+import { closedDates, getAccountingPeriod, proposedReversalDate } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
 import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema, unpostImportLineInput } from '@/validation/bank-import';
 
@@ -1246,18 +1246,8 @@ export async function undoDateDefaults(
   const db = getDb();
   const company = (await db.select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
   const today = todayInTimeZone(company?.timezone ?? 'UTC');
-  const dates = [...new Set(lines.map((l) => l.txnDate))];
-  const closed = new Set<string>();
-  if (dates.length > 0) {
-    const rows = await db.execute<{ d: string }>(sql`
-      select d::text as d
-      from unnest(array[${sql.join(dates.map((d) => sql`${d}`), sql`, `)}]::date[]) as d
-      where exists (
-        select 1 from accounting_periods p
-        where p.company_id = ${companyId} and p.status = 'CLOSED' and d between p.start_date and p.end_date)`);
-    for (const r of rows.rows) closed.add(r.d);
-  }
-  return { today, byLine: new Map(lines.map((l) => [l.id, closed.has(l.txnDate) || l.txnDate > today ? today : l.txnDate])) };
+  const closed = await closedDates(companyId, lines.map((l) => l.txnDate));
+  return { today, byLine: new Map(lines.map((l) => [l.id, proposedReversalDate(l.txnDate, today, closed)])) };
 }
 
 /**

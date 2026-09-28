@@ -23,7 +23,7 @@ import { createCustomer } from '@/server/customers';
 import { createInvoice, finalizeInvoice } from '@/server/invoices';
 import { assertLedgerIntegrity, LedgerError, postJournalEntry, reverseJournalEntry } from '@/server/ledger';
 import { voidPayment } from '@/server/payments';
-import { closePeriod, getAccountingPeriod } from '@/server/periods';
+import { closedDates, closePeriod, getAccountingPeriod } from '@/server/periods';
 import { completeReconciliation, setCleared, startReconciliation } from '@/server/reconciliation';
 import { getTrialBalance } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
@@ -326,5 +326,20 @@ describe('import line — Undo posting on a chosen date (LL-116)', () => {
     d = await undoDateDefaults(c.owner, c.companyId, lines);
     expect(d.byLine.get('june')).toBe(today);
     expect(d.byLine.get('may')).toBe('2026-05-10');
+  });
+});
+
+describe('closed-date lookup for proposals (LL-119)', () => {
+  it('reports the dates in closed periods and never creates a period', async () => {
+    const c = await setup();
+    const db = await getTestDb();
+    const periods = async () => (await db.execute<{ n: string }>(sql`select count(*)::text as n from accounting_periods where company_id = ${c.companyId}`)).rows[0]!.n;
+    const june = await getAccountingPeriod(c.companyId, '2026-06-15');
+    await closePeriod(c.owner, c.companyId, june.id);
+    const before = await periods();
+    const closed = await closedDates(c.companyId, ['2026-06-02', '2026-06-30', '2026-07-01', '2031-03-03', 'not-a-date', '2026-06-02']);
+    expect([...closed].sort()).toEqual(['2026-06-02', '2026-06-30']);
+    expect(await periods()).toBe(before); // 2026-07 and 2031-03 were read, not created
+    expect(await closedDates(c.companyId, [])).toEqual(new Set());
   });
 });

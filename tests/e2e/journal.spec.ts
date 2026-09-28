@@ -80,6 +80,9 @@ test('a posted manual entry is corrected by reversal, never by editing (LL-110)'
   await page.getByTestId('reverse-entry-open').click();
   await expect(page).toHaveURL(/\/journal\/[0-9a-f-]{36}\/reverse$/);
   await expect(page.getByTestId('reverse-preview')).toContainText('Checking');
+  // LL-119: proposed on the entry's own date (its period is open), so the correction lands in February.
+  await expect(page.getByTestId('reverse-entry-date')).toHaveValue('2026-02-10');
+  await expect(page.getByTestId('reverse-entry-date-note')).toContainText('same period');
   await page.getByTestId('reverse-entry-reason').fill('Wrong account');
   await page.getByTestId('reverse-entry-confirm').click();
 
