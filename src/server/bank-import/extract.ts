@@ -1,13 +1,13 @@
 import 'server-only';
 
-import { APICallError, generateText, Output, type LanguageModel } from 'ai';
+import { APICallError, generateText, Output, RetryError, type LanguageModel } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { GatewayError } from '@ai-sdk/gateway';
 import { z } from 'zod';
 
 import { log } from '@/lib/logging';
 
-import { BankImportError } from './errors';
+import { BankImportError, type BankImportErrorCode } from './errors';
 import { normalizeAmount, normalizeDate, normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
 import { verifyStatementTotals } from './verify';
@@ -263,6 +263,61 @@ function verify(out: ExtractionOutput): ReturnType<typeof verifyStatementTotals>
   return verifyStatementTotals(rows.data.map((t) => t.amount), summary?.data ?? null);
 }
 
+/** The HTTP status an AI SDK / gateway error carries, if any. */
+function statusOf(error: unknown): number | undefined {
+  if (GatewayError.isInstance(error)) return error.statusCode;
+  if (APICallError.isInstance(error)) return error.statusCode;
+  return undefined;
+}
+
+/**
+ * Provider refusals that mean "no money on the account", whatever status they come with
+ * (Anthropic answers 400 "Your credit balance is too low…"; OpenAI-style providers 429
+ * "insufficient_quota"). Deliberately specific phrases: a 400 body can echo prompt text, and a
+ * statement may well say "billing".
+ */
+const CREDIT_REFUSAL = /credit balance is too low|insufficient_quota|exceeded your current quota/i;
+
+type ModelFailureCode = Extract<
+  BankImportErrorCode,
+  | 'EXTRACTION_FAILED'
+  | 'EXTRACTION_KEY_REJECTED'
+  | 'EXTRACTION_OUT_OF_CREDIT'
+  | 'EXTRACTION_MODEL_UNAVAILABLE'
+  | 'EXTRACTION_RATE_LIMITED'
+  | 'EXTRACTION_SERVICE_UNAVAILABLE'
+>;
+
+/**
+ * LL-113: which side a failed model call was — the AI SERVICE (credential, credit, model, rate
+ * limit, outage) or the STATEMENT (anything else, EXTRACTION_FAILED as before). Only the status and
+ * the error class decide; the provider's message is consulted solely for the credit refusal, and
+ * never leaves this function. A retried failure is judged by its last attempt.
+ */
+export function classifyModelFailure(thrown: unknown): ModelFailureCode {
+  const error = RetryError.isInstance(thrown) ? thrown.lastError : thrown;
+  const status = statusOf(error);
+  const message = error instanceof Error ? error.message : '';
+  if (status === 402 || ((status === 400 || status === 403 || status === 429) && CREDIT_REFUSAL.test(message))) return 'EXTRACTION_OUT_OF_CREDIT';
+  if (status === 401 || status === 403) return 'EXTRACTION_KEY_REJECTED';
+  if (status === 404) return 'EXTRACTION_MODEL_UNAVAILABLE';
+  if (status === 429) return 'EXTRACTION_RATE_LIMITED';
+  if (status !== undefined && status >= 500) return 'EXTRACTION_SERVICE_UNAVAILABLE';
+  // No response at all (network failure, timeout): the service was unreachable.
+  if (status === undefined && APICallError.isInstance(error) && error.isRetryable) return 'EXTRACTION_SERVICE_UNAVAILABLE';
+  return 'EXTRACTION_FAILED';
+}
+
+/** The error's own message per outcome — no provider text, no statement text (§9). */
+const MODEL_FAILURE_MESSAGE: Record<ModelFailureCode, string> = {
+  EXTRACTION_FAILED: 'The statement could not be extracted. Try again, or a different statement export.',
+  EXTRACTION_KEY_REJECTED: 'The AI service rejected this application\'s API key.',
+  EXTRACTION_OUT_OF_CREDIT: 'The AI service account is out of credit.',
+  EXTRACTION_MODEL_UNAVAILABLE: 'The configured AI model was not found.',
+  EXTRACTION_RATE_LIMITED: 'The AI service is rate-limiting requests.',
+  EXTRACTION_SERVICE_UNAVAILABLE: 'The AI service is unavailable.',
+};
+
 async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ExtractionOutput> {
     let output: z.infer<typeof modelOutputSchema>;
     try {
@@ -275,31 +330,33 @@ async function callModel(model: LanguageModel, system: string, prompt: string): 
         // the gateway surfaces that as an opaque internal error.
       });
       output = result.output;
-    } catch (error) {
+    } catch (thrown) {
       // No model output, provider message or file text in the error (§9) — the reviewer
-      // only needs to know the extraction did not succeed. Operators need to know WHICH
-      // stage failed: log the error class and HTTP status only. A provider message is
-      // included solely for auth/billing/config statuses, where it names the gateway
-      // problem (e.g. "AI Gateway not enabled") and cannot contain statement text.
-      // Gateway errors (auth, model-not-found, provider rejections, gateway 5xx) carry the
-      // gateway's status and its own message, which names the parameter/model/credential
-      // problem and never contains statement text — always log those. For other API
-      // errors log the message only on auth/billing/config statuses.
+      // only needs to know the extraction did not succeed, and (LL-113) whether that was the
+      // statement or the AI service. Operators need to know WHICH stage failed: log the error
+      // class and HTTP status only. A provider message is included solely for
+      // auth/billing/config statuses, where it names the gateway problem (e.g. "AI Gateway not
+      // enabled") and cannot contain statement text. A retried failure (429 / 5xx) arrives
+      // wrapped in a RetryError; its last attempt is what is classified and logged.
+      const error = RetryError.isInstance(thrown) ? thrown.lastError : thrown;
       const gateway = GatewayError.isInstance(error);
-      const status = gateway ? error.statusCode : APICallError.isInstance(error) ? error.statusCode : undefined;
+      const status = statusOf(error);
       const configProblem = status !== undefined && [401, 402, 403, 404, 429].includes(status);
+      const outcome = classifyModelFailure(thrown);
       log.warn('bank-import: model extraction failed', {
         stage: 'model',
         route: describeExtractionRoute(),
+        outcome,
         error: error instanceof Error ? error.name : typeof error,
         statusCode: status,
+        ...(RetryError.isInstance(thrown) ? { attempts: thrown.errors.length } : {}),
         ...(gateway ? { gatewayType: error.type } : {}),
         // The provider message is logged only for auth/billing/config statuses (LL-095): a 400
         // validation body could in principle echo part of the prompt.
         ...(configProblem && error instanceof Error ? { providerMessage: error.message.slice(0, 400) } : {}),
         ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.name } : {}),
       });
-      throw new BankImportError('EXTRACTION_FAILED', 'The statement could not be extracted. Try again, or a different statement export.');
+      throw new BankImportError(outcome, MODEL_FAILURE_MESSAGE[outcome]);
     }
     log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined });
     // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
