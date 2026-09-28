@@ -90,7 +90,7 @@ test('a figure on a report drills down to the transactions behind it (LL-108)', 
   const arRow = page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' });
   await expect(arRow.getByTestId('tb-drill')).toHaveText('150.00');
   await arRow.getByTestId('tb-drill').click();
-  await expect(page).toHaveURL(/\/reports\/register\?accountId=[0-9a-f-]{36}&from=\d{4}-01-01&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page).toHaveURL(/\/reports\/register\?accountId=[0-9a-f-]{36}&from=\d{4}-01-01&to=\d{4}-\d{2}-\d{2}&back=%2Freports%2Ftrial-balance%3FasOf%3D\d{4}-\d{2}-\d{2}$/); // LL-115: back to the trial balance
   await expect(page.getByTestId('register-account-name')).toContainText('Accounts Receivable');
   await expect(page.getByTestId('register-row')).toHaveCount(2);
   await expect(page.getByTestId('register-closing')).toHaveText('150.00');
@@ -101,7 +101,7 @@ test('a figure on a report drills down to the transactions behind it (LL-108)', 
   await expect(page.getByTestId('register-closing')).toHaveText('150.00');
   await page.goto('/reports/balance-sheet');
   await page.getByTestId('bs-current-net-income').click();
-  await expect(page).toHaveURL(/\/reports\/income-statement\?from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page).toHaveURL(/\/reports\/income-statement\?from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}&back=%2Freports%2Fbalance-sheet%3FasOf%3D\d{4}-\d{2}-\d{2}$/);
   await expect(page.getByTestId('is-net-income')).toHaveText('200.00');
 
   // Income statement → a revenue figure opens its register for the period.
@@ -112,14 +112,66 @@ test('a figure on a report drills down to the transactions behind it (LL-108)', 
   // A/R aging → the customer's total opens their statement.
   await page.goto('/reports/aging');
   await page.getByTestId('aging-row').filter({ hasText: 'Drill Co' }).getByTestId('aging-drill').click();
-  await expect(page).toHaveURL(/\/reports\/statement\?customerId=[0-9a-f-]{36}&to=\d{4}-\d{2}-\d{2}$/);
+  await expect(page).toHaveURL(/\/reports\/statement\?customerId=[0-9a-f-]{36}&to=\d{4}-\d{2}-\d{2}&back=%2Freports%2Faging%3FasOf%3D\d{4}-\d{2}-\d{2}$/);
   await expect(page.getByTestId('statement-customer')).toHaveValue(/[0-9a-f-]{36}/); // the customer is preselected
   await expect(page.getByTestId('statement-closing')).toHaveText('150.00');
 
   // Dashboard → a headline figure opens the report that computes it.
   await page.goto('/dashboard');
   await page.getByTestId('dashboard-ar').getByRole('link').click();
-  await expect(page).toHaveURL(/\/reports\/aging\?asOf=\d{4}-\d{2}-\d{2}$/);
+  await expect(page).toHaveURL(/\/reports\/aging\?asOf=\d{4}-\d{2}-\d{2}&back=%2Fdashboard$/);
+});
+
+test('a drilled-into screen links back to the report it came from, with the same filters (LL-115)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Back Co');
+  await openInvoice(page, 'Back Co', '200.00');
+  await receivePayment(page, 'Back Co', '50.00');
+  const back = page.getByTestId('back-to-report');
+
+  // Trial balance → register → back to that trial balance, its as-of date kept.
+  await page.goto('/reports/trial-balance');
+  await expect(back).toHaveCount(0); // opened directly: only "← Reports"
+  const asOf = await page.getByTestId('asof-input').inputValue();
+  await page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' }).getByTestId('tb-drill').click();
+  await expect(back).toHaveText('← Back to Trial Balance');
+  // Changing the register's own filters keeps the way back.
+  await page.getByTestId('register-submit').click();
+  await expect(back).toHaveText('← Back to Trial Balance');
+  await back.click();
+  await expect(page).toHaveURL(new RegExp(`/reports/trial-balance\\?asOf=${asOf}$`));
+  await expect(page.getByTestId('asof-input')).toHaveValue(asOf);
+
+  // A chain unwinds one step at a time: balance sheet → income statement → register.
+  await page.goto('/reports/balance-sheet');
+  await page.getByTestId('bs-current-net-income').click();
+  await expect(back).toHaveText('← Back to Balance Sheet');
+  await page.getByTestId('income-statement-row').filter({ hasText: 'Sales Revenue' }).getByTestId('is-drill').click();
+  await expect(back).toHaveText('← Back to Income Statement');
+  await back.click();
+  await expect(page).toHaveURL(/\/reports\/income-statement\?from=/);
+  await expect(back).toHaveText('← Back to Balance Sheet');
+  await back.click();
+  await expect(page).toHaveURL(/\/reports\/balance-sheet\?asOf=\d{4}-\d{2}-\d{2}$/);
+
+  // Dashboard → A/R aging → customer statement, and back up both steps.
+  await page.goto('/dashboard');
+  await page.getByTestId('dashboard-ar').getByRole('link').click();
+  await expect(back).toHaveText('← Back to Dashboard');
+  await page.getByTestId('aging-row').filter({ hasText: 'Back Co' }).getByTestId('aging-drill').click();
+  await expect(back).toHaveText('← Back to A/R Aging');
+  await back.click();
+  await expect(back).toHaveText('← Back to Dashboard');
+  await back.click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  // A crafted address is ignored: no link off-site, or to a screen that is not a report.
+  await page.goto('/reports/register?back=https%3A%2F%2Fevil.example%2Freports%2Ftrial-balance');
+  await expect(back).toHaveCount(0);
+  await page.goto('/reports/register?back=%2F%2Fevil.example%2Freports%2Faging');
+  await expect(back).toHaveCount(0);
+  await page.goto('/reports/statement?back=%2Faccount');
+  await expect(back).toHaveCount(0);
 });
 
 test('a customer statement shows opening, activity and closing', async ({ page }) => {

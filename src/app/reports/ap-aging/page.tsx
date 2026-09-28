@@ -4,7 +4,8 @@ import { formatMoney } from '@/lib/money-format';
 import { getApAging } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
-import { DrillLink } from '../drill';
+import { selfHref, withBack } from '../back';
+import { BackLinks, DrillLink } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -20,24 +21,23 @@ export const dynamic = 'force-dynamic';
 export default async function ApAgingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ asOf?: string }>;
+  searchParams: Promise<{ asOf?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
-  const { asOf: raw } = await searchParams;
+  const { asOf: raw, back } = await searchParams;
 
   const { asOf, invalid } = resolveAsOf(raw, ctx.today);
+  const self = selfHref('/reports/ap-aging', { asOf }, back);
   const aging = invalid ? null : await getApAging(ctx.userId, ctx.companyId, asOf);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">A/P Aging</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
-      <AsOfForm asOf={asOf} />
+      <AsOfForm asOf={asOf} back={back} />
 
       {invalid ? (
         <p role="status" data-testid="notice" className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-800">
@@ -66,7 +66,7 @@ export default async function ApAgingPage({
                 </tr>
               ) : (
                 aging!.vendors.map((v) => {
-                  const href = `/reports/vendor-statement?vendorId=${v.vendorId}&to=${asOf}`;
+                  const href = withBack(`/reports/vendor-statement?vendorId=${v.vendorId}&to=${asOf}`, self);
                   return (
                   <tr key={v.vendorId} data-testid="ap-aging-row" className="border-b border-neutral-100 dark:border-neutral-800">
                     <td className="py-2 pr-2"><Link href={href} className="underline decoration-dotted underline-offset-2 hover:decoration-solid">{v.vendorName}</Link></td>

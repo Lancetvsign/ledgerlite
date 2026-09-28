@@ -1,10 +1,9 @@
-import Link from 'next/link';
-
 import { isCalendarDate } from '@/lib/dates';
 import { formatMoney } from '@/lib/money-format';
 import { getCashFlowStatement } from '@/server/reports';
 
-import { DrillLink, incomeStatementHref, registerHref } from '../drill';
+import { selfHref } from '../back';
+import { BackField, BackLinks, DrillLink, incomeStatementHref, registerHref } from '../drill';
 import { requireReportContext } from '../report-context';
 
 /**
@@ -19,14 +18,16 @@ export const dynamic = 'force-dynamic';
 export default async function CashFlowPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
   const params = await searchParams;
+  const back = params.back;
 
   const to = params.to !== undefined && isCalendarDate(params.to) ? params.to : ctx.today;
   const from =
     params.from !== undefined && isCalendarDate(params.from) ? params.from : `${ctx.today.slice(0, 4)}-01-01`;
+  const self = selfHref('/reports/cash-flow', { from, to }, back);
   const datesInvalid =
     (params.from !== undefined && params.from !== '' && !isCalendarDate(params.from)) ||
     (params.to !== undefined && params.to !== '' && !isCalendarDate(params.to)) ||
@@ -38,10 +39,11 @@ export default async function CashFlowPage({
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Cash-Flow Statement</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">← Reports</Link>
+        <BackLinks back={back} />
       </header>
 
       <form method="get" className="flex flex-wrap items-end gap-3 text-sm" data-testid="cash-flow-form">
+        <BackField back={back} />
         <label className="flex flex-col gap-1">
           <span>From</span>
           <input type="date" name="from" defaultValue={from} data-testid="cf-from" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
@@ -67,21 +69,21 @@ export default async function CashFlowPage({
           </thead>
           <tbody>
             <SectionHeader label="Operating activities" />
-            <Line label="Net income" amount={cf.netIncome} href={incomeStatementHref(from, to)} />
+            <Line label="Net income" amount={cf.netIncome} href={incomeStatementHref(from, to, self)} />
             {cf.operatingAdjustments.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to, self)} />
             ))}
             <Subtotal label="Net cash from operating" amount={cf.operatingTotal} testid="cf-operating-total" />
 
             <SectionHeader label="Investing activities" />
             {cf.investing.rows.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to, self)} />
             ))}
             <Subtotal label="Net cash from investing" amount={cf.investing.total} testid="cf-investing-total" />
 
             <SectionHeader label="Financing activities" />
             {cf.financing.rows.map((l) => (
-              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
+              <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to, self)} />
             ))}
             <Subtotal label="Net cash from financing" amount={cf.financing.total} testid="cf-financing-total" />
 
@@ -89,7 +91,7 @@ export default async function CashFlowPage({
               <>
                 <SectionHeader label="Uncategorized (assign a cash-flow category to these accounts)" />
                 {cf.uncategorized.rows.map((l) => (
-                  <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to)} />
+                  <Line key={l.accountId} label={adjLabel(l)} amount={l.amount} href={registerHref(l.accountId, from, to, self)} />
                 ))}
                 <Subtotal label="Uncategorized total" amount={cf.uncategorized.total} testid="cf-uncategorized-total" />
               </>

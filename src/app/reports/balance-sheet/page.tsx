@@ -1,10 +1,10 @@
-import Link from 'next/link';
 import { formatMoney } from '@/lib/money-format';
 
 import { getBalanceSheet } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
-import { BEGINNING_OF_TIME, dayBefore, DrillLink, incomeStatementHref, registerHref } from '../drill';
+import { selfHref } from '../back';
+import { BackLinks, BEGINNING_OF_TIME, dayBefore, DrillLink, incomeStatementHref, registerHref } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -21,23 +21,22 @@ export const dynamic = 'force-dynamic';
 export default async function BalanceSheetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ asOf?: string }>;
+  searchParams: Promise<{ asOf?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
-  const { asOf: raw } = await searchParams;
+  const { asOf: raw, back } = await searchParams;
   const { asOf, invalid } = resolveAsOf(raw, ctx.today);
+  const self = selfHref('/reports/balance-sheet', { asOf }, back);
   const bs = invalid ? null : await getBalanceSheet(ctx.userId, ctx.companyId, asOf);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Balance Sheet</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
-      <AsOfForm asOf={asOf} />
+      <AsOfForm asOf={asOf} back={back} />
 
       {invalid || bs === null ? (
         <p role="status" data-testid="notice" className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-800">
@@ -55,27 +54,27 @@ export default async function BalanceSheetPage({
           <tbody>
             <SectionHeader label="Assets" />
             {bs.assets.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf, self)} />
             ))}
             <SubtotalLine label="Total assets" amount={bs.assets.total} testid="bs-assets-total" />
 
             <SectionHeader label="Liabilities" />
             {bs.liabilities.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf, self)} />
             ))}
             <SubtotalLine label="Total liabilities" amount={bs.liabilities.total} testid="bs-liabilities-total" />
 
             <SectionHeader label="Equity" />
             {bs.equity.accountRows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.balance} href={registerHref(r.accountId, bs.fiscalYearStart, asOf, self)} />
             ))}
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Retained earnings (prior years)</td>
-              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(BEGINNING_OF_TIME, dayBefore(bs.fiscalYearStart))} amount={bs.equity.priorRetainedEarnings} testid="bs-prior-retained" /></td>
+              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(BEGINNING_OF_TIME, dayBefore(bs.fiscalYearStart), self)} amount={bs.equity.priorRetainedEarnings} testid="bs-prior-retained" /></td>
             </tr>
             <tr data-testid="balance-sheet-row" className="border-b border-neutral-100 dark:border-neutral-800">
               <td className="py-2 pr-2">Net income (current year)</td>
-              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(bs.fiscalYearStart, asOf)} amount={bs.equity.currentNetIncome} testid="bs-current-net-income" /></td>
+              <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={incomeStatementHref(bs.fiscalYearStart, asOf, self)} amount={bs.equity.currentNetIncome} testid="bs-current-net-income" /></td>
             </tr>
             <SubtotalLine label="Total equity" amount={bs.equity.total} testid="bs-equity-total" />
           </tbody>

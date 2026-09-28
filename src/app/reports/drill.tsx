@@ -2,6 +2,8 @@ import Link from 'next/link';
 
 import { formatMoney } from '@/lib/money-format';
 
+import { parseBack, withBack } from './back';
+
 /**
  * Drill-down — LL-108. Every figure on a report is a link to what makes it up: an account's
  * figure opens its register (ADR-040: the ledger-derived detail behind every balance) for the
@@ -11,12 +13,12 @@ import { formatMoney } from '@/lib/money-format';
  * opening balance carries everything before it. Money is rendered from the service's
  * `string`s (ADR-004).
  */
-export function registerHref(accountId: string, from: string, to: string): string {
-  return `/reports/register?accountId=${encodeURIComponent(accountId)}&from=${from}&to=${to}`;
+export function registerHref(accountId: string, from: string, to: string, back?: string): string {
+  return withBack(`/reports/register?accountId=${encodeURIComponent(accountId)}&from=${from}&to=${to}`, back);
 }
 
-export function incomeStatementHref(from: string, to: string): string {
-  return `/reports/income-statement?from=${from}&to=${to}`;
+export function incomeStatementHref(from: string, to: string, back?: string): string {
+  return withBack(`/reports/income-statement?from=${from}&to=${to}`, back);
 }
 
 /** January 1st of the date's year — a window start that is never after the date. */
@@ -44,4 +46,30 @@ export function DrillLink({ href, amount, testid, className = '' }: { href: stri
       {formatMoney(amount)}
     </Link>
   );
+}
+
+/**
+ * LL-115: the header links of a report screen — "← Back to <report>" when it was opened by a
+ * drill-down (a valid `back`), and "← Reports" always.
+ */
+export function BackLinks({ back }: { back: unknown }) {
+  const target = parseBack(back);
+  return (
+    <span className="flex items-center gap-4">
+      {target !== null && (
+        <Link href={target.href} data-testid="back-to-report" className="text-sm text-neutral-500 underline">
+          ← Back to {target.title}
+        </Link>
+      )}
+      <Link href="/reports" className="text-sm text-neutral-500 underline">
+        ← Reports
+      </Link>
+    </span>
+  );
+}
+
+/** LL-115: keeps a valid `back` across a report screen's own filter form (GET). */
+export function BackField({ back }: { back: unknown }) {
+  const target = parseBack(back);
+  return target === null ? null : <input type="hidden" name="back" value={target.href} />;
 }
