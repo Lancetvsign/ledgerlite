@@ -489,7 +489,7 @@ export async function unmarkIntercompanyTransfer(
       for (const id of [...ids].sort()) await lockCompanyKeyShare(tx, id);
       await lockEntryCounters(tx, ids);
 
-      await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: 'Intercompany transfer un-marked' }, reversalDate);
+      await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: 'Intercompany transfer un-marked' }, { defaultTo: reversalDate }); // LL-121: lifted to the entry's own date if that is later
       let reversed = 1;
       if (other !== undefined) {
         // Their statement line (marked or matched) goes back to STAGED with ours; lock it too.
@@ -500,7 +500,7 @@ export async function unmarkIntercompanyTransfer(
             .where(and(eq(schema.bankImportLines.companyId, other.companyId), eq(schema.bankImportLines.journalEntryId, other.id)))
             .for('update')
         )[0];
-        await reverseEntryCore(tx, { companyId: other.companyId, actorUserId, entryId: other.id, description: `Intercompany transfer un-marked by ${me.legalName}` }, reversalDate);
+        await reverseEntryCore(tx, { companyId: other.companyId, actorUserId, entryId: other.id, description: `Intercompany transfer un-marked by ${me.legalName}` }, { defaultTo: reversalDate }); // LL-121: lifted to the entry's own date if that is later
         reversed += 1;
         if (theirLine !== undefined && theirLine.status === 'POSTED') {
           await tx

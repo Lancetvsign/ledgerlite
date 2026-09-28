@@ -2673,6 +2673,18 @@ proposes the entry's own posting date while its period is open (else today), wit
 exactly as "Undo posting" does. One rule (`proposedReversalDate`) and one read-only lookup (`closedDates`, which
 never creates a period) serve both. The reviewer can still choose any date the ledger accepts.
 
+**Amendment (LL-121 — no reversal is dated before its original):** `reverseEntryCore` takes a `ReversalDate` —
+either a date a person **chose** or a caller's **default** (the company's today). With the original locked, a chosen
+date before the original's posting date is refused (`REVERSAL_BEFORE_ORIGINAL`); a default is lifted to the original's
+own date when that is later, so voiding a future-dated document, reversing a future-dated entry, un-marking a transfer
+or giving back a shared line lands on the original's date instead of failing. Every caller states which it passes
+(document voids and manual reversal: chosen if given, else default; year-end reopen: chosen, the fiscal-year end;
+intercompany un-mark and shared give-back: default). Migration 0050 makes it structural: a trigger on
+`journal_entries` (insert, or update of `posting_date` / `reversal_of_id` / `source_type`) refuses any REVERSAL row whose
+posting date precedes the entry named by its `reversal_of_id` (a non-reversal carrying one stays the 0042 CHECK's shape
+error); existing rows are not re-checked. `proposedReversalDate` now proposes a
+future-dated original's own date.
+
 ## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
 
 **Status** Accepted · **Added by** LL-105 · **Decided by** product owner ("have it save and mark as in progress instead of resetting if I leave the statement before completion")

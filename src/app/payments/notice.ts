@@ -35,6 +35,8 @@ export function paymentNotice(code: string | undefined): string | null {
       return 'Only a posted payment can be voided.';
     case 'PERIOD_CLOSED':
       return 'That date falls in a closed accounting period.';
+    case 'REVERSAL_BEFORE_ORIGINAL':
+      return "A void can't be dated before the document it reverses.";
     case 'PAYMENT_NOT_FOUND':
     case 'notfound':
       return 'That payment was not found.';

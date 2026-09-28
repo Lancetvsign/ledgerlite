@@ -10,7 +10,7 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import { LedgerError, postEntryCore, reversalDateFrom, reverseEntryCore } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { InvoiceError } from './errors';
@@ -634,7 +634,7 @@ export async function voidInvoice(
       .set({ status: 'VOID', updatedAt: sql`now()` })
       .where(and(eq(schema.invoices.companyId, companyId), eq(schema.invoices.id, invoiceId)));
 
-    await reverseEntryCore(
+    const reversalEntry = await reverseEntryCore(
       tx,
       {
         companyId,
@@ -643,7 +643,7 @@ export async function voidInvoice(
         reversalDate,
         description: input.reason ?? `Void of invoice ${invoice.invoiceNumber ?? invoiceId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     await recordAuditEvent({
@@ -654,7 +654,7 @@ export async function voidInvoice(
       entityType: 'invoice',
       entityId: invoiceId,
       before: { status: 'OPEN', invoiceNumber: invoice.invoiceNumber },
-      after: { status: 'VOID', reversalDate, reason: input.reason ?? null },
+      after: { status: 'VOID', reversalDate: reversalEntry.entry.postingDate, reason: input.reason ?? null },
     });
 
     return await loadInvoice(tx, companyId, invoiceId);

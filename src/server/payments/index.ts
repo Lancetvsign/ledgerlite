@@ -17,6 +17,7 @@ import {
   isIdempotencyViolation,
   LedgerError,
   postEntryCore,
+  reversalDateFrom,
   reverseEntryCore,
 } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
@@ -397,7 +398,7 @@ export async function voidPayment(
       .set({ status: 'VOID', updatedAt: sql`now()` })
       .where(and(eq(schema.payments.companyId, companyId), eq(schema.payments.id, paymentId)));
 
-    await reverseEntryCore(
+    const reversalEntry = await reverseEntryCore(
       tx,
       {
         companyId,
@@ -406,7 +407,7 @@ export async function voidPayment(
         reversalDate,
         description: input.reason ?? `Void of payment ${payment.reference ?? paymentId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     // LL-110: a bank-statement line applied to this payment (LL-077) returns to review with the
@@ -452,7 +453,7 @@ export async function voidPayment(
       entityType: 'payment',
       entityId: paymentId,
       before: { status: 'POSTED', amount: payment.amount },
-      after: { status: 'VOID', reversalDate, reason: input.reason ?? null },
+      after: { status: 'VOID', reversalDate: reversalEntry.entry.postingDate, reason: input.reason ?? null },
     });
 
     return await loadPayment(tx, companyId, paymentId);

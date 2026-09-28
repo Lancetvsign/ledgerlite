@@ -106,10 +106,11 @@ export async function closedDates(companyId: string, dates: readonly string[]): 
 /**
  * LL-116 / LL-119: the date a correction's reversal is proposed on — the original entry's own date
  * while its period is open (the correction then lands in the period of the mistake), else today.
- * A future-dated original also gets today. The reviewer can always change it.
+ * LL-121: a future-dated original proposes its own date too — a reversal is never dated before
+ * the entry it reverses, so today would be refused. The reviewer can always change it.
  */
 export function proposedReversalDate(postingDate: string, today: string, closed: ReadonlySet<string>): string {
-  return closed.has(postingDate) || postingDate > today ? today : postingDate;
+  return closed.has(postingDate) && postingDate <= today ? today : postingDate;
 }
 
 /**

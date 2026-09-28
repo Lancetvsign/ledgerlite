@@ -65,7 +65,7 @@ export async function reverseJournalEntry(input: ReverseJournalEntryInput): Prom
   }
 
   try {
-    return await reverseInNewTransaction(input, reversalDate);
+    return await reverseInNewTransaction(input, reversalDateFrom(input.reversalDate, reversalDate));
   } catch (error) {
     // A concurrent reversal that slipped past the status guard is stopped by the
     // LL-030 trigger (OLD.reversed_by_id must be NULL). Surface it as the typed
@@ -76,10 +76,37 @@ export async function reverseJournalEntry(input: ReverseJournalEntryInput): Prom
 
 async function reverseInNewTransaction(
   input: ReverseJournalEntryInput,
-  reversalDate: string,
+  reversalDate: ReversalDate,
 ): Promise<PostedEntry> {
   // The manual reversal API confines itself to MANUAL entries (LL-066).
   return await getDbTx().transaction((tx) => reverseEntryCore(tx, input, reversalDate, true));
+}
+
+/**
+ * LL-121 (ADR-044 amendment): the date a reversal is to carry — one a person CHOSE, which must not
+ * precede the entry it reverses (`REVERSAL_BEFORE_ORIGINAL`), or a caller's DEFAULT (usually the
+ * company's today), which is lifted to the original's own date when the original is later — so
+ * voiding a future-dated document lands on its date instead of failing. A reversal is never dated
+ * before its original, here and by trigger (migration 0050).
+ */
+export type ReversalDate = { readonly chosen: string } | { readonly defaultTo: string };
+
+/** `chosen` when the caller was given a date, else `defaultTo` the fallback. */
+export function reversalDateFrom(chosen: string | undefined, fallback: string): ReversalDate {
+  return chosen !== undefined ? { chosen } : { defaultTo: fallback };
+}
+
+function resolveReversalDate(when: ReversalDate, originalPostingDate: string): string {
+  if ('chosen' in when) {
+    if (when.chosen < originalPostingDate) {
+      throw new LedgerError(
+        'REVERSAL_BEFORE_ORIGINAL',
+        `A reversal can't be dated before the entry it reverses (${originalPostingDate}).`,
+      );
+    }
+    return when.chosen;
+  }
+  return when.defaultTo < originalPostingDate ? originalPostingDate : when.defaultTo;
 }
 
 /**
@@ -96,7 +123,7 @@ async function reverseInNewTransaction(
 export async function reverseEntryCore(
   tx: Tx,
   input: ReverseJournalEntryInput,
-  reversalDate: string,
+  when: ReversalDate,
   /**
    * When true (the manual `reverseJournalEntry` path), the entry must be a MANUAL
    * entry — a `JOURNAL_ENTRY`, or a reversal rooted in one. Document services pass
@@ -146,6 +173,9 @@ export async function reverseEntryCore(
   if (original.status === 'REVERSED' || original.reversedById !== null) {
     throw new LedgerError('ENTRY_ALREADY_REVERSED', 'This entry has already been reversed.');
   }
+
+  // ---- LL-121: never before the original (a chosen date is refused; a default is lifted). ----
+  const reversalDate = resolveReversalDate(when, original.postingDate);
 
   // ---- Manual reversal is confined to MANUAL entries (LL-066 / ADR-025). ----
   // `reverseJournalEntry` (the public manual API) passes manualOnly; document voids

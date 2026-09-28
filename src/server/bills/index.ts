@@ -10,7 +10,7 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import { LedgerError, postEntryCore, reversalDateFrom, reverseEntryCore } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 
 import { BillError } from './errors';
@@ -550,7 +550,7 @@ export async function voidBill(
         reversalDate,
         description: input.reason ?? `Void of bill ${bill.billNumber ?? billId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     await recordAuditEvent({

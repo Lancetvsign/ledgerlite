@@ -36,6 +36,8 @@ export function billNotice(code: string | undefined): string | null {
       return 'No Accounts Payable account is configured for this company.';
     case 'PERIOD_CLOSED':
       return 'That date falls in a closed accounting period.';
+    case 'REVERSAL_BEFORE_ORIGINAL':
+      return "A void can't be dated before the document it reverses.";
     case 'BILL_NOT_FOUND':
     case 'notfound':
       return 'That bill was not found.';

@@ -508,8 +508,8 @@ export async function unassignSharedLine(
       // leave rule. ensureIntercompanyPair is idempotent and takes the sorted KEY SHARE itself.
       await ensureIntercompanyPair(tx, actorUserId, ownerCompanyId, viewerCompanyId);
       await lockEntryCounters(tx, [ownerCompanyId, viewerCompanyId]);
-      await reverseEntryCore(tx, { companyId: ownerCompanyId, actorUserId, entryId: ownerEntryId, description: 'Card line given back by the taking company' }, reversalDate);
-      await reverseEntryCore(tx, { companyId: viewerCompanyId, actorUserId, entryId: viewerEntryId, description: 'Card line given back to the cardholder' }, reversalDate);
+      await reverseEntryCore(tx, { companyId: ownerCompanyId, actorUserId, entryId: ownerEntryId, description: 'Card line given back by the taking company' }, { defaultTo: reversalDate }); // LL-121: lifted to the entry's own date if that is later
+      await reverseEntryCore(tx, { companyId: viewerCompanyId, actorUserId, entryId: viewerEntryId, description: 'Card line given back to the cardholder' }, { defaultTo: reversalDate }); // LL-121: lifted to the entry's own date if that is later
       await tx
         .update(schema.bankImportLines)
         .set({ status: 'STAGED', journalEntryId: null, assignedCompanyId: null, assignedJournalEntryId: null, updatedAt: sql`now()` })

@@ -9,7 +9,7 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import { LedgerError, postEntryCore, reversalDateFrom, reverseEntryCore } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 import { invoiceReductionsTotal } from '@/server/reports/open-balance';
 
@@ -249,7 +249,7 @@ export async function voidCreditMemo(
       .set({ status: 'VOID', updatedAt: sql`now()` })
       .where(and(eq(schema.creditMemos.companyId, companyId), eq(schema.creditMemos.id, creditMemoId)));
 
-    await reverseEntryCore(
+    const reversalEntry = await reverseEntryCore(
       tx,
       {
         companyId,
@@ -258,7 +258,7 @@ export async function voidCreditMemo(
         reversalDate,
         description: input.reason ?? `Void of credit memo ${creditMemoId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     // If this credit memo had cleared its invoice, it is no longer cleared → back to OPEN.
@@ -281,7 +281,7 @@ export async function voidCreditMemo(
       entityType: 'credit_memo',
       entityId: creditMemoId,
       before: { status: 'POSTED', amount: memo.amount },
-      after: { status: 'VOID', reversalDate, reason: input.reason ?? null },
+      after: { status: 'VOID', reversalDate: reversalEntry.entry.postingDate, reason: input.reason ?? null },
     });
 
     return await loadCreditMemo(tx, companyId, creditMemoId);

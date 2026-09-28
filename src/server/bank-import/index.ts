@@ -16,7 +16,7 @@ import { isStatementAccount } from '@/server/accounts/statement-account';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
 import { listOpenBills, payBillCore, type OpenBill } from '@/server/bill-payments';
-import { isIdempotencyViolation, LedgerError, postEntryCore, reverseEntryCore, toLedgerDomainError } from '@/server/ledger';
+import { isIdempotencyViolation, LedgerError, postEntryCore, reversalDateFrom, reverseEntryCore, toLedgerDomainError } from '@/server/ledger';
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { closedDates, getAccountingPeriod, proposedReversalDate } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
@@ -1203,7 +1203,7 @@ export async function unpostImportLine(
 
       let reversalEntryId: string | null = null;
       if (!matched) {
-        const reversal = await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: `Import line undone: ${line.description ?? `line ${String(line.lineNumber)}`}` }, reversalDate);
+        const reversal = await reverseEntryCore(tx, { companyId, actorUserId, entryId, description: `Import line undone: ${line.description ?? `line ${String(line.lineNumber)}`}` }, reversalDateFrom(input.reversalDate, reversalDate));
         reversalEntryId = reversal.entry.id;
       }
       const back = [me, ...mirrors];

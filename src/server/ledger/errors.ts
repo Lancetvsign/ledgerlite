@@ -37,7 +37,9 @@ export type LedgerErrorCode =
   /** Only a POSTED entry can be reversed; a DRAFT is edited or discarded. */
   | 'ENTRY_NOT_POSTED'
   /** The entry has already been reversed — a second reversal would double-count. */
-  | 'ENTRY_ALREADY_REVERSED';
+  | 'ENTRY_ALREADY_REVERSED'
+  /** LL-121: a reversal may not be dated before the entry it reverses (service and trigger 0050). */
+  | 'REVERSAL_BEFORE_ORIGINAL';
 
 export class LedgerError extends Error {
   public override readonly name = 'LedgerError';

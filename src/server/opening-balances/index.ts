@@ -15,6 +15,7 @@ import {
   isIdempotencyViolation,
   LedgerError,
   postEntryCore,
+  reversalDateFrom,
   reverseEntryCore,
   type PostedEntry,
 } from '@/server/ledger';
@@ -265,7 +266,7 @@ export async function voidOpeningBalances(
         reversalDate,
         description: input.reason ?? 'Void of opening balances',
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     await recordAuditEvent({
@@ -276,7 +277,7 @@ export async function voidOpeningBalances(
       entityType: 'opening_balance',
       entityId: existing.entry.id,
       before: { status: 'POSTED' },
-      after: { status: 'REVERSED', reversalDate, reason: input.reason ?? null },
+      after: { status: 'REVERSED', reversalDate: reversal.entry.postingDate, reason: input.reason ?? null },
     });
 
     return reversal;
