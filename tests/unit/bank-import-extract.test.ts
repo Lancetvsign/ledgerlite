@@ -34,7 +34,16 @@ function modelSaying(text: string): { model: MockLanguageModelV4; calls: () => n
   return { model, calls: () => n };
 }
 
-const STATEMENT_TEXT = 'ACME BANK Statement 2026-06-01 to 2026-06-30. 06/01 DEPOSIT ACME CORP 1,500.00 06/03 OFFICE DEPOT #1234 -120.50';
+const STATEMENT_TEXT = 'ACME BANK Statement 2026-06-01 to 2026-06-30. Beginning Balance $5,000.00 Total Deposits 1,500.00 Total Withdrawals 120.50 Ending Balance 6,379.50 06/01 DEPOSIT ACME CORP 1,500.00 06/03 OFFICE DEPOT #1234 -120.50';
+/** LL-123: the model reports the account summary as labelled lines, exactly as printed. */
+const SUMMARY_5000 = {
+  figures: [
+    { label: 'Beginning Balance', amount: '$5,000.00' },
+    { label: 'Total Deposits', amount: '1,500.00' },
+    { label: 'Total Withdrawals', amount: '120.50' },
+    { label: 'Ending Balance', amount: '6,379.50' },
+  ],
+};
 const readStatement = () => Promise.resolve(STATEMENT_TEXT);
 const BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF" — never parsed when readText is injected
 
@@ -64,14 +73,14 @@ describe('createAiExtractor', () => {
       { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' },
     ]);
     expect(out.transactions.every((r) => typeof r.amount === 'string')).toBe(true); // never a JS number (ADR-004)
-    expect(out.summary).toBeUndefined(); // the statement printed no totals: nothing to check (LL-109)
-    expect(out.attempts).toBe(1);
+    expect(out.summary).toBeUndefined(); // no summary reported: nothing to check (LL-109)…
+    expect(out.attempts).toBe(2); // …but every statement prints its balances, so it is asked for once (LL-123)
   });
 
   it('reads the statement\'s own totals, normalises their notation, and accepts a first pass that reconciles (LL-109)', async () => {
     const { model, calls } = modelSaying(
       JSON.stringify({
-        summary: { beginningBalance: '$5,000.00', totalCredits: '1,500.00', totalDebits: '120.50', endingBalance: '6,379.50' },
+        summary: SUMMARY_5000,
         transactions: [
           { date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00' },
           { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' },
@@ -79,7 +88,8 @@ describe('createAiExtractor', () => {
       }),
     );
     const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
-    expect(out.summary).toEqual({ beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' });
+    expect(out.summary).toEqual({ beginningBalance: '5000.0000', totalCredits: '1500.0000', totalDebits: '120.5000', endingBalance: '6379.5000' });
+    expect(out.figures?.map((f) => [f.role, f.found])).toEqual([['beginning', true], ['money_in', true], ['money_out', true], ['ending', true]]);
     expect(out.attempts).toBe(1);
     expect(calls()).toBe(1); // it reconciled: no second pass
   });
@@ -88,11 +98,11 @@ describe('createAiExtractor', () => {
     const answers = [
       // First pass: the deposit misread as 1,050.00 — credits off by 450, ending off by 450.
       JSON.stringify({
-        summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' },
+        summary: SUMMARY_5000,
         transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1050.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
       }),
       JSON.stringify({
-        summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' },
+        summary: SUMMARY_5000,
         transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
       }),
     ];
@@ -113,7 +123,7 @@ describe('createAiExtractor', () => {
     expect(out.reanalysisFailure).toBeUndefined(); // the re-check ran
     // The feedback carries the discrepancy as figures (statement vs lines, difference) and the original
     // statement text — never the model's rows themselves.
-    expect(prompts[1]).toContain('did not reconcile');
+    expect(prompts[1]).toContain('did not hold together');
     expect(prompts[1]).toContain('-450.0000');
     expect(prompts[1]).not.toContain('"transactions"');
     expect(prompts[1]).not.toContain('OFFICE DEPOT #1234", "amount"');
@@ -122,7 +132,7 @@ describe('createAiExtractor', () => {
   it('after two passes that both fail to reconcile, the second is returned with attempts 2 — the review shows the gap', async () => {
     const { model, calls } = modelSaying(
       JSON.stringify({
-        summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' },
+        summary: SUMMARY_5000,
         transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1050.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
       }),
     );
@@ -134,7 +144,7 @@ describe('createAiExtractor', () => {
 
   it('LL-114: when the re-analysis fails, the first pass is staged with its gap — a service failure or an unusable answer', async () => {
     const MISMATCHED = JSON.stringify({
-      summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' },
+      summary: SUMMARY_5000,
       transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1050.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
     });
     const answer = (text: string) => Promise.resolve({ content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
@@ -150,7 +160,7 @@ describe('createAiExtractor', () => {
     expect(down.calls()).toBe(2);
     expect(out.attempts).toBe(1);
     expect(out.transactions.map((t) => t.amount)).toEqual(['1050.00', '-120.50']);
-    expect(out.summary?.endingBalance).toBe('6379.50');
+    expect(out.summary?.endingBalance).toBe('6379.5000');
     expect(out.reanalysisFailure).toBe('EXTRACTION_SERVICE_UNAVAILABLE'); // LL-118: recorded for the review
 
     // The second call answers with something unusable.
@@ -168,23 +178,77 @@ describe('createAiExtractor', () => {
     expect(err.code).toBe('EXTRACTION_KEY_REJECTED');
   });
 
-  it('never throws on a malformed figure: a bad row or summary is left for staging to report, with a single call (LL-109)', async () => {
+  it('never throws on a malformed figure: a bad row or summary is left for staging to report (LL-109); a figure not on the statement asks for one re-read (LL-123)', async () => {
     const { model, calls } = modelSaying(
       JSON.stringify({
-        summary: { beginningBalance: 'lots', totalCredits: '1500.00' },
+        summary: { figures: [{ label: 'Beginning Balance', amount: 'lots' }, { label: 'Total Deposits', amount: '1,500.00' }] },
         transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: 'one thousand' }],
       }),
     );
     const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
-    expect(calls()).toBe(1); // nothing sound to compare: no re-analysis
+    expect(calls()).toBe(2); // "lots" is not on the statement and the ending balance is missing: one re-read
     expect(out.transactions[0]!.amount).toBe('one thousand'); // stageImport's validator rejects it, with a field path only
-    expect(out.attempts).toBe(1);
+    expect(out.figures?.map((f) => f.found)).toEqual([false, true]);
+    expect(out.summary).toEqual({ totalCredits: '1500.0000' }); // the unreadable balance is not counted
+    expect(out.attempts).toBe(2);
+  });
+
+  it('LL-123: the owner\'s statement — roles come from the labels, and a summary that does not add up is re-read with the gap', async () => {
+    const ownerText = 'ACCOUNT SUMMARY Previous Balance $3,814.15 Total Deposits 9,800.00 Total Checks and Debits 9,554.08 Other Credits 27.00 Balance This Statement $4,087.07 05/02 DEPOSIT 9,800.00 05/15 INTEREST 27.00 05/20 CHECKS 9,554.08';
+    const rows = [
+      { date: '2025-05-02', description: 'DEPOSIT', amount: '9800.00' },
+      { date: '2025-05-15', description: 'INTEREST', amount: '27.00' },
+      { date: '2025-05-20', description: 'CHECKS', amount: '-9554.08' },
+    ];
+    const answers = [
+      // First pass: the model's roles are swapped (the labels override them) and "Other Credits" is missed.
+      JSON.stringify({ summary: { figures: [
+        { label: 'Previous Balance', amount: '3,814.15', role: 'money_in' },
+        { label: 'Total Deposits', amount: '9,800.00', role: 'beginning' },
+        { label: 'Total Checks and Debits', amount: '9,554.08', role: 'ending' },
+        { label: 'Balance This Statement', amount: '4,087.07', role: 'money_out' },
+      ] }, transactions: rows }),
+      JSON.stringify({ summary: { figures: [
+        { label: 'Previous Balance', amount: '3,814.15' },
+        { label: 'Total Deposits', amount: '9,800.00' },
+        { label: 'Other Credits', amount: '27.00' },
+        { label: 'Total Checks and Debits', amount: '9,554.08' },
+        { label: 'Balance This Statement', amount: '4,087.07' },
+      ] }, transactions: rows }),
+    ];
+    const prompts: string[] = [];
+    let n = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        const text = answers[n] ?? answers[answers.length - 1]!;
+        n += 1;
+        return Promise.resolve({ content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
+      },
+    });
+    const out = toExtractionOutput(await createAiExtractor({ model, readText: () => Promise.resolve(ownerText) })({ bytes: BYTES }));
+    expect(n).toBe(2);
+    expect(prompts[1]).toContain('The summary does not add up');
+    expect(prompts[1]).toContain('4060.0700'); // beginning + in − out on the first pass
+    expect(prompts[1]).toContain('-27.0000');
+    expect(out.summary).toEqual({ beginningBalance: '3814.1500', totalCredits: '9827.0000', totalDebits: '9554.0800', endingBalance: '4087.0700' });
+    expect(out.attempts).toBe(2);
+  });
+
+  it('LL-123: a statement summary without an ending balance is re-read', async () => {
+    const { model, calls } = modelSaying(JSON.stringify({
+      summary: { figures: [{ label: 'Beginning Balance', amount: '$5,000.00' }, { label: 'Total Deposits', amount: '1,500.00' }, { label: 'Total Withdrawals', amount: '120.50' }] },
+      transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
+    }));
+    const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
+    expect(calls()).toBe(2);
+    expect(out.summary?.endingBalance).toBeUndefined();
   });
 
   it('reads the statement\'s printed closing date and normalises its notation (LL-111)', async () => {
     const { model } = modelSaying(
       JSON.stringify({
-        summary: { beginningBalance: '0.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '1379.50', statementDate: '06/30/2026' },
+        summary: { ...SUMMARY_5000, statementDate: '06/30/2026' },
         transactions: [{ date: '2026-06-01', description: 'DEPOSIT', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT', amount: '-120.50' }],
       }),
     );

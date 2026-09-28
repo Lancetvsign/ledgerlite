@@ -287,6 +287,25 @@ test('the statement\'s own totals are checked against the lines, and the check f
   await page.getByTestId('amend-amount-save-1').click();
   await expect(page.getByTestId('notice')).toContainText('Line corrected', { timeout: 15_000 });
   await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'verified');
+
+  // LL-123: what was read from the statement's summary, by label, and the statement's own math.
+  await expect(page.getByTestId('statement-figure')).toHaveCount(4);
+  await expect(page.getByTestId('statement-figure').first()).toContainText('Beginning Balance');
+  await expect(page.getByTestId('verification-check-statement_math')).toHaveAttribute('data-ok', '1');
+  // A misread summary figure is corrected by the reviewer: a wrong ending breaks the statement math…
+  await page.getByTestId('amend-summary-open').click();
+  await page.getByTestId('amend-summary-ending').fill('-600.50');
+  await page.getByTestId('amend-summary-save').click();
+  await expect(page.getByTestId('notice')).toContainText('Statement figures corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('verification-check-statement_math')).toHaveAttribute('data-ok', '0');
+  await expect(page.getByTestId('verification-check-statement_math')).toContainText('off by -20.00');
+  await expect(page.getByTestId('statement-summary-amended')).toBeVisible();
+  // …and the right one restores it.
+  await page.getByTestId('amend-summary-open').click();
+  await page.getByTestId('amend-summary-ending').fill('-620.50');
+  await page.getByTestId('amend-summary-save').click();
+  await expect(page.getByTestId('notice')).toContainText('Statement figures corrected', { timeout: 15_000 });
+  await expect(page.getByTestId('statement-verification')).toHaveAttribute('data-status', 'verified');
 });
 
 test('a misread amount is corrected before posting; the ledger carries the corrected figure (LL-107)', async ({ page }) => {

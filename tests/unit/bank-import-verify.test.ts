@@ -11,10 +11,24 @@ describe('verifyStatementTotals (LL-109)', () => {
     expect(v.lineCredits).toBe('1500.0000');
     expect(v.lineDebits).toBe('2120.5000');
     expect(v.checks.map((c) => [c.name, c.ok, c.difference])).toEqual([
+      ['statement_math', true, '0.0000'], // LL-123: the statement's own arithmetic comes first
       ['credits', true, '0.0000'],
       ['debits', true, '0.0000'],
       ['ending_balance', true, '0.0000'],
     ]);
+  });
+
+  it('LL-123: the statement\'s own math fails on a misread summary, whatever the lines say', () => {
+    // The owner's statement as it was stored: the printed figures in the wrong slots.
+    const swapped = verifyStatementTotals(['9800.00', '27.00', '-9554.08'], { beginningBalance: '9800.00', totalCredits: '3814.15', totalDebits: '4087.07', endingBalance: '9554.08' });
+    expect(swapped.status).toBe('mismatch');
+    expect(swapped.checks[0]).toMatchObject({ name: 'statement_math', ok: false, expected: '9554.0800', actual: '9527.0800', difference: '-27.0000' });
+    // Read by their labels (LL-123), with the Other Credits line: every check ties.
+    const right = verifyStatementTotals(['9800.00', '27.00', '-9554.08'], { beginningBalance: '3814.15', totalCredits: '9827.00', totalDebits: '9554.08', endingBalance: '4087.07' });
+    expect(right.status).toBe('verified');
+    expect(right.checks.map((c) => c.name)).toEqual(['statement_math', 'credits', 'debits', 'ending_balance']);
+    // Without all four figures there is no statement math to check.
+    expect(verifyStatementTotals(['1.00'], { totalCredits: '1.00', endingBalance: '1.00' }).checks.map((c) => c.name)).toEqual(['credits']);
   });
 
   it('reports each failing check with the statement figure, the lines figure and the exact difference', () => {

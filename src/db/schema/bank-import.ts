@@ -6,6 +6,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -73,6 +74,17 @@ export const bankImportBatches = pgTable(
      * says so while the lines still disagree. Closed list by CHECK.
      */
     reanalysisFailure: text('reanalysis_failure'),
+    /**
+     * LL-123: the statement's account-summary lines as read — `{ label, amount, role, source, found }[]`
+     * (see summary-figures.ts): what the review shows under "Read from the statement". The four
+     * `stated_*` figures above are their totals. Null for statements staged before LL-123.
+     */
+    statedFigures: jsonb('stated_figures'),
+    /**
+     * LL-123: the four totals as extracted, kept from the reviewer's FIRST correction of them on
+     * (null = never corrected); the correction itself is audited (BANK_IMPORT_SUMMARY_AMENDED).
+     */
+    summaryAmendedFrom: jsonb('summary_amended_from'),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),

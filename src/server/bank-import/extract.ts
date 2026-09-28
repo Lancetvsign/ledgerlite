@@ -8,8 +8,9 @@ import { z } from 'zod';
 import { log } from '@/lib/logging';
 
 import { BankImportError, type BankImportErrorCode } from './errors';
-import { normalizeAmount, normalizeDate, normalizeExtractedRow } from './normalize';
+import { normalizeDate, normalizeExtractedRow } from './normalize';
 import { extractPdfText } from './pdf-text';
+import { readSummaryFigures, type RawFigure, type StatementFigure } from './summary-figures';
 import { verifyStatementTotals } from './verify';
 
 import { extractedTransactionsSchema, statementSummarySchema } from '@/validation/bank-import';
@@ -88,6 +89,8 @@ export interface ExtractionOutput {
   readonly attempts?: number;
   /** LL-118: the re-check (second pass) failed with this code, so the first pass was kept (LL-114). */
   readonly reanalysisFailure?: ModelFailureCode;
+  /** LL-123: every account-summary line as read, with its printed label, role and whether it is on the statement. */
+  readonly figures?: readonly StatementFigure[];
 }
 export type ExtractionResult = ExtractedTransaction[] | ExtractionOutput;
 export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractionResult>;
@@ -123,6 +126,13 @@ export const cannedExtractor: TransactionExtractor = (input) =>
           // is negative). A fresh card: 0.00 + 2000.00 − 165.50 = 1834.50 paid ahead — so a fresh company's
           // reconciliation of this statement ties to the cent once its lines are posted.
           summary: { beginningBalance: '0.00', totalCredits: '2000.00', totalDebits: '165.50', endingBalance: '1834.50', statementDate: '2026-06-30' },
+          // LL-123: the account-summary lines as a real reading reports them (label, role, found).
+          figures: [
+            { label: 'Previous Balance', amount: '0.00', role: 'beginning', source: 'label', found: true },
+            { label: 'Payments, Credits', amount: '2000.00', role: 'money_in', source: 'label', found: true },
+            { label: 'Purchases', amount: '165.50', role: 'money_out', source: 'label', found: true },
+            { label: 'New Balance', amount: '1834.50', role: 'ending', source: 'label', found: true },
+          ],
         }
       : {
           transactions: [
@@ -132,6 +142,12 @@ export const cannedExtractor: TransactionExtractor = (input) =>
           ],
           // A fresh bank account: 0.00 + 1500.00 − 2120.50 = −620.50 (LL-111: ties a fresh company's reconciliation).
           summary: { beginningBalance: '0.00', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '-620.50', statementDate: '2026-06-30' },
+          figures: [
+            { label: 'Beginning Balance', amount: '0.00', role: 'beginning', source: 'label', found: true },
+            { label: 'Total Deposits', amount: '1500.00', role: 'money_in', source: 'label', found: true },
+            { label: 'Total Withdrawals', amount: '2120.50', role: 'money_out', source: 'label', found: true },
+            { label: 'Ending Balance', amount: '-620.50', role: 'ending', source: 'label', found: true },
+          ],
         },
   );
 
@@ -149,19 +165,26 @@ export const DEFAULT_BANK_IMPORT_MODEL = 'anthropic/claude-sonnet-5';
  */
 const modelOutputSchema = z.object({
   /**
-   * LL-109: the statement's OWN printed control figures — read, never computed. Strings; all
-   * optional (omit what the statement does not print). Re-validated by `statementSummarySchema`.
+   * LL-109 / LL-123: the statement's OWN account summary — every line of it, each with its label
+   * EXACTLY as printed. The app decides each line's role from its label wherever it can and checks
+   * that every label and amount is on the statement (summary-figures.ts); the model's role is used
+   * only for a label that does not say.
    */
   summary: z
     .object({
-      beginningBalance: z.string().optional().describe('The beginning / previous / opening balance the statement PRINTS, as a signed decimal string. For a credit card give the balance OWED as a NEGATIVE number.'),
-      totalCredits: z.string().optional().describe('The statement\'s printed total of money INTO the account (total deposits / credits / payments received), unsigned. Read it from the summary; never add it up yourself.'),
-      totalDebits: z.string().optional().describe('The statement\'s printed total of money OUT of the account (total withdrawals / debits / purchases / fees), unsigned. Read it; never add it up yourself.'),
-      endingBalance: z.string().optional().describe('The ending / new / closing balance the statement PRINTS, signed like the beginning balance (a card balance owed is negative).'),
+      figures: z
+        .array(
+          z.object({
+            label: z.string().describe('The summary line\'s label exactly as printed, e.g. "Previous Balance", "Total Deposits", "Total Checks and Debits", "Balance This Statement".'),
+            amount: z.string().describe('The amount exactly as printed on that line, as a string (e.g. "3,814.15").'),
+            role: z.enum(['beginning', 'ending', 'money_in', 'money_out']).optional().describe('What the line is: the beginning (previous) balance, the ending (new) balance, a total of money IN, or a total of money OUT.'),
+          }),
+        )
+        .describe('EVERY line of the account summary: the beginning and ending balances and every total of money in and money out (deposits, interest, other credits; checks, withdrawals, card purchases, fees). Never compute a figure; never add lines together.'),
       statementDate: z.string().optional().describe('The statement\'s closing date as printed (statement date / period end / closing date), YYYY-MM-DD. Read it; never infer it from the transaction dates.'),
     })
     .optional()
-    .describe('The control figures printed on the statement, or omitted when it prints none.'),
+    .describe('The account summary printed on the statement, or omitted when it prints none.'),
   transactions: z.array(
     z.object({
       date: z.string().describe('Transaction date as YYYY-MM-DD. Use the statement year if a line shows only month/day.'),
@@ -185,8 +208,7 @@ Rules:
 - date is YYYY-MM-DD. Infer the year from the statement period when a line shows only the month and day.
 - description is the statement's own text for the line, trimmed.
 - category is the account for the line, chosen ONLY from the company's chart of accounts given below (answer with the account number or its exact name). Follow the company's past decisions when a description matches one. Omit it rather than guess.
-- summary: also report the statement's OWN printed control figures — beginning balance, total credits (money in), total debits (money out), ending balance, and the statement's closing date — exactly as printed. Never compute them from the lines; omit any the statement does not print. For a credit card, balances OWED are negative and payments received count as credits.
-The transactions you return must add up to those totals: beginning balance + total credits − total debits = ending balance. If yours do not, re-read the statement before answering.
+- summary: also copy the statement's account summary — EVERY line of it, each with its label exactly as printed and its amount exactly as printed: the beginning (previous) balance, every total of money in (deposits, interest, other credits), every total of money out (checks, withdrawals, card purchases, fees), and the ending balance — plus the statement's closing date. Copy; never compute, add up or re-label a figure. Give the amounts as printed (no sign changes).
 If the text contains no transactions, return an empty list.`;
 
 const MAX_CHART_ACCOUNTS = 300;
@@ -226,24 +248,24 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
   return async ({ bytes, context }) => {
     const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
     const contextPrompt = buildContextPrompt(context);
+    const kind = context?.statementKind ?? 'bank';
 
-    // One pass, checked against the statement's own totals (LL-109); on a mismatch ONE more
-    // pass with the discrepancy — figures only, never the text — fed back. The pass that
+    // One pass, checked against the statement's own figures (LL-109, LL-123); when they do not hold
+    // — the summary's own math is off, a balance is missing, a figure is not on the statement, or the
+    // lines do not add up — ONE more pass with the discrepancy fed back as figures. The pass that
     // verifies wins; if neither does, the second is staged and the review shows the gap.
     // LL-114: the second pass is an attempt to improve a sound first answer, never a condition
     // of it — if it fails (the AI service refused or was unreachable, or answered unusably),
     // the first pass is staged and the review shows its gap, rather than losing the upload.
-    const first = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`);
+    const first = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`), text, kind);
     const checked = verify(first);
-    if (checked.status !== 'mismatch') return { ...first, attempts: 1 };
-    log.info('bank-import: statement totals mismatch — re-analysing', { stage: 'verify', attempt: 1, ...figures(checked) });
-    const feedback = `\n\nYour previous answer did not reconcile to the statement's own totals: ${checked.checks
-      .filter((c) => !c.ok)
-      .map((c) => `${c.name.replace('_', ' ')} — the statement states ${c.expected}, your lines give ${c.actual} (difference ${c.difference})`)
-      .join('; ')}. Re-read EVERY line of the statement: look for a line you dropped, merged, split or misread, and for a subtotal you included by mistake. Do not invent lines. Report the printed totals exactly.`;
+    const problems = summaryProblems(first, checked);
+    if (problems.length === 0) return { ...first, attempts: 1 };
+    log.info('bank-import: statement figures do not hold — re-analysing', { stage: 'verify', attempt: 1, ...figures(checked), ...figureCounts(first) });
+    const feedback = `\n\nYour previous answer did not hold together: ${problems.join(' ')} Re-read the statement: copy EVERY line of its account summary with its label and amount exactly as printed, and EVERY transaction line (look for a line you dropped, merged, split or misread, and for a subtotal you included by mistake). Do not invent lines or figures.`;
     let second: ExtractionOutput;
     try {
-      second = await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`);
+      second = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`), text, kind);
     } catch (error) {
       if (!(error instanceof BankImportError)) throw error;
       // callModel has already logged the failure (stage, status, outcome); say what happens next.
@@ -251,9 +273,40 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       return { ...first, attempts: 1, reanalysisFailure: isModelFailureCode(error.code) ? error.code : 'EXTRACTION_FAILED' };
     }
     const rechecked = verify(second);
-    log.info('bank-import: re-analysis result', { stage: 'verify', attempt: 2, status: rechecked.status, ...figures(rechecked) });
+    log.info('bank-import: re-analysis result', { stage: 'verify', attempt: 2, status: rechecked.status, ...figures(rechecked), ...figureCounts(second) });
     return { ...second, attempts: 2 };
   };
+}
+
+/**
+ * LL-123: why an answer's figures do not hold, as sentences for the re-read (figures and the
+ * statement's own labels only — the model already has the statement text). Empty = they hold.
+ */
+function summaryProblems(out: ExtractionOutput, checked: ReturnType<typeof verifyStatementTotals>): string[] {
+  const problems: string[] = [];
+  const s = out.summary;
+  // Every statement prints a beginning and an ending balance (the owner, 2026-09-28): an answer with
+  // no account summary at all is asked for it once.
+  if (out.figures === undefined) problems.push('The statement\'s account summary is missing from your answer: copy its beginning (previous) balance, every total of money in and money out, and its ending balance.');
+  if (out.figures !== undefined) {
+    if (s?.beginningBalance === undefined) problems.push('The beginning (previous) balance is missing from the account summary you gave.');
+    if (s?.endingBalance === undefined) problems.push('The ending balance is missing from the account summary you gave.');
+    const missing = out.figures.filter((f) => !f.found);
+    if (missing.length > 0) problems.push(`These summary figures are not on the statement as you gave them: ${missing.map((f) => `"${f.label}" ${f.amount}`).join(', ')}.`);
+  }
+  for (const c of checked.checks.filter((x) => !x.ok)) {
+    problems.push(
+      c.name === 'statement_math'
+        ? `The summary does not add up: beginning ${s?.beginningBalance ?? '?'} + money in ${s?.totalCredits ?? '?'} − money out ${s?.totalDebits ?? '?'} = ${c.actual}, but the ending balance is ${c.expected} (off by ${c.difference}) — a summary line is probably missing, e.g. interest or other credits, or fees.`
+        : `${c.name.replace('_', ' ')}: the statement states ${c.expected}, your lines give ${c.actual} (difference ${c.difference}).`,
+    );
+  }
+  return problems;
+}
+
+/** Counts only (§9). */
+function figureCounts(out: ExtractionOutput): Record<string, number> {
+  return { figures: out.figures?.length ?? 0, notFound: out.figures?.filter((f) => !f.found).length ?? 0 };
 }
 
 /** Counts and figures only (§9) — never a description, never the text. */
@@ -345,7 +398,7 @@ const MODEL_FAILURE_MESSAGE: Record<ModelFailureCode, string> = {
   EXTRACTION_SERVICE_UNAVAILABLE: 'The AI service is unavailable.',
 };
 
-async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ExtractionOutput> {
+async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ModelAnswer> {
     let output: z.infer<typeof modelOutputSchema>;
     try {
       const result = await generateText({
@@ -385,23 +438,34 @@ async function callModel(model: LanguageModel, system: string, prompt: string): 
       });
       throw new BankImportError(outcome, MODEL_FAILURE_MESSAGE[outcome]);
     }
-    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined });
+    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined, figures: output.summary?.figures.length ?? 0 });
     // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
     // validator sees them; anything else passes through untouched and is rejected there.
     const transactions = output.transactions.map(normalizeExtractedRow) as ExtractedTransaction[];
-    const summary = output.summary === undefined ? undefined : normalizeSummary(output.summary);
-    return summary === undefined ? { transactions } : { transactions, summary };
+    if (output.summary === undefined) return { transactions };
+    return {
+      transactions,
+      rawFigures: output.summary.figures,
+      ...(output.summary.statementDate === undefined ? {} : { statementDate: normalizeDate(output.summary.statementDate) }),
+    };
 }
 
-/** The four figures through the same notation canonicaliser as the lines; nothing else. */
-function normalizeSummary(raw: { beginningBalance?: string | undefined; totalCredits?: string | undefined; totalDebits?: string | undefined; endingBalance?: string | undefined; statementDate?: string | undefined }): StatementSummary {
-  const s: { -readonly [K in keyof StatementSummary]: StatementSummary[K] } = {};
-  if (raw.beginningBalance !== undefined) s.beginningBalance = normalizeAmount(raw.beginningBalance);
-  if (raw.totalCredits !== undefined) s.totalCredits = normalizeAmount(raw.totalCredits).replace(/^-/, '');
-  if (raw.totalDebits !== undefined) s.totalDebits = normalizeAmount(raw.totalDebits).replace(/^-/, '');
-  if (raw.endingBalance !== undefined) s.endingBalance = normalizeAmount(raw.endingBalance);
-  if (raw.statementDate !== undefined) s.statementDate = normalizeDate(raw.statementDate);
-  return s;
+/** One model answer before its summary lines are read against the statement (LL-123). */
+interface ModelAnswer {
+  readonly transactions: ExtractedTransaction[];
+  readonly rawFigures?: readonly RawFigure[];
+  readonly statementDate?: string;
+}
+
+/**
+ * LL-123: the answer's summary lines read against the statement text — roles from the printed
+ * labels, every figure checked to be on the statement — into the four totals the app uses.
+ */
+function withFigures(answer: ModelAnswer, text: string, statementKind: 'bank' | 'credit_card'): ExtractionOutput {
+  if (answer.rawFigures === undefined) return { transactions: answer.transactions };
+  const { summary, figures } = readSummaryFigures(answer.rawFigures, text, statementKind);
+  const withDate: StatementSummary = answer.statementDate === undefined ? summary : { ...summary, statementDate: answer.statementDate };
+  return { transactions: answer.transactions, summary: withDate, figures };
 }
 
 // ---------------------------------------------------------------------------------------
