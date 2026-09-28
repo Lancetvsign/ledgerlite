@@ -19,3 +19,6 @@ export { getAccountRegister } from './account-register';
 export type { AccountRegister, AccountRegisterLine } from './account-register';
 export { getIntercompanyReport } from './intercompany';
 export type { IntercompanyReport, IntercompanyRow } from './intercompany';
+export { ConsolidationError, getConsolidatedBalanceSheet, getConsolidatedIncomeStatement } from './consolidated';
+export type { ConsolidatedBalanceSheet, ConsolidatedIncomeStatement, ConsolidatedSection, ConsolidationErrorCode, ConsolidationMember, IntercompanyState } from './consolidated';
+export type { ConsolidatedRow } from './consolidation-rows';
