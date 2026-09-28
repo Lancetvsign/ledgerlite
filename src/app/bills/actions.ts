@@ -11,6 +11,7 @@ import { BillError, createBill, finalizeBill, voidBill } from '@/server/bills';
 import { LedgerError } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
 import { createBillInput, voidBillInput } from '@/validation/bill';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Bill UI actions — LL-065, the A/P mirror of the invoice actions. Everything the
@@ -93,18 +94,20 @@ export async function createBillAction(formData: FormData): Promise<void> {
 
 export async function finalizeBillAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const billId = idOf(formData, 'billId');
   if (!isUuid(billId)) redirect('/bills?error=notfound'); // malformed id → not-found, not a 500
   try {
     await finalizeBill(userId, companyId, billId);
   } catch (error) {
-    redirect(`/bills/${billId}?error=${codeOf(error)}`);
+    redirect(withBack(`/bills/${billId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/bills/${billId}?finalized=1`);
+  redirect(withBack(`/bills/${billId}?finalized=1`, back));
 }
 
 export async function voidBillAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const billId = idOf(formData, 'billId');
   if (!isUuid(billId)) redirect('/bills?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidBillInput.safeParse({ reason: opt(formData.get('reason')) });
@@ -112,9 +115,9 @@ export async function voidBillAction(formData: FormData): Promise<void> {
   try {
     await voidBill(userId, companyId, billId, reason);
   } catch (error) {
-    redirect(`/bills/${billId}?error=${codeOf(error)}`);
+    redirect(withBack(`/bills/${billId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/bills/${billId}?voided=1`);
+  redirect(withBack(`/bills/${billId}?voided=1`, back));
 }
 
 /** Map a service error to a redirect code; rethrow anything unrecognized. */

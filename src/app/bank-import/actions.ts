@@ -14,6 +14,7 @@ import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
 import { amendImportLineInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput, unpostImportLineInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Bank-import actions — LL-076. The company comes from the server-authorized session context
@@ -94,6 +95,7 @@ export async function uploadStatementAction(formData: FormData): Promise<void> {
 
 export async function postImportLinesAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   // A malformed id reads as not-found, never a database error (Gate 6 L1 / LL-093).
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
@@ -121,16 +123,16 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
   // stays a draft and the notice says so; the service would refuse it (COUNTERPART_REQUIRED).
   const waiting = all.filter((d) => d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined).length;
   const decisions = all.filter((d) => !(d.action === 'intercompany_transfer' && d.counterpartCompanyId === undefined && d.counterpartStatementLineId === undefined));
-  if (decisions.length === 0) redirect(`/bank-import/${batchId}?ok=posted&posted=0&ignored=0&waiting=${String(waiting)}`);
+  if (decisions.length === 0) redirect(withBack(`/bank-import/${batchId}?ok=posted&posted=0&ignored=0&waiting=${String(waiting)}`, back));
 
   const parsed = postImportLinesInput.safeParse({ decisions });
-  if (!parsed.success) redirect(`/bank-import/${batchId}?error=invalid`);
+  if (!parsed.success) redirect(withBack(`/bank-import/${batchId}?error=invalid`, back));
 
   let result: { posted: number; ignored: number; applied: number; matched: number; personal: number; intercompany: number };
   try {
     result = await postImportLines(userId, companyId, batchId, parsed.data);
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
     if (
       error instanceof BankImportError ||
       error instanceof LedgerError ||
@@ -138,12 +140,12 @@ export async function postImportLinesAction(formData: FormData): Promise<void> {
       error instanceof BillPaymentError ||
       error instanceof AccountError
     ) {
-      redirect(`/bank-import/${batchId}?error=${error.code}`);
+      redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     }
     throw error;
   }
   redirect(
-    `/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}&waiting=${String(waiting)}`,
+    withBack(`/bank-import/${batchId}?ok=posted&posted=${String(result.posted)}&ignored=${String(result.ignored)}&applied=${String(result.applied)}&matched=${String(result.matched)}&personal=${String(result.personal)}&intercompany=${String(result.intercompany)}&waiting=${String(waiting)}`, back),
   );
 }
 
@@ -191,35 +193,37 @@ export async function saveReviewDraftsAction(formData: FormData): Promise<{ ok: 
  */
 export async function unpostImportLineAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   const lineId = opt(formData.get('lineId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
-  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  if (!isUuid(lineId)) redirect(withBack(`/bank-import/${batchId}?error=LINE_NOT_FOUND`, back));
   // LL-116: the reversal's date as chosen (omitted = today); the service checks range and period.
   const rawDate = opt(formData.get('reversalDate'))?.trim();
   const parsed = unpostImportLineInput.safeParse(rawDate === undefined || rawDate === '' ? {} : { reversalDate: rawDate });
-  if (!parsed.success) redirect(`/bank-import/${batchId}?error=UNDO_DATE_INVALID`);
+  if (!parsed.success) redirect(withBack(`/bank-import/${batchId}?error=UNDO_DATE_INVALID`, back));
   let unposted = 0;
   try {
     ({ unposted } = await unpostImportLine(userId, companyId, batchId, lineId, parsed.data));
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
     if (error instanceof BankImportError && (error.code === 'UNPOST_ELSEWHERE' || error.code === 'LINE_RECONCILED' || error.code === 'UNDO_DATE_INVALID')) {
-      redirect(`/bank-import/${batchId}?error=${error.code}&detail=${encodeURIComponent(error.message)}`);
+      redirect(withBack(`/bank-import/${batchId}?error=${error.code}&detail=${encodeURIComponent(error.message)}`, back));
     }
-    if (error instanceof BankImportError || error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (error instanceof BankImportError || error instanceof LedgerError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     throw error;
   }
-  redirect(`/bank-import/${batchId}?ok=unposted&unposted=${String(unposted)}`);
+  redirect(withBack(`/bank-import/${batchId}?ok=unposted&unposted=${String(unposted)}`, back));
 }
 
 /** Corrects the amount, date or description of a staged line the extractor misread — LL-107 / LL-112. */
 export async function amendImportLineAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   const lineId = opt(formData.get('lineId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
-  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  if (!isUuid(lineId)) redirect(withBack(`/bank-import/${batchId}?error=LINE_NOT_FOUND`, back));
   // Thousands separators and stray spaces are forgiven; the sign is the statement's (− = money out).
   const amount = (opt(formData.get('amount')) ?? '').replace(/[,\s]/g, '');
   // A field the form did not send is left as it is; one it sent empty is invalid, not "unchanged".
@@ -232,28 +236,29 @@ export async function amendImportLineAction(formData: FormData): Promise<void> {
   });
   if (!parsed.success) {
     const field = parsed.error.issues[0]?.path[0];
-    redirect(`/bank-import/${batchId}?error=${field === 'txnDate' ? 'DATE_INVALID' : field === 'description' ? 'DESCRIPTION_INVALID' : 'AMOUNT_INVALID'}`);
+    redirect(withBack(`/bank-import/${batchId}?error=${field === 'txnDate' ? 'DATE_INVALID' : field === 'description' ? 'DESCRIPTION_INVALID' : 'AMOUNT_INVALID'}`, back));
   }
   try {
     await amendImportLine(userId, companyId, batchId, lineId, parsed.data);
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     throw error;
   }
-  redirect(`/bank-import/${batchId}?ok=amended`);
+  redirect(withBack(`/bank-import/${batchId}?ok=amended`, back));
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */
 export async function deleteImportBatchAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
   try {
     await deleteImportBatch(userId, companyId, batchId);
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     throw error;
   }
   redirect('/bank-import?ok=deleted');
@@ -262,32 +267,34 @@ export async function deleteImportBatchAction(formData: FormData): Promise<void>
 /** Shares / un-shares a card statement with the organization — LL-097. */
 export async function setBatchSharingAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
   const shared = formData.get('shared') === '1';
   try {
     await setBatchSharing(userId, companyId, batchId, shared);
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     throw error;
   }
-  redirect(`/bank-import/${batchId}?ok=${shared ? 'shared' : 'unshared'}`);
+  redirect(withBack(`/bank-import/${batchId}?ok=${shared ? 'shared' : 'unshared'}`, back));
 }
 
 /** Un-marks a bank line posted as an intercompany transfer (both sides if matched) — LL-100. */
 export async function unmarkIntercompanyTransferAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const batchId = opt(formData.get('batchId')) ?? '';
   const lineId = opt(formData.get('lineId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
-  if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  if (!isUuid(lineId)) redirect(withBack(`/bank-import/${batchId}?error=LINE_NOT_FOUND`, back));
   try {
     await unmarkIntercompanyTransfer(userId, companyId, batchId, lineId);
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError || error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError || error instanceof LedgerError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
     throw error;
   }
-  redirect(`/bank-import/${batchId}?ok=unmarked`);
+  redirect(withBack(`/bank-import/${batchId}?ok=unmarked`, back));
 }

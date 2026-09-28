@@ -12,6 +12,9 @@ import { closedDates, proposedReversalDate } from '@/server/periods';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 
+import { parseBack, withBack } from '@/app/reports/back';
+import { BackField } from '@/app/reports/drill';
+
 import { reverseJournalEntryAction } from '../../actions';
 
 /**
@@ -23,7 +26,7 @@ import { reverseJournalEntryAction } from '../../actions';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export default async function ReverseEntryPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ReverseEntryPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ back?: string }> }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
   const user = await ensureAppUser(session.user);
@@ -32,6 +35,8 @@ export default async function ReverseEntryPage({ params }: { params: Promise<{ i
   if (!roleHasCapability(membership.role, 'journal.post')) redirect('/account?error=denied');
 
   const { id } = await params;
+  // LL-120: opened from an entry that was opened from the register — keep the way back.
+  const back = parseBack((await searchParams).back)?.href;
   const view = await getJournalEntry(user.id, membership.companyId, id);
   if (view === null) notFound();
   const { entry, lines } = view;
@@ -51,7 +56,7 @@ export default async function ReverseEntryPage({ params }: { params: Promise<{ i
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Reverse entry {entry.entryNumber !== null ? `#${String(entry.entryNumber)}` : ''}</h1>
-        <Link href={`/journal/${entry.id}`} className="text-sm text-neutral-500 underline">← Entry</Link>
+        <Link href={withBack(`/journal/${entry.id}`, back)} className="text-sm text-neutral-500 underline">← Entry</Link>
       </header>
 
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
@@ -80,6 +85,7 @@ export default async function ReverseEntryPage({ params }: { params: Promise<{ i
 
       <form action={reverseJournalEntryAction} className="flex flex-col gap-3 text-sm" data-testid="reverse-entry">
         <input type="hidden" name="entryId" value={entry.id} />
+        <BackField back={back} />
         <label className="flex items-center gap-2">
           <span className="w-28 text-neutral-500">Reversal date</span>
           <input type="date" name="reversalDate" defaultValue={proposed} required data-testid="reverse-entry-date" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />

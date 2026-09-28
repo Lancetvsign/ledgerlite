@@ -18,7 +18,7 @@ import { listOpenInvoices } from '@/server/payments';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
-import { BackTo } from '@/app/reports/drill';
+import { BackField, BackTo } from '@/app/reports/drill';
 
 import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { reanalysisNote } from '../reanalysis-note';
@@ -261,6 +261,7 @@ export default async function ReviewImportPage({
         // LL-097: share this card statement so the other companies of the organization can take
         // the lines that are theirs (from their own "Shared with you" page).
         <form action={setBatchSharingAction} className="flex items-center gap-2 text-sm">
+          <BackField back={sp.back} />
           <input type="hidden" name="batchId" value={view.batch.id} />
           <input type="hidden" name="shared" value={view.batch.sharedWithOrganization ? '0' : '1'} />
           <span data-testid="sharing-status" className="text-neutral-600 dark:text-neutral-400">
@@ -279,6 +280,8 @@ export default async function ReviewImportPage({
       )}
 
       <form action={postImportLinesAction} data-testid="review-form" className="flex flex-col gap-4">
+
+        <BackField back={sp.back} />
         <input type="hidden" name="batchId" value={view.batch.id} />
         <ReviewStateProvider defaults={defaultActions} initial={initialActions}>
         {staged > 0 && (
@@ -534,6 +537,7 @@ export default async function ReviewImportPage({
         .filter((l) => l.status === 'POSTED' && l.postedSource === 'INTERCOMPANY')
         .map((l) => (
           <form key={l.id} id={`unmark-${l.id}`} action={unmarkIntercompanyTransferAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="batchId" value={view.batch.id} />
             <input type="hidden" name="lineId" value={l.id} />
           </form>
@@ -547,6 +551,7 @@ export default async function ReviewImportPage({
       {undoable.map((l) => (
         // LL-110: the "Undo posting" form of each posted row (its button and date live in the table).
         <form key={`unpost-${l.id}`} id={`unpost-${l.id}`} action={unpostImportLineAction}>
+          <BackField back={sp.back} />
           <input type="hidden" name="batchId" value={view.batch.id} />
           <input type="hidden" name="lineId" value={l.id} />
         </form>
@@ -556,6 +561,7 @@ export default async function ReviewImportPage({
         .map((l) => (
           // LL-107 / LL-112: the correction form of each staged row (its inputs live in the table).
           <form key={`amend-${l.id}`} id={`amend-${l.id}`} action={amendImportLineAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="batchId" value={view.batch.id} />
             <input type="hidden" name="lineId" value={l.id} />
           </form>
@@ -569,6 +575,7 @@ export default async function ReviewImportPage({
             Delete this import…
           </summary>
           <form action={deleteImportBatchAction} className="mt-2 flex flex-col gap-2 rounded border border-neutral-300 p-3 text-sm dark:border-neutral-700">
+            <BackField back={sp.back} />
             <input type="hidden" name="batchId" value={view.batch.id} />
             <p className="text-xs text-neutral-600 dark:text-neutral-400">
               Removes the uploaded statement and its {String(view.lines.length)} extracted line(s). Nothing was posted, so

@@ -10,6 +10,7 @@ import { LedgerError, postJournalEntry, reverseJournalEntry } from '@/server/led
 import { ensureAppUser } from '@/server/users';
 import { postJournalEntryInput, reverseJournalEntryInput } from '@/validation/journal';
 import { isUuid } from '@/lib/uuid';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Manual journal-entry posting action — LL-035.
@@ -106,6 +107,7 @@ function emptyToUndefined(v: FormDataEntryValue | null): string | undefined {
  */
 export async function reverseJournalEntryAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: the reversal keeps the way back to the register
   const rawEntryId = formData.get('entryId');
   const entryId = typeof rawEntryId === 'string' ? rawEntryId.trim() : '';
   if (!isUuid(entryId)) redirect('/journal/new');
@@ -118,15 +120,15 @@ export async function reverseJournalEntryAction(formData: FormData): Promise<voi
     ...(typeof rawDate === 'string' && rawDate.trim() !== '' ? { reversalDate: rawDate.trim() } : {}),
     ...(typeof rawReason === 'string' && rawReason.trim() !== '' ? { description: rawReason.trim() } : {}),
   });
-  if (!parsed.success) redirect(`/journal/${entryId}?error=invalid`);
+  if (!parsed.success) redirect(withBack(`/journal/${entryId}?error=invalid`, back));
   let reversalId: string;
   try {
     reversalId = (await reverseJournalEntry(parsed.data)).entry.id;
   } catch (error) {
-    if (error instanceof AuthorizationDenied) redirect(`/journal/${entryId}?error=denied`);
-    if (error instanceof LedgerError) redirect(`/journal/${entryId}?error=${error.code}`);
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/journal/${entryId}?error=denied`, back));
+    if (error instanceof LedgerError) redirect(withBack(`/journal/${entryId}?error=${error.code}`, back));
     throw error;
   }
-  redirect(`/journal/${reversalId}?ok=reversed`);
+  redirect(withBack(`/journal/${reversalId}?ok=reversed`, back));
 }
 

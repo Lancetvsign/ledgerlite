@@ -17,6 +17,7 @@ import {
 import { LedgerError } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
 import { createInvoiceInput, voidInvoiceInput } from '@/validation/invoice';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Invoice UI actions — LL-044. Everything the browser sends is untrusted. The
@@ -117,18 +118,20 @@ export async function updateInvoiceAction(formData: FormData): Promise<void> {
 
 export async function finalizeInvoiceAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const invoiceId = idOf(formData, 'invoiceId');
   if (!isUuid(invoiceId)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   try {
     await finalizeInvoice(userId, companyId, invoiceId);
   } catch (error) {
-    redirect(`/invoices/${invoiceId}?error=${codeOf(error)}`);
+    redirect(withBack(`/invoices/${invoiceId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/invoices/${invoiceId}?finalized=1`);
+  redirect(withBack(`/invoices/${invoiceId}?finalized=1`, back));
 }
 
 export async function voidInvoiceAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const invoiceId = idOf(formData, 'invoiceId');
   if (!isUuid(invoiceId)) redirect('/invoices?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidInvoiceInput.safeParse({ reason: opt(formData.get('reason')) });
@@ -136,9 +139,9 @@ export async function voidInvoiceAction(formData: FormData): Promise<void> {
   try {
     await voidInvoice(userId, companyId, invoiceId, reason);
   } catch (error) {
-    redirect(`/invoices/${invoiceId}?error=${codeOf(error)}`);
+    redirect(withBack(`/invoices/${invoiceId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/invoices/${invoiceId}?voided=1`);
+  redirect(withBack(`/invoices/${invoiceId}?voided=1`, back));
 }
 
 /** Map a service error to a redirect code; rethrow anything unrecognized. */

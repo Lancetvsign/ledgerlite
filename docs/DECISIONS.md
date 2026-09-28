@@ -2341,6 +2341,12 @@ name. Its rows' journal-entry and source-document links carry the register's own
 and the screens they open — journal entry, invoice, bill, customer payment, bill payment, statement review — show
 "← Back to Account Register" beside their usual header link. The journal entry page stays input-free.
 
+**Amendment (LL-120 — an action keeps the way back):** the forms on those screens carry `back` as a hidden field
+(`BackField`), and their actions keep it on every redirect back to the same screen (`backFrom`, validated by the same
+allowlist): finalize and void on invoices and bills, void on payments and bill payments, every action of the statement
+review, and the journal entry's Reverse (whose result, the reversal entry, keeps it too). A redirect elsewhere (a
+deleted statement to the list) drops it.
+
 ## ADR-041 — Team membership: invitations claimed on entry, the role ceiling, and last-owner protection
 
 **Status** Accepted · **Added by** LL-086 · **Decided by** product owner ("start LL-086")

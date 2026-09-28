@@ -11,7 +11,7 @@ import { getBill } from '@/server/bills';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
-import { BackTo } from '@/app/reports/drill';
+import { BackField, BackTo } from '@/app/reports/drill';
 
 import { finalizeBillAction, voidBillAction } from '../actions';
 import { billNotice } from '../notice';
@@ -125,6 +125,7 @@ export default async function BillDetailPage({
       <div className="flex items-center gap-2">
         {bill.status === 'DRAFT' && canFinalize && (
           <form action={finalizeBillAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="billId" value={bill.id} />
             <button type="submit" data-testid="finalize-bill"
               className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
@@ -134,6 +135,7 @@ export default async function BillDetailPage({
         )}
         {bill.status === 'OPEN' && canVoid && (
           <form action={voidBillAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="billId" value={bill.id} />
             <button type="submit" data-testid="void-bill"
               className="rounded border border-red-300 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:text-red-300">

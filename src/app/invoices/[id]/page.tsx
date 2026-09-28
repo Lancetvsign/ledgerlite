@@ -11,7 +11,7 @@ import { listCustomers } from '@/server/customers';
 import { getInvoice } from '@/server/invoices';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
-import { BackTo } from '@/app/reports/drill';
+import { BackField, BackTo } from '@/app/reports/drill';
 
 import { finalizeInvoiceAction, voidInvoiceAction } from '../actions';
 import { invoiceNotice } from '../notice';
@@ -138,6 +138,7 @@ export default async function InvoiceDetailPage({
         )}
         {invoice.status === 'DRAFT' && canPost && (
           <form action={finalizeInvoiceAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="invoiceId" value={invoice.id} />
             <button type="submit" data-testid="finalize-invoice"
               className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:bg-neutral-100 dark:text-neutral-900">
@@ -147,6 +148,7 @@ export default async function InvoiceDetailPage({
         )}
         {invoice.status === 'OPEN' && canPost && (
           <form action={voidInvoiceAction}>
+            <BackField back={sp.back} />
             <input type="hidden" name="invoiceId" value={invoice.id} />
             <button type="submit" data-testid="void-invoice"
               className="rounded border border-red-300 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:text-red-300">

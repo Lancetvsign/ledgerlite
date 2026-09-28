@@ -11,6 +11,7 @@ import { BillPaymentError, payBill, voidBillPayment } from '@/server/bill-paymen
 import { LedgerError } from '@/server/ledger';
 import { ensureAppUser } from '@/server/users';
 import { payBillInput, voidBillPaymentInput } from '@/validation/bill-payment';
+import { backFrom, withBack } from '@/app/reports/back';
 
 /**
  * Bill-payment UI actions — LL-065, the A/P mirror of the payment actions.
@@ -81,6 +82,7 @@ export async function payBillAction(formData: FormData): Promise<void> {
 
 export async function voidBillPaymentAction(formData: FormData): Promise<void> {
   const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
   const paymentId = idOf(formData, 'paymentId');
   if (!isUuid(paymentId)) redirect('/bill-payments?error=notfound'); // malformed id → not-found, not a 500
   const parsedReason = voidBillPaymentInput.safeParse({ reason: opt(formData.get('reason')) });
@@ -88,9 +90,9 @@ export async function voidBillPaymentAction(formData: FormData): Promise<void> {
   try {
     await voidBillPayment(userId, companyId, paymentId, reason);
   } catch (error) {
-    redirect(`/bill-payments/${paymentId}?error=${codeOf(error)}`);
+    redirect(withBack(`/bill-payments/${paymentId}?error=${codeOf(error)}`, back));
   }
-  redirect(`/bill-payments/${paymentId}?voided=1`);
+  redirect(withBack(`/bill-payments/${paymentId}?voided=1`, back));
 }
 
 /** Map a service error to a redirect code; rethrow anything unrecognized. */
