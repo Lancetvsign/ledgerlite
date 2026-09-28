@@ -1990,6 +1990,12 @@ the reviewer the statement is not the problem and what fixes it. The error's mes
 own; the provider's text never reaches the reviewer, and is logged only for the config statuses as before.
 The credit-refusal match uses deliberately specific phrases, because a 400 body can echo prompt text.
 
+**Amendment (LL-114 — the re-analysis never costs the upload):** the second pass is an attempt to improve a
+sound first answer, not a condition of it. If the second model call fails for any reason (an AI-service
+failure, or an unusable answer), the first pass is staged with `extraction_attempts = 1` and the review shows
+its gap exactly as for a statement that verified on neither pass. A failure on the first call still fails the
+upload with its own code, since there is nothing to keep.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner

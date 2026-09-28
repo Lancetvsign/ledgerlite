@@ -131,6 +131,40 @@ describe('createAiExtractor', () => {
     expect(out.transactions[0]!.amount).toBe('1050.00');
   });
 
+  it('LL-114: when the re-analysis fails, the first pass is staged with its gap — a service failure or an unusable answer', async () => {
+    const MISMATCHED = JSON.stringify({
+      summary: { beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '120.50', endingBalance: '6379.50' },
+      transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1050.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
+    });
+    const answer = (text: string) => Promise.resolve({ content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
+    const failingSecond = (second: () => ReturnType<typeof answer>) => {
+      let n = 0;
+      const model = new MockLanguageModelV4({ doGenerate: () => (++n === 1 ? answer(MISMATCHED) : second()) });
+      return { model, calls: () => n };
+    };
+
+    // The AI service is unavailable on the second call (a non-retryable 529 so the SDK does not back off).
+    const down = failingSecond(() => Promise.reject(apiError(529, 'overloaded')));
+    const out = toExtractionOutput(await createAiExtractor({ model: down.model, readText: readStatement })({ bytes: BYTES }));
+    expect(down.calls()).toBe(2);
+    expect(out.attempts).toBe(1);
+    expect(out.transactions.map((t) => t.amount)).toEqual(['1050.00', '-120.50']);
+    expect(out.summary?.endingBalance).toBe('6379.50');
+
+    // The second call answers with something unusable.
+    const garbled = failingSecond(() => answer('not json'));
+    const out2 = toExtractionOutput(await createAiExtractor({ model: garbled.model, readText: readStatement })({ bytes: BYTES }));
+    expect(garbled.calls()).toBe(2);
+    expect(out2.attempts).toBe(1);
+    expect(out2.transactions[0]!.amount).toBe('1050.00');
+  });
+
+  it('LL-114: a failure on the FIRST call still fails the upload with its own code — there is nothing to keep', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: () => Promise.reject(apiError(401, 'invalid x-api-key')) });
+    const err = await errOf(createAiExtractor({ model, readText: readStatement })({ bytes: BYTES }));
+    expect(err.code).toBe('EXTRACTION_KEY_REJECTED');
+  });
+
   it('never throws on a malformed figure: a bad row or summary is left for staging to report, with a single call (LL-109)', async () => {
     const { model, calls } = modelSaying(
       JSON.stringify({
