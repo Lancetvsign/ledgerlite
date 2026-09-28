@@ -174,6 +174,40 @@ test('a drilled-into screen links back to the report it came from, with the same
   await expect(back).toHaveCount(0);
 });
 
+test('an entry or document opened from the register links back to it, and on up the chain (LL-117)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Reg Co');
+  await openInvoice(page, 'Reg Co', '200.00');
+  const back = page.getByTestId('back-to-report');
+
+  // Trial balance → A/R register → the invoice's journal entry → back to the register → back to the trial balance.
+  await page.goto('/reports/trial-balance');
+  await page.getByTestId('trial-balance-row').filter({ hasText: 'Accounts Receivable' }).getByTestId('tb-drill').click();
+  await expect(page.getByTestId('register-row')).toHaveCount(1);
+  const register = /\/reports\/register\?accountId=[0-9a-f-]{36}&from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}&back=%2Freports%2Ftrial-balance/;
+  await page.getByTestId('register-entry-link').first().click();
+  await expect(page).toHaveURL(/\/journal\/[0-9a-f-]{36}\?back=/);
+  await expect(back).toHaveText('← Back to Account Register');
+  await expect(page.locator('input')).toHaveCount(0); // the entry page stays input-free (journal e2e)
+  await back.click();
+  await expect(page).toHaveURL(register);
+  await expect(page.getByTestId('register-row')).toHaveCount(1);
+  await expect(back).toHaveText('← Back to Trial Balance');
+
+  // The row's source document (the invoice) leads back the same way.
+  await page.getByTestId('register-source-link').first().click();
+  await expect(page).toHaveURL(/\/invoices\/[0-9a-f-]{36}\?back=/);
+  await expect(back).toHaveText('← Back to Account Register');
+  const invoice = page.url().split('?')[0]!;
+  await back.click();
+  await expect(page).toHaveURL(register);
+
+  // Opened directly, a document shows only its usual link.
+  await page.goto(invoice);
+  await expect(page.getByRole('link', { name: '← Invoices' })).toBeVisible();
+  await expect(back).toHaveCount(0);
+});
+
 test('a customer statement shows opening, activity and closing', async ({ page }) => {
   await freshCompany(page);
   await addCustomer(page, 'Beta Co');
@@ -220,10 +254,12 @@ test('an account register shows opening, activity with source links, and closing
   await expect(page.getByTestId('register-total-credits')).toHaveText('50.00');
   await expect(page.getByTestId('register-closing')).toHaveText('150.00');
 
-  // Source links point at the documents; entry links at the journal.
-  await expect(rows.nth(0).getByTestId('register-source-link')).toHaveAttribute('href', /\/invoices\/[0-9a-f-]{36}$/);
-  await expect(rows.nth(1).getByTestId('register-source-link')).toHaveAttribute('href', /\/payments\/[0-9a-f-]{36}$/);
-  await expect(rows.nth(0).getByTestId('register-entry-link')).toHaveAttribute('href', /\/journal\/[0-9a-f-]{36}$/);
+  // Source links point at the documents; entry links at the journal — each carrying the way back to
+  // this register (LL-117), its account and dates.
+  const toRegister = String.raw`\?back=%2Freports%2Fregister%3FaccountId%3D[0-9a-f-]{36}%26from%3D\d{4}-\d{2}-\d{2}%26to%3D\d{4}-\d{2}-\d{2}$`;
+  await expect(rows.nth(0).getByTestId('register-source-link')).toHaveAttribute('href', new RegExp(String.raw`/invoices/[0-9a-f-]{36}` + toRegister));
+  await expect(rows.nth(1).getByTestId('register-source-link')).toHaveAttribute('href', new RegExp(String.raw`/payments/[0-9a-f-]{36}` + toRegister));
+  await expect(rows.nth(0).getByTestId('register-entry-link')).toHaveAttribute('href', new RegExp(String.raw`/journal/[0-9a-f-]{36}` + toRegister));
   await rows.nth(1).getByTestId('register-source-link').click();
   await expect(page.getByTestId('payment-status')).toHaveText('POSTED');
 

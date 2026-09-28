@@ -9,6 +9,7 @@ import { getAccountRegister } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
 import { sourceHref } from '../source-href';
+import { selfHref, withBack } from '../back';
 import { BackField, BackLinks } from '../drill';
 
 /**
@@ -59,6 +60,8 @@ export default async function AccountRegisterPage({
     params.from !== undefined && isCalendarDate(params.from) ? params.from : `${ctx.today.slice(0, 4)}-01-01`;
 
   const accountId = params.accountId ?? '';
+  // LL-117: a row's entry and source document lead back to this register, filters and all.
+  const self = selfHref('/reports/register', { accountId, from, to }, back);
   const datesInvalid =
     (params.from !== undefined && params.from !== '' && !isCalendarDate(params.from)) ||
     (params.to !== undefined && params.to !== '' && !isCalendarDate(params.to)) ||
@@ -164,12 +167,12 @@ export default async function AccountRegisterPage({
                     <tr key={`${l.entryId}-${String(i)}`} data-testid="register-row" className="border-b border-neutral-100 dark:border-neutral-800">
                       <td className="py-2 pr-2 text-neutral-500">{l.date}</td>
                       <td className="py-2 pr-2 tabular-nums">
-                        <Link href={`/journal/${l.entryId}`} data-testid="register-entry-link" className="underline">
+                        <Link href={withBack(`/journal/${l.entryId}`, self)} data-testid="register-entry-link" className="underline">
                           #{l.entryNumber}
                         </Link>
                       </td>
                       <td className="py-2 pr-2">
-                        <Link href={sourceHref(l)} data-testid="register-source-link" className="underline">
+                        <Link href={withBack(sourceHref(l), self)} data-testid="register-source-link" className="underline">
                           {SOURCE_LABEL[l.sourceType] ?? l.sourceType}
                         </Link>
                       </td>

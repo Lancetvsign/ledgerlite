@@ -11,6 +11,7 @@ import { listCustomers } from '@/server/customers';
 import { getInvoice } from '@/server/invoices';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
+import { BackTo } from '@/app/reports/drill';
 
 import { finalizeInvoiceAction, voidInvoiceAction } from '../actions';
 import { invoiceNotice } from '../notice';
@@ -29,7 +30,7 @@ export default async function InvoiceDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; finalized?: string; voided?: string }>;
+  searchParams: Promise<{ error?: string; finalized?: string; voided?: string; back?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -62,9 +63,12 @@ export default async function InvoiceDetailPage({
         <h1 className="text-2xl font-semibold">
           Invoice {invoice.invoiceNumber ?? '(draft)'}
         </h1>
-        <Link href="/invoices" className="text-sm text-neutral-500 underline">
+        <span className="flex items-center gap-4">
+          <BackTo back={sp.back} />
+          <Link href="/invoices" className="text-sm text-neutral-500 underline">
           ← Invoices
         </Link>
+        </span>
       </header>
 
       {notice !== null && (

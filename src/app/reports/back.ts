@@ -1,7 +1,8 @@
 /**
  * "Back to report" — LL-115. A drill-down link (LL-108) carries the address of the screen it
  * was clicked on as `back`; the screen it opens offers "← Back to <that report>" with the same
- * filters. A plain module (no JSX, no 'use client') so pages and unit tests share it.
+ * filters. LL-117: the account register is a source too — the journal entry and source document
+ * a register row opens lead back to the register. A plain module (no JSX, no 'use client') so pages and unit tests share it.
  *
  * `back` arrives in the URL, so it is untrusted: only a same-origin path to one of the screens
  * below is honoured (never another origin, a protocol-relative `//host`, a backslash trick or an
@@ -18,6 +19,8 @@ export const BACK_TITLES = {
   '/reports/aging': 'A/R Aging',
   '/reports/ap-aging': 'A/P Aging',
   '/reports/intercompany': 'Intercompany Balances',
+  // LL-117: the register's rows open journal entries and source documents, which lead back to it.
+  '/reports/register': 'Account Register',
 } as const;
 export type BackPath = keyof typeof BACK_TITLES;
 

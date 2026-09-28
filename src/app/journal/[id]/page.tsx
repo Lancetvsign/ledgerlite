@@ -7,6 +7,7 @@ import { getActiveCompanyMembership } from '@/server/authorization/company-conte
 import { getJournalEntry } from '@/server/ledger';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
+import { BackTo } from '@/app/reports/drill';
 
 import { sourceHref } from '../../reports/source-href';
 
@@ -32,7 +33,7 @@ export default async function JournalEntryPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ ok?: string; error?: string }>;
+  searchParams: Promise<{ ok?: string; error?: string; back?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -60,9 +61,12 @@ export default async function JournalEntryPage({
         <h1 className="text-2xl font-semibold">
           Journal Entry {entry.entryNumber !== null ? `#${String(entry.entryNumber)}` : ''}
         </h1>
-        <Link href="/journal/new" className="text-sm text-neutral-500 underline">
+        <span className="flex items-center gap-4">
+          <BackTo back={sp.back} />
+          <Link href="/journal/new" className="text-sm text-neutral-500 underline">
           New entry
         </Link>
+        </span>
       </header>
 
       {notice !== null && (
