@@ -4,8 +4,10 @@
 -- The service resolves every reversal's date against the locked original first (a chosen date
 -- before it is refused, REVERSAL_BEFORE_ORIGINAL; a defaulted "today" is lifted to the original's
 -- date). This trigger makes the rule structural: any row that links to an original
--- (reversal_of_id) may not carry a posting_date earlier than that original's. It fires only when
--- posting_date or reversal_of_id is written, so a status transition of an existing row is never
+-- (a REVERSAL row with its reversal_of_id) may not carry a posting_date earlier than that original's.
+-- A row of any other source type carrying reversal_of_id is a SHAPE error, left to the CHECK
+-- journal_entries_reversal_link_consistent (0042) so it keeps its own message. It fires only when
+-- posting_date, reversal_of_id or source_type is written, so a status transition of an existing row is never
 -- re-checked. The original is found by id alone (journal_entries_reversal_of_fk guarantees it exists),
 -- so the check can never be skipped by a company mismatch. Idempotent for the CI replay.
 -- ===========================================================================
@@ -29,7 +31,7 @@ $$;
 DROP TRIGGER IF EXISTS "journal_entries_reversal_not_before_original" ON "journal_entries";
 --> statement-breakpoint
 CREATE TRIGGER "journal_entries_reversal_not_before_original"
-  BEFORE INSERT OR UPDATE OF "posting_date", "reversal_of_id" ON "journal_entries"
+  BEFORE INSERT OR UPDATE OF "posting_date", "reversal_of_id", "source_type" ON "journal_entries"
   FOR EACH ROW
-  WHEN (NEW."reversal_of_id" IS NOT NULL)
+  WHEN (NEW."source_type"::text = 'REVERSAL' AND NEW."reversal_of_id" IS NOT NULL)
   EXECUTE FUNCTION "assert_reversal_not_before_original"();

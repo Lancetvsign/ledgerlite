@@ -2680,8 +2680,9 @@ own date when that is later, so voiding a future-dated document, reversing a fut
 or giving back a shared line lands on the original's date instead of failing. Every caller states which it passes
 (document voids and manual reversal: chosen if given, else default; year-end reopen: chosen, the fiscal-year end;
 intercompany un-mark and shared give-back: default). Migration 0050 makes it structural: a trigger on
-`journal_entries` (insert, or update of `posting_date` / `reversal_of_id`) refuses any row whose posting date precedes
-the entry named by its `reversal_of_id`; existing rows are not re-checked. `proposedReversalDate` now proposes a
+`journal_entries` (insert, or update of `posting_date` / `reversal_of_id` / `source_type`) refuses any REVERSAL row whose
+posting date precedes the entry named by its `reversal_of_id` (a non-reversal carrying one stays the 0042 CHECK's shape
+error); existing rows are not re-checked. `proposedReversalDate` now proposes a
 future-dated original's own date.
 
 ## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
