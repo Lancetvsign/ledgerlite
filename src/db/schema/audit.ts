@@ -92,6 +92,7 @@ export const auditAction = pgEnum('audit_action', [
   'BANK_IMPORT_SHARING_CHANGED',
   'BANK_IMPORT_LINE_AMENDED',
   'BANK_IMPORT_LINE_UNPOSTED',
+  'BANK_IMPORT_SUMMARY_AMENDED',
 ]);
 
 export const auditEvents = pgTable(

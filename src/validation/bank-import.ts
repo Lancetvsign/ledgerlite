@@ -47,6 +47,33 @@ export const statementSummarySchema = z.object({
 });
 export type StatementSummary = z.infer<typeof statementSummarySchema>;
 
+/**
+ * LL-123: one account-summary line as read (summary-figures.ts), as stored in
+ * `bank_import_batches.stated_figures` — shape-checked before it is stored.
+ */
+export const statementFigureSchema = z.object({
+  label: z.string().max(200),
+  amount: z.string().max(60),
+  role: z.enum(['beginning', 'ending', 'money_in', 'money_out']).nullable(),
+  source: z.enum(['label', 'model']),
+  found: z.boolean(),
+});
+export const statementFiguresSchema = z.array(statementFigureSchema).max(60);
+export type StoredStatementFigure = z.infer<typeof statementFigureSchema>;
+
+/**
+ * LL-123: the reviewer's correction of a statement's four summary totals, AS PRINTED (a card's
+ * balance owed is entered as the positive figure the statement prints; the service applies the sign).
+ * Money in and money out are magnitudes.
+ */
+export const amendStatementSummaryInput = z.object({
+  beginningBalance: signedMoneyString,
+  totalCredits: unsignedMoneyString,
+  totalDebits: unsignedMoneyString,
+  endingBalance: signedMoneyString,
+});
+export type AmendStatementSummaryInput = z.infer<typeof amendStatementSummaryInput>;
+
 export const stageImportInput = z.object({
   /** The cash/bank account the statement is for (must be ACTIVE, ASSET, cashFlowCategory CASH). */
   bankAccountId: z.uuid(),

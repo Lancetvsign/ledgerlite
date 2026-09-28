@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, type StatementVerification, undoDateDefaults } from '@/server/bank-import';
+import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, undoDateDefaults } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listReconciliations } from '@/server/reconciliation';
 import { listOpenBills } from '@/server/bill-payments';
@@ -21,7 +21,6 @@ import { listVendors } from '@/server/vendors';
 import { BackField, BackTo } from '@/app/reports/drill';
 
 import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
-import { reanalysisNote } from '../reanalysis-note';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { addImportedLinesAction } from '../../reconciliation/actions';
 import { Autosave } from './autosave';
@@ -30,6 +29,7 @@ import { LineAccountSelect } from './line-account';
 import { LineCounterpartSelect, type CounterpartOption } from './line-counterpart';
 import { LineActionControls } from './line-action';
 import { toLineAction, type LineAction } from './line-actions';
+import { StatementVerificationPanel } from './verification-panel';
 import { ReviewStateProvider } from './review-state';
 
 /**
@@ -234,7 +234,17 @@ export default async function ReviewImportPage({
       </p>
 
       {/* LL-109: the lines that count against the statement's own printed totals; updates on every render. */}
-      <StatementVerificationPanel v={view.verification} attempts={view.batch.extractionAttempts} reanalysisFailure={view.batch.reanalysisFailure} />
+      <StatementVerificationPanel
+        batchId={view.batch.id}
+        v={view.verification}
+        attempts={view.batch.extractionAttempts}
+        reanalysisFailure={view.batch.reanalysisFailure}
+        figuresJson={view.batch.statedFigures}
+        amendedFromJson={view.batch.summaryAmendedFrom}
+        stated={{ beginning: view.batch.statedBeginningBalance, credits: view.batch.statedTotalCredits, debits: view.batch.statedTotalDebits, ending: view.batch.statedEndingBalance }}
+        isCard={isCard}
+        back={sp.back}
+      />
 
       {canReconcile && decided > 0 && (
         // LL-111: reconcile this statement — the start form prefilled from what it printed, its posted
@@ -614,6 +624,8 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (sp.ok === 'amended') return 'Line corrected. The suggestions and matches were recomputed for the new values.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
   if (sp.error === 'DATE_INVALID') return 'Enter the date as printed on the statement.';
+  if (sp.ok === 'summary_amended') return 'Statement figures corrected. The checks below use them now.';
+  if (sp.error === 'SUMMARY_INVALID') return 'Enter the four figures as the statement prints them, e.g. 3,814.15 — money in and money out without a minus sign.';
   if (sp.error === 'DESCRIPTION_INVALID') return 'Enter the description as printed on the statement (up to 500 characters).';
   if (sp.error === 'LINE_CHANGED') return 'A line was corrected while you were reviewing — the page has been reloaded; check the figures and post again.';
   if (sp.error === 'LINE_NOT_EDITABLE') return 'That line has already been decided; it cannot be changed.';
@@ -648,56 +660,5 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (error === 'LINE_NOT_FOUND' || error === 'BATCH_NOT_FOUND') return 'That import could not be found.';
   if (error === 'denied') return 'You do not have permission to post.';
   return 'The lines could not be posted.';
-}
-
-function StatementVerificationPanel({ v, attempts, reanalysisFailure }: { v: StatementVerification; attempts: number; reanalysisFailure: string | null }) {
-  const failedRecheck = v.status === 'mismatch' ? reanalysisNote(reanalysisFailure) : null;
-  const label = { credits: 'Total credits (money in)', debits: 'Total debits (money out)', ending_balance: 'Ending balance (beginning + credits − debits)' } as const;
-  const tone =
-    v.status === 'verified'
-      ? 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-100'
-      : v.status === 'mismatch'
-        ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100'
-        : 'border-neutral-200 bg-neutral-50 text-neutral-700 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300';
-  return (
-    <section data-testid="statement-verification" data-status={v.status} className={`rounded border px-3 py-2 text-sm ${tone}`}>
-      {v.status === 'not_stated' ? (
-        <p>The statement printed no totals to check the lines against. Lines: credits {formatMoney(v.lineCredits)}, debits {formatMoney(v.lineDebits)}.</p>
-      ) : (
-        <>
-          <p className="font-medium">
-            {v.status === 'verified'
-              ? 'Verified — the lines add up to the statement\'s own totals.'
-              : 'Totals mismatch — the lines do not add up to what the statement prints.'}
-            {attempts > 1 && <span className="ml-1 font-normal text-xs" data-testid="verification-attempts">(re-analysed once)</span>}
-          </p>
-          <table className="mt-1 w-full text-xs">
-            <tbody>
-              {v.checks.map((c) => (
-                <tr key={c.name} data-testid={`verification-check-${c.name}`} data-ok={c.ok ? '1' : '0'}>
-                  <td className="py-0.5 pr-2">{label[c.name]}</td>
-                  <td className="py-0.5 pr-2 text-right tabular-nums">statement {formatMoney(c.expected)}</td>
-                  <td className="py-0.5 pr-2 text-right tabular-nums">lines {formatMoney(c.actual)}</td>
-                  <td className="py-0.5 text-right tabular-nums font-medium">{c.ok ? '✓' : `off by ${formatMoney(c.difference)}`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {failedRecheck !== null && (
-            // LL-118: the re-check was tried and failed (LL-114 kept the first reading).
-            <p className="mt-1 text-xs font-medium" data-testid="verification-reanalysis-failed">
-              {failedRecheck}
-            </p>
-          )}
-          {v.status === 'mismatch' && (
-            <p className="mt-1 text-xs">
-              Correct a misread amount, date or description with “Edit line”, or ignore a line that is not a transaction (a subtotal
-              the reader picked up); this panel updates as you go.
-            </p>
-          )}
-        </>
-      )}
-    </section>
-  );
 }
 

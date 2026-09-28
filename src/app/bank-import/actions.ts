@@ -6,13 +6,13 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { amendImportLine, BankImportError, deleteImportBatch, unpostImportLine, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { amendImportLine, amendStatementSummary, BankImportError, deleteImportBatch, unpostImportLine, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
-import { amendImportLineInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput, unpostImportLineInput } from '@/validation/bank-import';
+import { amendImportLineInput, amendStatementSummaryInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput, unpostImportLineInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
 import { backFrom, withBack } from '@/app/reports/back';
 
@@ -246,6 +246,31 @@ export async function amendImportLineAction(formData: FormData): Promise<void> {
     throw error;
   }
   redirect(withBack(`/bank-import/${batchId}?ok=amended`, back));
+}
+
+/** Corrects a statement's four summary totals when they were misread — LL-123. */
+export async function amendStatementSummaryAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  // As printed: thousands separators, spaces and a currency sign are forgiven.
+  const field = (name: string) => (opt(formData.get(name)) ?? '').replace(/[,\s$]/g, '');
+  const parsed = amendStatementSummaryInput.safeParse({
+    beginningBalance: field('beginningBalance'),
+    totalCredits: field('totalCredits'),
+    totalDebits: field('totalDebits'),
+    endingBalance: field('endingBalance'),
+  });
+  if (!parsed.success) redirect(withBack(`/bank-import/${batchId}?error=SUMMARY_INVALID`, back));
+  try {
+    await amendStatementSummary(userId, companyId, batchId, parsed.data);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
+    throw error;
+  }
+  redirect(withBack(`/bank-import/${batchId}?ok=summary_amended`, back));
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */

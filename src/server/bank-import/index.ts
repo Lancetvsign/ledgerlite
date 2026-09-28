@@ -20,7 +20,7 @@ import { isIdempotencyViolation, LedgerError, postEntryCore, reversalDateFrom, r
 import { listOpenInvoices, receivePaymentCore, type OpenInvoice } from '@/server/payments';
 import { closedDates, getAccountingPeriod, proposedReversalDate } from '@/server/periods';
 import { todayInTimeZone } from '@/lib/dates';
-import { amendImportLineInput, extractedTransactionsSchema, statementSummarySchema, unpostImportLineInput } from '@/validation/bank-import';
+import { amendImportLineInput, amendStatementSummaryInput, extractedTransactionsSchema, statementFiguresSchema, statementSummarySchema, unpostImportLineInput } from '@/validation/bank-import';
 
 import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
@@ -32,7 +32,7 @@ import { summaryOf, verifyStatementTotals, verifyTotals, type StatementVerificat
 import type { PoolDatabase } from '@/db';
 import type { BankImportBatch, BankImportLine } from '@/db/schema';
 import type { PostJournalEntryInput } from '@/validation/journal';
-import type { AmendImportLineInput, ExtractedTransaction, PostImportLinesInput, StageImportInput, UnpostImportLineInput } from '@/validation/bank-import';
+import type { AmendImportLineInput, AmendStatementSummaryInput, ExtractedTransaction, PostImportLinesInput, StageImportInput, UnpostImportLineInput } from '@/validation/bank-import';
 
 /**
  * Bank-statement import service — LL-076.
@@ -253,6 +253,10 @@ export async function stageImport(
     }
   }
   const summary = summaryParsed?.success === true ? summaryParsed.data : undefined;
+  // LL-123: the summary lines as read, for the review — shape-checked, never a reason to reject.
+  const figuresParsed = extraction.figures === undefined ? undefined : statementFiguresSchema.safeParse(extraction.figures);
+  if (figuresParsed !== undefined && !figuresParsed.success) log.warn('bank-import: statement figures failed validation', { stage: 'validate', path: figuresParsed.error.issues[0]?.path.join('.') });
+  const statedFigures = figuresParsed?.success === true ? figuresParsed.data : null;
   const parsed = extractedTransactionsSchema.safeParse(extraction.transactions);
   if (!parsed.success) {
     // Field path + rule only — never the offending value (it is statement content, §9).
@@ -323,6 +327,7 @@ export async function stageImport(
         extractionAttempts: extraction.attempts ?? 1,
         // LL-118: only a known code is stored (the CHECK allows no other); anything else reads as none.
         reanalysisFailure: isModelFailureCode(extraction.reanalysisFailure) ? extraction.reanalysisFailure : null,
+        statedFigures,
       })
       .returning();
     const batch = batchRows[0];
@@ -1248,6 +1253,73 @@ export async function undoDateDefaults(
   const today = todayInTimeZone(company?.timezone ?? 'UTC');
   const closed = await closedDates(companyId, lines.map((l) => l.txnDate));
   return { today, byLine: new Map(lines.map((l) => [l.id, proposedReversalDate(l.txnDate, today, closed)])) };
+}
+
+/**
+ * LL-123 (ADR-034 amendment): correct a statement's four summary totals when they were misread —
+ * entered AS PRINTED (a card's balance owed as the positive figure it prints; the sign of the import
+ * convention is applied here). The totals as extracted are kept in `summary_amended_from` from the
+ * first correction on; every correction is audited. Allowed at any time: these are the statement's
+ * figures, checked against the lines on every read, never ledger amounts.
+ */
+export async function amendStatementSummary(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+  rawInput: AmendStatementSummaryInput,
+): Promise<{ amended: boolean }> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  const input = amendStatementSummaryInput.parse(rawInput);
+  return await getDbTx().transaction(async (tx) => {
+    const batch = (
+      await tx
+        .select()
+        .from(schema.bankImportBatches)
+        .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batchId)))
+        .for('update')
+        .limit(1)
+    )[0];
+    if (batch === undefined) throw new BankImportError('BATCH_NOT_FOUND', 'That import batch does not exist.');
+    const account = (
+      await tx
+        .select({ accountType: schema.accounts.accountType })
+        .from(schema.accounts)
+        .where(and(eq(schema.accounts.companyId, companyId), eq(schema.accounts.id, batch.bankAccountId)))
+        .limit(1)
+    )[0];
+    const card = account?.accountType === 'LIABILITY';
+    const balance = (printed: string) => (card ? toMoney(printed).negated() : toMoney(printed)).toFixed(4);
+    const next = {
+      statedBeginningBalance: balance(input.beginningBalance),
+      statedTotalCredits: toMoney(input.totalCredits).toFixed(4),
+      statedTotalDebits: toMoney(input.totalDebits).toFixed(4),
+      statedEndingBalance: balance(input.endingBalance),
+    };
+    const current = {
+      statedBeginningBalance: batch.statedBeginningBalance,
+      statedTotalCredits: batch.statedTotalCredits,
+      statedTotalDebits: batch.statedTotalDebits,
+      statedEndingBalance: batch.statedEndingBalance,
+    };
+    const same = (Object.keys(next) as (keyof typeof next)[]).every((k) => current[k] !== null && toMoney(current[k]).eq(toMoney(next[k])));
+    if (same) return { amended: false };
+    const amendedFrom = batch.summaryAmendedFrom ?? current;
+    await tx
+      .update(schema.bankImportBatches)
+      .set({ ...next, summaryAmendedFrom: amendedFrom })
+      .where(and(eq(schema.bankImportBatches.companyId, companyId), eq(schema.bankImportBatches.id, batch.id)));
+    await recordAuditEvent({
+      tx,
+      companyId,
+      actorUserId,
+      action: 'BANK_IMPORT_SUMMARY_AMENDED',
+      entityType: 'bank_import_batch',
+      entityId: batch.id,
+      before: current,
+      after: { ...next, amendedFrom },
+    });
+    return { amended: true };
+  });
 }
 
 /**

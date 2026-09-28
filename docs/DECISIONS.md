@@ -1996,6 +1996,22 @@ failure, or an unusable answer), the first pass is staged with `extraction_attem
 its gap exactly as for a statement that verified on neither pass. A failure on the first call still fails the
 upload with its own code, since there is nothing to keep.
 
+**Amendment (LL-123 — summary figures are read by their labels, and the statement's own math is checked):** on
+the owner's statement the model put the right printed numbers in the wrong slots (previous balance as total credits,
+the ending balance as total debits) and LL-109's checks could not catch it — the model chose each slot, the prompt
+pushed it to make the figures "add up" with its own lines, and nothing tested the statement's own arithmetic. Now:
+the model copies EVERY line of the account summary with its printed label; the app decides each line's role from the
+label (previous/beginning/opening balance, ending/new/closing balance, deposits/credits/interest = money in,
+checks/debits/withdrawals/fees = money out), using the model's role only for a label that does not say; each label and
+amount must occur in the statement text, or the figure is not counted; money in and money out are each the sum of their
+lines (summaries print categories). A new first check, `statement_math`, requires printed beginning + money in − money
+out = printed ending (a second line of defence: some swaps — beginning↔money in, money out↔ending — preserve the
+equation, so the slots themselves come from the labels); it, a missing beginning or ending balance, or a figure not on the statement triggers the one
+re-read, with the gap fed back. The lines are then checked against the figures as before. The figures as read are
+stored (`stated_figures`, migration 0051) and shown on the review; the reviewer can correct the four totals as printed
+(`amendStatementSummary`, `journal.post`, audited `BANK_IMPORT_SUMMARY_AMENDED`, the extracted totals kept in
+`summary_amended_from`) at any time — they are the statement's figures, never ledger amounts.
+
 **Amendment (LL-118 — a failed re-check is recorded and shown):** when the re-check fails and the first pass is
 kept, the batch records why, as the application's own code (`bank_import_batches.reanalysis_failure`, migration 0049;
 a CHECK limits it to the six model-failure codes; null = no re-check was needed or it ran). While the lines still

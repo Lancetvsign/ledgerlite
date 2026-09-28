@@ -9,8 +9,8 @@ import type { StatementSummary } from '@/validation/bank-import';
  * Statement-totals verification — LL-109. Pure: no I/O, no logging.
  *
  * A statement prints its own control figures — beginning balance, total credits, total
- * debits, ending balance. The extracted lines must add up to them, and the arithmetic
- * `beginning + credits − debits = ending` must hold. Each check runs only when its figures
+ * debits, ending balance. Their own arithmetic must hold (LL-123: `statement_math`), the
+ * extracted lines must add up to them, and `beginning + line credits − line debits = ending`. Each check runs only when its figures
  * are present; a statement that prints none is `not_stated`, never a mismatch. Money is
  * `string` in, Decimal to compute, `string` out — exact at NUMERIC(19,4) (ADR-004).
  *
@@ -20,10 +20,15 @@ import type { StatementSummary } from '@/validation/bank-import';
 export type VerificationStatus = 'verified' | 'mismatch' | 'not_stated';
 
 export interface VerificationCheck {
-  readonly name: 'credits' | 'debits' | 'ending_balance';
+  /**
+   * LL-123: `statement_math` — the statement's OWN arithmetic: printed beginning + printed money in
+   * − printed money out = printed ending (a misread summary fails here, whatever the lines say).
+   * Then the lines against the printed figures: `credits`, `debits`, `ending_balance`.
+   */
+  readonly name: 'statement_math' | 'credits' | 'debits' | 'ending_balance';
   /** What the statement states. */
   readonly expected: string;
-  /** What the lines add up to (for ending_balance: beginning + credits − debits from the LINES). */
+  /** What the lines add up to (for ending_balance: beginning + credits − debits from the LINES; for statement_math: from the PRINTED totals). */
   readonly actual: string;
   /** actual − expected. */
   readonly difference: string;
@@ -65,6 +70,9 @@ export function verifyTotals(creditsIn: string | Decimal, debitsIn: string | Dec
   const credits = typeof creditsIn === 'string' ? toMoney(creditsIn) : creditsIn;
   const debits = typeof debitsIn === 'string' ? toMoney(debitsIn) : debitsIn;
   const checks: VerificationCheck[] = [];
+  if (summary?.beginningBalance !== undefined && summary.totalCredits !== undefined && summary.totalDebits !== undefined && summary.endingBalance !== undefined) {
+    checks.push(check('statement_math', summary.endingBalance, toMoney(summary.beginningBalance).plus(toMoney(summary.totalCredits)).minus(toMoney(summary.totalDebits))));
+  }
   if (summary?.totalCredits !== undefined) checks.push(check('credits', summary.totalCredits, credits));
   if (summary?.totalDebits !== undefined) checks.push(check('debits', summary.totalDebits, debits));
   if (summary?.beginningBalance !== undefined && summary.endingBalance !== undefined) {
