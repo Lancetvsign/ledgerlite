@@ -26,7 +26,7 @@ import { mapCategoryToAccount } from './categorize';
 import { draftCountsByBatch, draftsFor, type LineDraft } from './drafts';
 import { auditIntercompanyLine, findIntercompanyCandidates, findOrganizationStatementMatches, markIntercompanyTransfer, matchIntercompanyTransfer, statementCounterpartFor, transferCounterparts, type IntercompanyCandidate, type OrganizationMatch } from './intercompany';
 import { BankImportError } from './errors';
-import { resolveExtractor, toExtractionOutput, type TransactionExtractor } from './extract';
+import { isModelFailureCode, resolveExtractor, toExtractionOutput, type TransactionExtractor } from './extract';
 import { summaryOf, verifyStatementTotals, verifyTotals, type StatementVerification } from './verify';
 
 import type { PoolDatabase } from '@/db';
@@ -321,6 +321,8 @@ export async function stageImport(
         statedEndingBalance: summary?.endingBalance ?? null,
         statedStatementDate: summary?.statementDate ?? null,
         extractionAttempts: extraction.attempts ?? 1,
+        // LL-118: only a known code is stored (the CHECK allows no other); anything else reads as none.
+        reanalysisFailure: isModelFailureCode(extraction.reanalysisFailure) ? extraction.reanalysisFailure : null,
       })
       .returning();
     const batch = batchRows[0];
@@ -1086,7 +1088,7 @@ export async function postImportLines(
 export { BankImportError, PeriodClosedInCompanyError } from './errors';
 export type { BankImportErrorCode } from './errors';
 export { isExtractionConfigured } from './extract';
-export type { ExtractionOutput, ExtractionResult, TransactionExtractor } from './extract';
+export type { ExtractionOutput, ExtractionResult, ModelFailureCode, TransactionExtractor } from './extract';
 export { verifyStatementTotals, summaryOf } from './verify';
 export type { StatementVerification, VerificationCheck, VerificationStatus } from './verify';
 

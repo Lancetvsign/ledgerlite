@@ -86,6 +86,8 @@ export interface ExtractionOutput {
   readonly transactions: ExtractedTransaction[];
   readonly summary?: StatementSummary;
   readonly attempts?: number;
+  /** LL-118: the re-check (second pass) failed with this code, so the first pass was kept (LL-114). */
+  readonly reanalysisFailure?: ModelFailureCode;
 }
 export type ExtractionResult = ExtractedTransaction[] | ExtractionOutput;
 export type TransactionExtractor = (input: ExtractorInput) => Promise<ExtractionResult>;
@@ -246,7 +248,7 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
       if (!(error instanceof BankImportError)) throw error;
       // callModel has already logged the failure (stage, status, outcome); say what happens next.
       log.warn('bank-import: re-analysis failed — staging the first pass', { stage: 'verify', attempt: 2, outcome: error.code });
-      return { ...first, attempts: 1 };
+      return { ...first, attempts: 1, reanalysisFailure: isModelFailureCode(error.code) ? error.code : 'EXTRACTION_FAILED' };
     }
     const rechecked = verify(second);
     log.info('bank-import: re-analysis result', { stage: 'verify', attempt: 2, status: rechecked.status, ...figures(rechecked) });
@@ -289,7 +291,7 @@ function statusOf(error: unknown): number | undefined {
  */
 const CREDIT_REFUSAL = /credit balance is too low|insufficient_quota|exceeded your current quota/i;
 
-type ModelFailureCode = Extract<
+export type ModelFailureCode = Extract<
   BankImportErrorCode,
   | 'EXTRACTION_FAILED'
   | 'EXTRACTION_KEY_REJECTED'
@@ -298,6 +300,20 @@ type ModelFailureCode = Extract<
   | 'EXTRACTION_RATE_LIMITED'
   | 'EXTRACTION_SERVICE_UNAVAILABLE'
 >;
+
+/** LL-118: every model-failure code, in one place — the database CHECK on `reanalysis_failure` lists the same six. */
+export const MODEL_FAILURE_CODES: readonly ModelFailureCode[] = [
+  'EXTRACTION_FAILED',
+  'EXTRACTION_KEY_REJECTED',
+  'EXTRACTION_OUT_OF_CREDIT',
+  'EXTRACTION_MODEL_UNAVAILABLE',
+  'EXTRACTION_RATE_LIMITED',
+  'EXTRACTION_SERVICE_UNAVAILABLE',
+];
+
+export function isModelFailureCode(value: unknown): value is ModelFailureCode {
+  return typeof value === 'string' && (MODEL_FAILURE_CODES as readonly string[]).includes(value);
+}
 
 /**
  * LL-113: which side a failed model call was — the AI SERVICE (credential, credit, model, rate

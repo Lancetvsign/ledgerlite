@@ -110,6 +110,7 @@ describe('createAiExtractor', () => {
     expect(n).toBe(2);
     expect(out.attempts).toBe(2);
     expect(out.transactions[0]!.amount).toBe('1500.00'); // the reconciling pass won
+    expect(out.reanalysisFailure).toBeUndefined(); // the re-check ran
     // The feedback carries the discrepancy as figures (statement vs lines, difference) and the original
     // statement text — never the model's rows themselves.
     expect(prompts[1]).toContain('did not reconcile');
@@ -150,6 +151,7 @@ describe('createAiExtractor', () => {
     expect(out.attempts).toBe(1);
     expect(out.transactions.map((t) => t.amount)).toEqual(['1050.00', '-120.50']);
     expect(out.summary?.endingBalance).toBe('6379.50');
+    expect(out.reanalysisFailure).toBe('EXTRACTION_SERVICE_UNAVAILABLE'); // LL-118: recorded for the review
 
     // The second call answers with something unusable.
     const garbled = failingSecond(() => answer('not json'));
@@ -157,6 +159,7 @@ describe('createAiExtractor', () => {
     expect(garbled.calls()).toBe(2);
     expect(out2.attempts).toBe(1);
     expect(out2.transactions[0]!.amount).toBe('1050.00');
+    expect(out2.reanalysisFailure).toBe('EXTRACTION_FAILED');
   });
 
   it('LL-114: a failure on the FIRST call still fails the upload with its own code — there is nothing to keep', async () => {

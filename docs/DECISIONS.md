@@ -1996,6 +1996,13 @@ failure, or an unusable answer), the first pass is staged with `extraction_attem
 its gap exactly as for a statement that verified on neither pass. A failure on the first call still fails the
 upload with its own code, since there is nothing to keep.
 
+**Amendment (LL-118 — a failed re-check is recorded and shown):** when the re-check fails and the first pass is
+kept, the batch records why, as the application's own code (`bank_import_batches.reanalysis_failure`, migration 0049;
+a CHECK limits it to the six model-failure codes; null = no re-check was needed or it ran). While the lines still
+disagree with the statement, the review's verification panel says the AI tried to re-check and why it could not
+(busy, unavailable, key rejected, out of credit, model not found, unusable answer), and that uploading again later
+may give a reading that adds up. Once corrections make it verify, the note is gone. No provider text is stored.
+
 ## ADR-035 — Bank-import lines settle open invoices and bills through the payment services
 
 **Status** Accepted · **Added by** LL-077 · **Decided by** product owner
