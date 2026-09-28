@@ -9,6 +9,7 @@ import { getAccountRegister } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
 import { sourceHref } from '../source-href';
+import { BackField, BackLinks } from '../drill';
 
 /**
  * Account Register screen — LL-085. Pure presentation over `getAccountRegister`:
@@ -44,10 +45,11 @@ const SOURCE_LABEL: Record<string, string> = {
 export default async function AccountRegisterPage({
   searchParams,
 }: {
-  searchParams: Promise<{ accountId?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ accountId?: string; from?: string; to?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
   const params = await searchParams;
+  const back = params.back;
   // Inactive accounts stay pickable: their history is exactly what a register is for.
   const accounts = await listAccounts(ctx.userId, ctx.companyId);
 
@@ -76,12 +78,11 @@ export default async function AccountRegisterPage({
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Account Register</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
       <form method="get" className="flex flex-wrap items-end gap-3 text-sm" data-testid="register-form">
+        <BackField back={back} />
         <label className="flex flex-col gap-1">
           <span>Account</span>
           <select

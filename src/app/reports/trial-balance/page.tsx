@@ -1,10 +1,10 @@
-import Link from 'next/link';
 import { formatMoney } from '@/lib/money-format';
 
 import { getTrialBalance } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
-import { DrillLink, registerHref, yearStart } from '../drill';
+import { selfHref } from '../back';
+import { BackLinks, DrillLink, registerHref, yearStart } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -20,25 +20,24 @@ export const dynamic = 'force-dynamic';
 export default async function TrialBalancePage({
   searchParams,
 }: {
-  searchParams: Promise<{ asOf?: string }>;
+  searchParams: Promise<{ asOf?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
-  const { asOf: raw } = await searchParams;
+  const { asOf: raw, back } = await searchParams;
 
   // Validate server-side: a bad date is rejected (notice, no table); absent → today.
   const { asOf, invalid } = resolveAsOf(raw, ctx.today);
+  const self = selfHref('/reports/trial-balance', { asOf }, back);
   const tb = invalid ? null : await getTrialBalance(ctx.userId, ctx.companyId, asOf);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Trial Balance</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
-      <AsOfForm asOf={asOf} />
+      <AsOfForm asOf={asOf} back={back} />
 
       {invalid ? (
         <p role="status" data-testid="notice" className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-800">
@@ -70,9 +69,9 @@ export default async function TrialBalancePage({
                     <td className="py-2 pr-2 tabular-nums">{r.accountNumber ?? '—'}</td>
                     <td className="py-2 pr-2">{r.accountName}</td>
                     <td className="py-2 pr-2 text-neutral-500">{r.accountType}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.debits} /></td>
-                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.credits} /></td>
-                    <td className="py-2 pr-2 text-right tabular-nums font-medium"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf)} amount={r.balance} testid="tb-drill" /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf, self)} amount={r.debits} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf, self)} amount={r.credits} /></td>
+                    <td className="py-2 pr-2 text-right tabular-nums font-medium"><DrillLink href={registerHref(r.accountId, yearStart(asOf), asOf, self)} amount={r.balance} testid="tb-drill" /></td>
                   </tr>
                 ))
               )}

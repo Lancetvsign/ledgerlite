@@ -1,5 +1,3 @@
-import Link from 'next/link';
-
 import { isCalendarDate } from '@/lib/dates';
 import { formatMoney } from '@/lib/money-format';
 import { isUuid } from '@/lib/uuid';
@@ -7,6 +5,7 @@ import { listCustomers } from '@/server/customers';
 import { getCustomerStatement } from '@/server/reports';
 
 import { requireReportContext } from '../report-context';
+import { BackField, BackLinks } from '../drill';
 
 /**
  * Customer Statement screen — LL-055. Pure presentation over
@@ -24,10 +23,11 @@ export const dynamic = 'force-dynamic';
 export default async function StatementPage({
   searchParams,
 }: {
-  searchParams: Promise<{ customerId?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ customerId?: string; from?: string; to?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
   const params = await searchParams;
+  const back = params.back;
   const customers = await listCustomers(ctx.userId, ctx.companyId);
 
   // Default to a year-to-date period ending on the company's today.
@@ -54,12 +54,11 @@ export default async function StatementPage({
     <main className="mx-auto flex min-h-screen max-w-4xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Customer Statement</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
       <form method="get" className="flex flex-wrap items-end gap-3 text-sm" data-testid="statement-form">
+        <BackField back={back} />
         <label className="flex flex-col gap-1">
           <span>Customer</span>
           <select

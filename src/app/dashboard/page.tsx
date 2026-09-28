@@ -9,6 +9,7 @@ import {
   getCashFlowStatement,
 } from '@/server/reports';
 
+import { withBack } from '../reports/back';
 import { requireReportContext } from '../reports/report-context';
 
 /**
@@ -107,7 +108,7 @@ function Stat({ label, value, testid, href }: { label: string; value: string; te
     <div className="rounded border border-neutral-200 p-4 dark:border-neutral-800">
       <div className="text-xs text-neutral-500">{label}</div>
       <div className="mt-1 text-xl font-semibold tabular-nums" data-testid={testid}>
-        <Link href={href} title="Show the report behind this figure" className="underline decoration-dotted underline-offset-4 hover:decoration-solid">{formatMoney(value)}</Link>
+        <Link href={withBack(href, '/dashboard')} title="Show the report behind this figure" className="underline decoration-dotted underline-offset-4 hover:decoration-solid">{formatMoney(value)}</Link>
       </div>
     </div>
   );

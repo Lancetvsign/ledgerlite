@@ -2323,6 +2323,12 @@ time up to the day before the fiscal year, since the ledger posts no closing ent
 headline opens its report and a recent-activity amount its entry. Subtotals and grand totals stay plain —
 they are sums of rows that link. Reads only; every target re-authorizes.
 
+**Amendment (LL-115 — back to the report):** a drill-down link carries the address of the screen it was clicked on
+(`back`, path + query), and the screen it opens shows "← Back to <report>" beside "← Reports". `back` is untrusted
+input: only a same-origin path to one of the named report screens (and the dashboard) is honoured, reduced to path +
+query and capped in length; anything else is ignored. A screen passes its own valid `back` on in its address, so a
+chain of drill-downs unwinds one step at a time, and its GET filter forms keep it.
+
 ## ADR-041 — Team membership: invitations claimed on entry, the role ceiling, and last-owner protection
 
 **Status** Accepted · **Added by** LL-086 · **Decided by** product owner ("start LL-086")

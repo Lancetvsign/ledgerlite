@@ -1,10 +1,9 @@
-import Link from 'next/link';
-
 import { formatMoney } from '@/lib/money-format';
 import { getIntercompanyReport } from '@/server/reports';
 
 import { AsOfForm } from '../as-of-form';
-import { DrillLink, registerHref, yearStart } from '../drill';
+import { selfHref } from '../back';
+import { BackLinks, DrillLink, registerHref, yearStart } from '../drill';
 import { requireReportContext, resolveAsOf } from '../report-context';
 
 /**
@@ -27,20 +26,21 @@ const STATE_TEXT = {
   mismatch: 'MISMATCH: a balance disagrees with the other company’s books',
 } as const;
 
-export default async function IntercompanyPage({ searchParams }: { searchParams: Promise<{ asOf?: string }> }) {
+export default async function IntercompanyPage({ searchParams }: { searchParams: Promise<{ asOf?: string; back?: string }> }) {
   const ctx = await requireReportContext();
-  const { asOf: raw } = await searchParams;
+  const { asOf: raw, back } = await searchParams;
   const { asOf, invalid } = resolveAsOf(raw, ctx.today);
+  const self = selfHref('/reports/intercompany', { asOf }, back);
   const report = invalid ? null : await getIntercompanyReport(ctx.userId, ctx.companyId, asOf);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Intercompany Balances</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">← Reports</Link>
+        <BackLinks back={back} />
       </header>
 
-      <AsOfForm asOf={asOf} />
+      <AsOfForm asOf={asOf} back={back} />
 
       {invalid || report === null ? (
         <p role="status" data-testid="notice" className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-800">
@@ -83,7 +83,7 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                 report.rows.map((r) => (
                   <tr key={r.counterpartId} data-testid="intercompany-row" data-mirrored={r.mirrored ? '1' : '0'} data-state={r.state} className="border-b border-neutral-100 dark:border-neutral-800">
                     <td className="py-2 pr-2">{r.counterpartLegalName}</td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueFromAccountId === null ? formatMoney(r.dueFrom) : <DrillLink href={registerHref(r.dueFromAccountId, yearStart(asOf), asOf)} amount={r.dueFrom} testid="intercompany-due-from-drill" />}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueFromAccountId === null ? formatMoney(r.dueFrom) : <DrillLink href={registerHref(r.dueFromAccountId, yearStart(asOf), asOf, self)} amount={r.dueFrom} testid="intercompany-due-from-drill" />}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueTo)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.receivableDifference)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500" data-testid="intercompany-receivable-in-transit">
@@ -92,7 +92,7 @@ export default async function IntercompanyPage({ searchParams }: { searchParams:
                         <span className="ml-1 text-xs" data-testid="intercompany-transit-age">(oldest {String(r.inTransitOldestDays)} d)</span>
                       )}
                     </td>
-                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueToAccountId === null ? formatMoney(r.dueTo) : <DrillLink href={registerHref(r.dueToAccountId, yearStart(asOf), asOf)} amount={r.dueTo} testid="intercompany-due-to-drill" />}</td>
+                    <td className="py-2 pr-2 text-right tabular-nums">{r.dueToAccountId === null ? formatMoney(r.dueTo) : <DrillLink href={registerHref(r.dueToAccountId, yearStart(asOf), asOf, self)} amount={r.dueTo} testid="intercompany-due-to-drill" />}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.counterpartDueFrom)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums font-medium">{formatMoney(r.payableDifference)}</td>
                     <td className="py-2 pr-2 text-right tabular-nums text-neutral-500">{formatMoney(r.payableInTransit)}</td>

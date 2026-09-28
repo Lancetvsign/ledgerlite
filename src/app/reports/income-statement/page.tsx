@@ -1,10 +1,9 @@
-import Link from 'next/link';
-
 import { isCalendarDate } from '@/lib/dates';
 import { formatMoney } from '@/lib/money-format';
 import { getIncomeStatement } from '@/server/reports';
 
-import { DrillLink, registerHref } from '../drill';
+import { selfHref } from '../back';
+import { BackField, BackLinks, DrillLink, registerHref } from '../drill';
 import { requireReportContext } from '../report-context';
 
 /**
@@ -20,15 +19,17 @@ export const dynamic = 'force-dynamic';
 export default async function IncomeStatementPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
   const params = await searchParams;
+  const back = params.back;
 
   // Default to a year-to-date period ending on the company's today.
   const to = params.to !== undefined && isCalendarDate(params.to) ? params.to : ctx.today;
   const from =
     params.from !== undefined && isCalendarDate(params.from) ? params.from : `${ctx.today.slice(0, 4)}-01-01`;
+  const self = selfHref('/reports/income-statement', { from, to }, back);
 
   const datesInvalid =
     (params.from !== undefined && params.from !== '' && !isCalendarDate(params.from)) ||
@@ -41,12 +42,11 @@ export default async function IncomeStatementPage({
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Income Statement</h1>
-        <Link href="/reports" className="text-sm text-neutral-500 underline">
-          ← Reports
-        </Link>
+        <BackLinks back={back} />
       </header>
 
       <form method="get" className="flex flex-wrap items-end gap-3 text-sm" data-testid="income-statement-form">
+        <BackField back={back} />
         <label className="flex flex-col gap-1">
           <span>From</span>
           <input type="date" name="from" defaultValue={from} data-testid="is-from" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
@@ -75,13 +75,13 @@ export default async function IncomeStatementPage({
           <tbody>
             <SectionHeader label="Revenue" />
             {is.revenue.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to, self)} />
             ))}
             <SubtotalLine label="Total revenue" amount={is.revenue.total} testid="is-revenue-total" />
 
             <SectionHeader label="Cost of goods sold" />
             {is.cogs.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to, self)} />
             ))}
             <SubtotalLine label="Total COGS" amount={is.cogs.total} testid="is-cogs-total" />
 
@@ -92,7 +92,7 @@ export default async function IncomeStatementPage({
 
             <SectionHeader label="Operating expenses" />
             {is.expenses.rows.map((r) => (
-              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to)} />
+              <AccountLine key={r.accountId} number={r.accountNumber} name={r.accountName} amount={r.amount} href={registerHref(r.accountId, from, to, self)} />
             ))}
             <SubtotalLine label="Total operating expenses" amount={is.expenses.total} testid="is-expenses-total" />
           </tbody>
