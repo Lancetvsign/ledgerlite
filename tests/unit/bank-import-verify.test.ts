@@ -19,7 +19,11 @@ describe('verifyStatementTotals (LL-109)', () => {
   });
 
   it('LL-123: the statement\'s own math fails on a misread summary, whatever the lines say', () => {
-    // The owner's statement as it was stored: the printed figures in the wrong slots.
+    // The owner's statement as it was stored: the printed figures in the wrong slots. Its math is off only by the
+    // unexplained 27.00 — some swaps preserve the equation (next assertion), which is why the slots now come from
+    // the printed labels (summary-figures.ts) and this check is the second line of defence.
+    const preserving = verifyStatementTotals([], { beginningBalance: '9800.00', totalCredits: '3814.15', totalDebits: '4087.07', endingBalance: '9527.08' });
+    expect(preserving.checks[0]).toMatchObject({ name: 'statement_math', ok: true });
     const swapped = verifyStatementTotals(['9800.00', '27.00', '-9554.08'], { beginningBalance: '9800.00', totalCredits: '3814.15', totalDebits: '4087.07', endingBalance: '9554.08' });
     expect(swapped.status).toBe('mismatch');
     expect(swapped.checks[0]).toMatchObject({ name: 'statement_math', ok: false, expected: '9554.0800', actual: '9527.0800', difference: '-27.0000' });

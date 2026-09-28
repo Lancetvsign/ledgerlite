@@ -2005,7 +2005,8 @@ label (previous/beginning/opening balance, ending/new/closing balance, deposits/
 checks/debits/withdrawals/fees = money out), using the model's role only for a label that does not say; each label and
 amount must occur in the statement text, or the figure is not counted; money in and money out are each the sum of their
 lines (summaries print categories). A new first check, `statement_math`, requires printed beginning + money in − money
-out = printed ending; it, a missing beginning or ending balance, or a figure not on the statement triggers the one
+out = printed ending (a second line of defence: some swaps — beginning↔money in, money out↔ending — preserve the
+equation, so the slots themselves come from the labels); it, a missing beginning or ending balance, or a figure not on the statement triggers the one
 re-read, with the gap fed back. The lines are then checked against the figures as before. The figures as read are
 stored (`stated_figures`, migration 0051) and shown on the review; the reviewer can correct the four totals as printed
 (`amendStatementSummary`, `journal.post`, audited `BANK_IMPORT_SUMMARY_AMENDED`, the extracted totals kept in

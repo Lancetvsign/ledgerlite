@@ -166,14 +166,16 @@ describe('summary figures read by their labels, and corrected by the reviewer (L
 
   it('a correction changes the four totals, keeps what was read, audits, and the checks follow', async () => {
     const c = await setup();
-    // The owner's case: the figures were stored in the wrong slots.
-    const view = await stage(c, withSummary(ROWS, { beginningBalance: '1500.00', totalCredits: '5000.00', totalDebits: '4379.50', endingBalance: '2120.50' }));
+    // Figures stored in the wrong slots (the beginning and ending balances swapped): the statement math is off.
+    // (Not every swap breaks it — beginning↔money in or money out↔ending preserve the equation — which is why
+    // LL-123 decides the slots from the printed labels; this check is the second line of defence.)
+    const view = await stage(c, withSummary(ROWS, { beginningBalance: '4379.50', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '5000.00' }));
     expect(view.verification.checks[0]).toMatchObject({ name: 'statement_math', ok: false });
     const fix = amendStatementSummaryInput.parse({ beginningBalance: '5000.00', totalCredits: '1500.00', totalDebits: '2120.50', endingBalance: '4379.50' });
     expect(await amendStatementSummary(c.owner, c.companyId, view.batch.id, fix)).toEqual({ amended: true });
     const after = (await getImportBatch(c.owner, c.companyId, view.batch.id))!;
     expect(after.batch).toMatchObject({ statedBeginningBalance: '5000.0000', statedTotalCredits: '1500.0000', statedTotalDebits: '2120.5000', statedEndingBalance: '4379.5000' });
-    expect(after.batch.summaryAmendedFrom).toEqual({ statedBeginningBalance: '1500.0000', statedTotalCredits: '5000.0000', statedTotalDebits: '4379.5000', statedEndingBalance: '2120.5000' });
+    expect(after.batch.summaryAmendedFrom).toEqual({ statedBeginningBalance: '4379.5000', statedTotalCredits: '1500.0000', statedTotalDebits: '2120.5000', statedEndingBalance: '5000.0000' });
     expect(after.verification.status).toBe('verified');
     // The same figures again: nothing changes, nothing is audited; a second correction keeps the first reading.
     expect(await amendStatementSummary(c.owner, c.companyId, view.batch.id, fix)).toEqual({ amended: false });
@@ -183,7 +185,7 @@ describe('summary figures read by their labels, and corrected by the reviewer (L
     expect(again.verification.status).toBe('mismatch');
     const rows = await audits(c.companyId);
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.before).toMatchObject({ statedBeginningBalance: '1500.0000' });
+    expect(rows[0]!.before).toMatchObject({ statedBeginningBalance: '4379.5000' });
   });
 
   it('a card\'s balances are entered as printed and stored as owed (negative); another batch reads as not found', async () => {
