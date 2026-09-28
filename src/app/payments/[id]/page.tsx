@@ -12,6 +12,7 @@ import { listInvoices } from '@/server/invoices';
 import { getPayment } from '@/server/payments';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
+import { BackTo } from '@/app/reports/drill';
 
 import { voidPaymentAction } from '../actions';
 import { paymentNotice } from '../notice';
@@ -30,7 +31,7 @@ export default async function PaymentDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; voided?: string }>;
+  searchParams: Promise<{ error?: string; voided?: string; back?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -62,9 +63,12 @@ export default async function PaymentDetailPage({
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-8">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Payment</h1>
-        <Link href="/payments" className="text-sm text-neutral-500 underline">
+        <span className="flex items-center gap-4">
+          <BackTo back={sp.back} />
+          <Link href="/payments" className="text-sm text-neutral-500 underline">
           ← Payments
         </Link>
+        </span>
       </header>
 
       {notice !== null && (

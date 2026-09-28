@@ -2329,6 +2329,11 @@ input: only a same-origin path to one of the named report screens (and the dashb
 query and capped in length; anything else is ignored. A screen passes its own valid `back` on in its address, so a
 chain of drill-downs unwinds one step at a time, and its GET filter forms keep it.
 
+**Amendment (LL-117 — the register is a source too):** the account register is added to the screens `back` may
+name. Its rows' journal-entry and source-document links carry the register's own address (with its own `back`),
+and the screens they open — journal entry, invoice, bill, customer payment, bill payment, statement review — show
+"← Back to Account Register" beside their usual header link. The journal entry page stays input-free.
+
 ## ADR-041 — Team membership: invitations claimed on entry, the role ceiling, and last-owner protection
 
 **Status** Accepted · **Added by** LL-086 · **Decided by** product owner ("start LL-086")

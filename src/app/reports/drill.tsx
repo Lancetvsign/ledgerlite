@@ -49,18 +49,27 @@ export function DrillLink({ href, amount, testid, className = '' }: { href: stri
 }
 
 /**
+ * LL-115 / LL-117: "← Back to <screen>" when `back` names one of ours, else nothing. Used alone on
+ * the screens a register row opens (journal entry, invoice, bill, payments, statement review).
+ */
+export function BackTo({ back }: { back: unknown }) {
+  const target = parseBack(back);
+  if (target === null) return null;
+  return (
+    <Link href={target.href} data-testid="back-to-report" className="text-sm text-neutral-500 underline">
+      ← Back to {target.title}
+    </Link>
+  );
+}
+
+/**
  * LL-115: the header links of a report screen — "← Back to <report>" when it was opened by a
  * drill-down (a valid `back`), and "← Reports" always.
  */
 export function BackLinks({ back }: { back: unknown }) {
-  const target = parseBack(back);
   return (
     <span className="flex items-center gap-4">
-      {target !== null && (
-        <Link href={target.href} data-testid="back-to-report" className="text-sm text-neutral-500 underline">
-          ← Back to {target.title}
-        </Link>
-      )}
+      <BackTo back={back} />
       <Link href="/reports" className="text-sm text-neutral-500 underline">
         ← Reports
       </Link>

@@ -11,6 +11,7 @@ import { getBill } from '@/server/bills';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
+import { BackTo } from '@/app/reports/drill';
 
 import { finalizeBillAction, voidBillAction } from '../actions';
 import { billNotice } from '../notice';
@@ -30,7 +31,7 @@ export default async function BillDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; finalized?: string; voided?: string }>;
+  searchParams: Promise<{ error?: string; finalized?: string; voided?: string; back?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -63,9 +64,12 @@ export default async function BillDetailPage({
         <h1 className="text-2xl font-semibold">
           Bill {bill.billNumber ?? '(draft)'}
         </h1>
-        <Link href="/bills" className="text-sm text-neutral-500 underline">
+        <span className="flex items-center gap-4">
+          <BackTo back={sp.back} />
+          <Link href="/bills" className="text-sm text-neutral-500 underline">
           ← Bills
         </Link>
+        </span>
       </header>
 
       {notice !== null && (

@@ -18,6 +18,7 @@ import { listOpenInvoices } from '@/server/payments';
 import { roleHasCapability } from '@/server/rbac';
 import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
+import { BackTo } from '@/app/reports/drill';
 
 import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
@@ -54,7 +55,7 @@ export default async function ReviewImportPage({
   searchParams,
 }: {
   params: Promise<{ batchId: string }>;
-  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string; unposted?: string; detail?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; posted?: string; ignored?: string; applied?: string; matched?: string; personal?: string; intercompany?: string; waiting?: string; unposted?: string; detail?: string; back?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -219,7 +220,10 @@ export default async function ReviewImportPage({
             {REVIEW_STATUS_TEXT[reviewStatus]}
           </span>
         </h1>
-        <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
+        <span className="flex items-center gap-4">
+          <BackTo back={sp.back} />
+          <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
+        </span>
       </header>
 
       <p className="text-sm text-neutral-500" data-testid="batch-summary">

@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { parseBack, selfHref, withBack } from '@/app/reports/back';
 
-/** LL-115: "Back to report" — only our own report screens are ever linked back to. */
+/** LL-115 / LL-117: "Back to report" — only our own report screens are ever linked back to. */
 describe('parseBack', () => {
   it('accepts a report screen with its filters, and names it', () => {
     expect(parseBack('/reports/trial-balance?asOf=2026-09-27')).toEqual({ href: '/reports/trial-balance?asOf=2026-09-27', title: 'Trial Balance' });
     expect(parseBack('/reports/income-statement?from=2026-01-01&to=2026-09-27')?.title).toBe('Income Statement');
     expect(parseBack('/dashboard')).toEqual({ href: '/dashboard', title: 'Dashboard' });
+    // LL-117: the register is a source too — its rows open entries and documents that lead back to it.
+    expect(parseBack('/reports/register?accountId=a&from=2026-01-01&to=2026-09-28')).toEqual({ href: '/reports/register?accountId=a&from=2026-01-01&to=2026-09-28', title: 'Account Register' });
   });
 
   it('refuses anything that is not one of our report screens', () => {
@@ -20,7 +22,7 @@ describe('parseBack', () => {
       '\\\\evil.example',
       'javascript:alert(1)',
       '/journal/new',
-      '/reports/register?accountId=x',
+      '/reports/statement?customerId=x', // a leaf: nothing is drilled into from a statement
       '/reports',
       '/reports/trial-balance/../../account',
       'reports/trial-balance',
