@@ -36,6 +36,8 @@ export function billPaymentNotice(code: string | undefined): string | null {
       return 'Only a posted bill payment can be voided.';
     case 'PERIOD_CLOSED':
       return 'That date falls in a closed accounting period.';
+    case 'REVERSAL_BEFORE_ORIGINAL':
+      return "A void can't be dated before the document it reverses.";
     case 'BILL_PAYMENT_NOT_FOUND':
     case 'notfound':
       return 'That bill payment was not found.';

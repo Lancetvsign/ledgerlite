@@ -88,14 +88,12 @@ export default async function ReverseEntryPage({ params, searchParams }: { param
         <BackField back={back} />
         <label className="flex items-center gap-2">
           <span className="w-28 text-neutral-500">Reversal date</span>
-          <input type="date" name="reversalDate" defaultValue={proposed} required data-testid="reverse-entry-date" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
+          <input type="date" name="reversalDate" defaultValue={proposed} min={entry.postingDate} required data-testid="reverse-entry-date" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
         </label>
         <p className="text-xs text-neutral-500" data-testid="reverse-entry-date-note">
           {proposed === entry.postingDate
-            ? `Proposed on the entry's own date (${entry.postingDate}), so the correction lands in the same period. Choose another date if you need to.`
-            : closed.has(entry.postingDate)
-              ? `The entry's own date (${entry.postingDate}) is in a closed period, so today is proposed.`
-              : `The entry is dated after today (${entry.postingDate}), so today is proposed.`}
+            ? `Proposed on the entry's own date (${entry.postingDate}), so the correction lands in the same period. Choose another date if you need to — not before the entry's own.`
+            : `The entry's own date (${entry.postingDate}) is in a closed period, so today is proposed.`}
         </p>
         <label className="flex items-center gap-2">
           <span className="w-28 text-neutral-500">Reason</span>

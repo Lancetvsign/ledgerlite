@@ -258,7 +258,7 @@ export async function reopenFiscalYear(
         reversalDate,
         description: input.reason ?? `Reopen of fiscal year ${fyStart}`,
       },
-      reversalDate,
+      { chosen: reversalDate }, // the fiscal-year end — the closing entry's own date
     );
 
     await recordAuditEvent({

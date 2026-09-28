@@ -381,7 +381,8 @@ export async function findIdempotentDocument<T>(
   return await load(prior.sourceId);
 }
 
-export { reverseJournalEntry, reverseEntryCore } from './reversal';
+export { reverseJournalEntry, reverseEntryCore, reversalDateFrom } from './reversal';
+export type { ReversalDate } from './reversal';
 export { fingerprintRequest } from './fingerprint';
 export { getJournalEntry, listRecentEntries } from './queries';
 export type { JournalEntryView, JournalEntryLineView, RecentEntry } from './queries';

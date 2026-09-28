@@ -163,6 +163,7 @@ function noticeFrom(sp: { ok?: string; error?: string }): string | null {
   if (e === undefined) return null;
   if (e === 'PERIOD_CLOSED') return 'That reversal date falls in a closed period — choose a date in an open period.';
   if (e === 'ENTRY_ALREADY_REVERSED') return 'That entry has already been reversed.';
+  if (e === 'REVERSAL_BEFORE_ORIGINAL') return "A reversal can't be dated before the entry it reverses — choose the entry's own date or later.";
   if (e === 'DOCUMENT_REVERSAL_REQUIRES_VOID') return 'This entry belongs to a document — void the document instead.';
   if (e === 'denied') return 'You do not have permission to reverse entries.';
   return 'The entry could not be reversed.';

@@ -34,6 +34,8 @@ export function invoiceNotice(code: string | undefined): string | null {
       return 'This invoice has tax but no Sales Tax Payable account is configured.';
     case 'PERIOD_CLOSED':
       return 'That date falls in a closed accounting period.';
+    case 'REVERSAL_BEFORE_ORIGINAL':
+      return "A void can't be dated before the document it reverses.";
     case 'INVOICE_NOT_FOUND':
     case 'notfound':
       return 'That invoice was not found.';

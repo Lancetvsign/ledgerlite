@@ -9,7 +9,7 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { resolveSystemAccount } from '@/server/accounts';
 import { requirePermission } from '@/server/authorization';
 import { recordAuditEvent } from '@/server/audit';
-import { LedgerError, postEntryCore, reverseEntryCore } from '@/server/ledger';
+import { LedgerError, postEntryCore, reversalDateFrom, reverseEntryCore } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
 import { invoiceReductionsTotal } from '@/server/reports/open-balance';
 
@@ -248,7 +248,7 @@ export async function voidWriteoff(
       .set({ status: 'VOID', updatedAt: sql`now()` })
       .where(and(eq(schema.writeoffs.companyId, companyId), eq(schema.writeoffs.id, writeoffId)));
 
-    await reverseEntryCore(
+    const reversalEntry = await reverseEntryCore(
       tx,
       {
         companyId,
@@ -257,7 +257,7 @@ export async function voidWriteoff(
         reversalDate,
         description: input.reason ?? `Void of write-off ${writeoffId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     // If this write-off had cleared its invoice, it is no longer cleared → back to OPEN.
@@ -280,7 +280,7 @@ export async function voidWriteoff(
       entityType: 'writeoff',
       entityId: writeoffId,
       before: { status: 'POSTED', amount: writeoff.amount },
-      after: { status: 'VOID', reversalDate, reason: input.reason ?? null },
+      after: { status: 'VOID', reversalDate: reversalEntry.entry.postingDate, reason: input.reason ?? null },
     });
 
     return await loadWriteoff(tx, companyId, writeoffId);

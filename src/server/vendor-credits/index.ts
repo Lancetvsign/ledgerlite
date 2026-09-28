@@ -15,6 +15,7 @@ import {
   isIdempotencyViolation,
   LedgerError,
   postEntryCore,
+  reversalDateFrom,
   reverseEntryCore,
 } from '@/server/ledger';
 import { getAccountingPeriod } from '@/server/periods';
@@ -299,7 +300,7 @@ export async function voidVendorCredit(
       .set({ status: 'VOID', updatedAt: sql`now()` })
       .where(and(eq(schema.vendorCredits.companyId, companyId), eq(schema.vendorCredits.id, vendorCreditId)));
 
-    await reverseEntryCore(
+    const reversalEntry = await reverseEntryCore(
       tx,
       {
         companyId,
@@ -308,7 +309,7 @@ export async function voidVendorCredit(
         reversalDate,
         description: input.reason ?? `Void of vendor credit ${vendorCreditId}`,
       },
-      reversalDate,
+      reversalDateFrom(input.reversalDate, reversalDate),
     );
 
     // If this vendor credit had cleared its bill, it is no longer cleared → back to OPEN.
@@ -331,7 +332,7 @@ export async function voidVendorCredit(
       entityType: 'vendor_credit',
       entityId: vendorCreditId,
       before: { status: 'POSTED', amount: credit.amount },
-      after: { status: 'VOID', reversalDate, reason: input.reason ?? null },
+      after: { status: 'VOID', reversalDate: reversalEntry.entry.postingDate, reason: input.reason ?? null },
     });
 
     return await loadVendorCredit(tx, companyId, vendorCreditId);

@@ -112,7 +112,12 @@ export function toLedgerDomainError(error: unknown): unknown {
   // surfaces here in the rare race where a close commits between the service's own
   // period check and the insert — the service's early check catches the common
   // case first — but when it does, callers still get the typed PERIOD_CLOSED.
-  if (/PERIOD_CLOSED/.test(text)) {
+  // LL-121: the reversal-date guard (migration 0050) — only reached if a caller bypassed the service's
+  // own check (the service resolves the date against the locked original first).
+  if (/REVERSAL_BEFORE_ORIGINAL/.test(text)) {
+    return new LedgerError('REVERSAL_BEFORE_ORIGINAL', "A reversal can't be dated before the entry it reverses.");
+  }
+    if (/PERIOD_CLOSED/.test(text)) {
     return new LedgerError(
       'PERIOD_CLOSED',
       'The accounting period for this posting date is closed.',

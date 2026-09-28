@@ -9,8 +9,11 @@ describe('proposedReversalDate', () => {
     expect(proposedReversalDate('2026-02-10', today, new Set())).toBe('2026-02-10');
     expect(proposedReversalDate(today, today, new Set())).toBe(today);
   });
-  it('proposes today when the entry\'s period is closed, or the entry is dated after today', () => {
+  it('proposes today when the entry\'s period is closed', () => {
     expect(proposedReversalDate('2026-02-10', today, new Set(['2026-02-10']))).toBe(today);
-    expect(proposedReversalDate('2026-10-01', today, new Set())).toBe(today);
+  });
+  it('LL-121: a future-dated entry proposes its own date — a reversal is never dated before its original', () => {
+    expect(proposedReversalDate('2026-10-01', today, new Set())).toBe('2026-10-01');
+    expect(proposedReversalDate('2026-10-01', today, new Set(['2026-10-01']))).toBe('2026-10-01');
   });
 });
