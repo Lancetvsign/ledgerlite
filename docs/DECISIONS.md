@@ -2644,6 +2644,12 @@ entry between the two accounts, which never touches the bank. Every undo is audi
 (`BANK_IMPORT_LINE_UNPOSTED`, migration 0046) and takes the same locks as posting (both statement lines in
 id order, then company → entry → counter).
 
+**Amendment (LL-116 — the undo's reversal date is the reviewer's):** "Undo posting" dates its reversal on a
+date the reviewer chooses, between the original posting date and the company's today; omitted, today (LL-110).
+The review screen proposes the posting's own date while its period is open, else today, so a correction lands
+in the period of the mistake. The period of the chosen date must be open (`PERIOD_CLOSED` otherwise); a date
+outside the range is `UNDO_DATE_INVALID`. A line matched to another's posting has no reversal and ignores it.
+
 ## ADR-045 — Review progress is kept per company as drafts, structurally scoped to staged lines
 
 **Status** Accepted · **Added by** LL-105 · **Decided by** product owner ("have it save and mark as in progress instead of resetting if I leave the statement before completion")

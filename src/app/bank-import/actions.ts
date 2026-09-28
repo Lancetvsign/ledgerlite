@@ -12,7 +12,7 @@ import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
 import { PaymentError } from '@/server/payments';
 import { ensureAppUser } from '@/server/users';
-import { amendImportLineInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput } from '@/validation/bank-import';
+import { amendImportLineInput, postImportLinesInput, saveReviewDraftsInput, stageImportInput, unpostImportLineInput } from '@/validation/bank-import';
 import { isUuid } from '@/lib/uuid';
 
 /**
@@ -195,12 +195,16 @@ export async function unpostImportLineAction(formData: FormData): Promise<void> 
   const lineId = opt(formData.get('lineId')) ?? '';
   if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
   if (!isUuid(lineId)) redirect(`/bank-import/${batchId}?error=LINE_NOT_FOUND`);
+  // LL-116: the reversal's date as chosen (omitted = today); the service checks range and period.
+  const rawDate = opt(formData.get('reversalDate'))?.trim();
+  const parsed = unpostImportLineInput.safeParse(rawDate === undefined || rawDate === '' ? {} : { reversalDate: rawDate });
+  if (!parsed.success) redirect(`/bank-import/${batchId}?error=UNDO_DATE_INVALID`);
   let unposted = 0;
   try {
-    ({ unposted } = await unpostImportLine(userId, companyId, batchId, lineId));
+    ({ unposted } = await unpostImportLine(userId, companyId, batchId, lineId, parsed.data));
   } catch (error) {
     if (error instanceof AuthorizationDenied) redirect(`/bank-import/${batchId}?error=denied`);
-    if (error instanceof BankImportError && (error.code === 'UNPOST_ELSEWHERE' || error.code === 'LINE_RECONCILED')) {
+    if (error instanceof BankImportError && (error.code === 'UNPOST_ELSEWHERE' || error.code === 'LINE_RECONCILED' || error.code === 'UNDO_DATE_INVALID')) {
       redirect(`/bank-import/${batchId}?error=${error.code}&detail=${encodeURIComponent(error.message)}`);
     }
     if (error instanceof BankImportError || error instanceof LedgerError) redirect(`/bank-import/${batchId}?error=${error.code}`);

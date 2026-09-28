@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { schema } from '@/db';
 import { getAuth } from '@/lib/auth';
 import { createAccount, listAccounts } from '@/server/accounts';
-import { amendImportLine, BankImportError, getImportBatch, postImportLines, stageImport, unpostImportLine } from '@/server/bank-import';
+import { amendImportLine, BankImportError, getImportBatch, postImportLines, stageImport, undoDateDefaults, unpostImportLine } from '@/server/bank-import';
 import { type TransactionExtractor } from '@/server/bank-import/extract';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
@@ -249,5 +249,82 @@ describe('import line — Undo posting', () => {
     expect(await codeOf(unpostImportLine(c.owner, c.companyId, batchId, lines[0]!.id), LedgerError)).toBe('PERIOD_CLOSED');
     expect((await lineOf(c, batchId, 0)).status).toBe('POSTED');
     await assertLedgerIntegrity(c.companyId);
+  });
+});
+
+describe('import line — Undo posting on a chosen date (LL-116)', () => {
+  async function postedRent(c: Ctx) {
+    const { batchId, lines } = await stage(c, c.bankId, [{ date: '2026-06-02', description: 'RENT', amount: '-2000.00' }]);
+    await postImportLines(c.owner, c.companyId, batchId, { decisions: [{ lineId: lines[0]!.id, action: 'post', accountId: c.suppliesId }] });
+    return { batchId, line: lines[0]! };
+  }
+  async function entryDates(id: string) {
+    const db = await getTestDb();
+    return (await db.select({ t: schema.journalEntries.transactionDate, p: schema.journalEntries.postingDate }).from(schema.journalEntries).where(eq(schema.journalEntries.id, id)))[0]!;
+  }
+
+  it('back-dates the reversal to the original posting date, so the correction lands in the same period', async () => {
+    const c = await setup();
+    const { batchId, line } = await postedRent(c);
+    const r = await unpostImportLine(c.owner, c.companyId, batchId, line.id, { reversalDate: '2026-06-02' });
+    expect(r.unposted).toBe(1);
+    expect(await entryDates(r.reversalEntryId!)).toEqual({ t: '2026-06-02', p: '2026-06-02' });
+    expect(await balance(c, c.suppliesId)).toBe('0.0000');
+    // The June trial balance already shows the correction.
+    const june = await getTrialBalance(c.owner, c.companyId, '2026-06-30');
+    expect(june.rows.find((x) => x.accountId === c.suppliesId)?.balance ?? '0.0000').toBe('0.0000');
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('refuses a date before the original posting or after today, and nothing changes', async () => {
+    const c = await setup();
+    const { batchId, line } = await postedRent(c);
+    const { todayInTimeZone } = await import('@/lib/dates');
+    const today = todayInTimeZone('America/Chicago');
+    const tomorrow = new Date(Date.parse(`${today}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    for (const reversalDate of ['2026-06-01', tomorrow]) {
+      expect(await codeOf(unpostImportLine(c.owner, c.companyId, batchId, line.id, { reversalDate }), BankImportError), reversalDate).toBe('UNDO_DATE_INVALID');
+    }
+    expect((await lineOf(c, batchId, 0)).status).toBe('POSTED');
+    // A malformed date never reaches the ledger.
+    await expect(unpostImportLine(c.owner, c.companyId, batchId, line.id, { reversalDate: '2026-02-30' })).rejects.toThrow();
+    expect((await lineOf(c, batchId, 0)).status).toBe('POSTED');
+  });
+
+  it('a chosen date in a closed period is refused even though today is open; today still works', async () => {
+    const c = await setup();
+    const { batchId, line } = await postedRent(c);
+    const june = await getAccountingPeriod(c.companyId, '2026-06-15');
+    await closePeriod(c.owner, c.companyId, june.id);
+    expect(await codeOf(unpostImportLine(c.owner, c.companyId, batchId, line.id, { reversalDate: '2026-06-20' }), LedgerError)).toBe('PERIOD_CLOSED');
+    expect((await lineOf(c, batchId, 0)).status).toBe('POSTED');
+    const r = await unpostImportLine(c.owner, c.companyId, batchId, line.id);
+    expect(r.unposted).toBe(1);
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a matched line has no reversal, so its date is not used', async () => {
+    const c = await setup();
+    const bank = await stage(c, c.bankId, [{ date: '2026-06-03', description: 'PAY VISA', amount: '-2000.00' }]);
+    await postImportLines(c.owner, c.companyId, bank.batchId, { decisions: [{ lineId: bank.lines[0]!.id, action: 'post', accountId: c.cardId }] });
+    const card = await stage(c, c.cardId, [{ date: '2026-06-04', description: 'PAYMENT THANK YOU', amount: '2000.00' }]);
+    await postImportLines(c.owner, c.companyId, card.batchId, { decisions: [{ lineId: card.lines[0]!.id, action: 'match_transfer', counterpartLineId: card.lines[0]!.transferCandidate!.lineId }] });
+    expect(await unpostImportLine(c.owner, c.companyId, card.batchId, card.lines[0]!.id, { reversalDate: '2000-01-01' })).toEqual({ unposted: 1, reversalEntryId: null });
+  });
+
+  it('the review proposes the posting\'s own date while its period is open, else today', async () => {
+    const c = await setup();
+    const { todayInTimeZone } = await import('@/lib/dates');
+    const today = todayInTimeZone('America/Chicago');
+    const lines = [{ id: 'june', txnDate: '2026-06-02' }, { id: 'may', txnDate: '2026-05-10' }];
+    expect(await undoDateDefaults(c.owner, c.companyId, [])).toEqual({ today, byLine: new Map() });
+    let d = await undoDateDefaults(c.owner, c.companyId, lines);
+    expect(d.today).toBe(today);
+    expect(d.byLine.get('june')).toBe('2026-06-02');
+    expect(d.byLine.get('may')).toBe('2026-05-10');
+    await closePeriod(c.owner, c.companyId, (await getAccountingPeriod(c.companyId, '2026-06-15')).id);
+    d = await undoDateDefaults(c.owner, c.companyId, lines);
+    expect(d.byLine.get('june')).toBe(today);
+    expect(d.byLine.get('may')).toBe('2026-05-10');
   });
 });
