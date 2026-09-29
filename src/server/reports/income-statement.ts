@@ -8,6 +8,8 @@ import { isCalendarDate } from '@/lib/dates';
 import { sumMoney, toMoney } from '@/lib/decimal';
 import { requirePermission } from '@/server/authorization';
 
+import { cashBasisPnlQuery } from './cash-basis';
+
 /**
  * Income Statement (Profit & Loss) — LL-072.
  *
@@ -37,9 +39,13 @@ export interface IncomeStatementSection {
   readonly total: string;
 }
 
+/** LL-126 (ADR-048): accrual (as posted) or cash (invoices and bills when paid). */
+export type ReportBasis = 'accrual' | 'cash';
+
 export interface IncomeStatement {
   readonly fromDate: string;
   readonly toDate: string;
+  readonly basis: ReportBasis;
   readonly revenue: IncomeStatementSection;
   readonly cogs: IncomeStatementSection;
   /** Revenue − COGS. */
@@ -72,6 +78,7 @@ export async function getIncomeStatement(
   companyId: string,
   fromDate: string,
   toDate: string,
+  basis: ReportBasis = 'accrual',
 ): Promise<IncomeStatement> {
   await requirePermission(actorUserId, companyId, 'report.view');
 
@@ -90,7 +97,7 @@ export async function getIncomeStatement(
 
   // Per-account amount in natural direction over the period. Debit-natural COGS/EXPENSE
   // take debits − credits; credit-natural REVENUE takes credits − debits.
-  const perAccount = await db.execute<Row>(sql`
+  const perAccount = basis === 'cash' ? await db.execute<Row>(cashBasisPnlQuery([companyId], fromDate, toDate)) : await db.execute<Row>(sql`
     select
       a.id::text            as account_id,
       a.account_number      as account_number,
@@ -130,6 +137,7 @@ export async function getIncomeStatement(
   return {
     fromDate,
     toDate,
+    basis,
     revenue,
     cogs,
     grossProfit: grossProfit.toFixed(4),

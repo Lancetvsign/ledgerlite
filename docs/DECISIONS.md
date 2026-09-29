@@ -2861,3 +2861,34 @@ accounts' changes are eliminated — across the group they cancel, since a trans
 opposite directions — and whatever does not cancel is the change in cash in transit, on its own line. The
 consolidated column therefore equals the sum of the companies' columns and reconciles to the group's cash.
 
+## ADR-048 — Cash-basis income statement: invoices and bills count when paid
+
+**Status** Accepted · **Added by** LL-126 · **Decided by** product owner (2026-09-29: scope, credits, other entries)
+
+### Context
+
+Every statement was accrual. Sprint 7 deferred cash-basis reporting as a separate decision. The payment ↔ document links
+already exist (`payment_applications`, `bill_payment_applications`), and every document posts its own journal entry.
+
+### Decision
+
+1. **Scope.** The income statement and the consolidated income statement get an Accrual | Cash switch (accrual by default);
+   the balance sheet, cash flow and every other caller stay accrual.
+2. **Revenue when paid, expenses when paid.** An invoice's revenue counts when a customer payment is applied to it; a bill's
+   expense when a bill payment is. Each payment is allocated over the document it pays by that document's own P&L journal
+   lines, scaled by `amount_applied / document total` — so the sales-tax share (on a liability) is not carried and a split
+   invoice splits the payment in proportion. Each share is rounded to 4 decimals per (payment, account).
+3. **Voids by their entries.** A payment counts on its date; its void (the REVERSAL entry) takes it back on the void's own
+   date. Documents keep no void date, so the entries are the record.
+4. **Left out:** credit memos, bad-debt write-offs and vendor credits — they adjust amounts never received or paid.
+5. **Everything else as posted:** bank-statement postings, manual journal entries (non-cash ones such as depreciation
+   included), intercompany takes, opening balances; CLOSING entries and their reversals are excluded as on accrual.
+6. **Reads only**, from `journal_lines` (ADR-002), NUMERIC in PostgreSQL (ADR-004). Cash-basis figures do not drill into the
+   account registers, which are accrual.
+
+### Consequences
+
+- Several partial payments of one invoice can differ from its revenue by 0.0001 in total (per-share rounding).
+- An invoice paid before the report's range but invoiced inside it shows no revenue in the range (by design).
+- Revisit if: a cash-basis balance sheet is wanted, or unapplied payments / customer refunds arrive (they would need a rule).
+

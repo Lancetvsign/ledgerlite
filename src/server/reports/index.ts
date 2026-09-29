@@ -12,7 +12,7 @@ export type { VendorStatement, VendorStatementLine } from './vendor-statement';
 export { getBalanceSheet } from './balance-sheet';
 export type { BalanceSheet, BalanceSheetRow, BalanceSheetSection, BalanceSheetEquity } from './balance-sheet';
 export { getIncomeStatement } from './income-statement';
-export type { IncomeStatement, IncomeStatementRow, IncomeStatementSection } from './income-statement';
+export type { IncomeStatement, IncomeStatementRow, IncomeStatementSection, ReportBasis } from './income-statement';
 export { getCashFlowStatement } from './cash-flow';
 export type { CashFlowStatement, CashFlowLine, CashFlowSection } from './cash-flow';
 export { getAccountRegister } from './account-register';

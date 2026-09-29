@@ -1,5 +1,5 @@
 import { isCalendarDate } from '@/lib/dates';
-import { ConsolidationError, getConsolidatedIncomeStatement, type ConsolidatedIncomeStatement } from '@/server/reports';
+import { ConsolidationError, getConsolidatedIncomeStatement, type ConsolidatedIncomeStatement, type ReportBasis } from '@/server/reports';
 
 import { selfHref } from '../back';
 import { ConsolidationUnavailable, ConsolidationWorksheet } from '../consolidation-table';
@@ -18,14 +18,16 @@ export const dynamic = 'force-dynamic';
 export default async function ConsolidatedIncomeStatementPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string; back?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; basis?: string; back?: string }>;
 }) {
   const ctx = await requireReportContext();
   const params = await searchParams;
   const back = params.back;
+  // LL-126 (ADR-048): accrual unless the reader asks for cash.
+  const basis: ReportBasis = params.basis === 'cash' ? 'cash' : 'accrual';
   const to = params.to !== undefined && isCalendarDate(params.to) ? params.to : ctx.today;
   const from = params.from !== undefined && isCalendarDate(params.from) ? params.from : `${ctx.today.slice(0, 4)}-01-01`;
-  const self = selfHref('/reports/consolidated-income-statement', { from, to }, back);
+  const self = selfHref('/reports/consolidated-income-statement', { from, to, ...(basis === 'cash' ? { basis } : {}) }, back);
   const datesInvalid =
     (params.from !== undefined && params.from !== '' && !isCalendarDate(params.from)) ||
     (params.to !== undefined && params.to !== '' && !isCalendarDate(params.to)) ||
@@ -35,7 +37,7 @@ export default async function ConsolidatedIncomeStatementPage({
   let unavailable: ConsolidationError | null = null;
   if (!datesInvalid) {
     try {
-      is = await getConsolidatedIncomeStatement(ctx.userId, ctx.companyId, from, to);
+      is = await getConsolidatedIncomeStatement(ctx.userId, ctx.companyId, from, to, basis);
     } catch (error) {
       if (!(error instanceof ConsolidationError)) throw error;
       unavailable = error;
@@ -61,6 +63,13 @@ export default async function ConsolidatedIncomeStatementPage({
           <span>To</span>
           <input type="date" name="to" defaultValue={to} data-testid="cis-to" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900" />
         </label>
+        <label className="flex flex-col gap-1">
+          <span>Basis</span>
+          <select name="basis" defaultValue={basis} data-testid="cis-basis" className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900">
+            <option value="accrual">Accrual</option>
+            <option value="cash">Cash</option>
+          </select>
+        </label>
         <button type="submit" data-testid="cis-submit" className="rounded border border-neutral-300 px-3 py-1 dark:border-neutral-700">
           View
         </button>
@@ -73,7 +82,17 @@ export default async function ConsolidatedIncomeStatementPage({
 
       {is !== null && (
         <>
-          <p className="text-xs text-neutral-500">Intercompany activity sits only on the balance sheet, so no income or expense is eliminated.</p>
+          <p className="text-xs text-neutral-500">
+            {basis === 'cash' ? 'Cash basis. ' : ''}Intercompany activity sits only on the balance sheet, so no income or expense is eliminated.
+          </p>
+          {basis === 'cash' && (
+            <p className="text-xs text-neutral-500" data-testid="cash-basis-note">
+              Cash basis: invoices count as revenue when the customer pays and bills as expenses when they are paid (a payment is
+              spread over the invoice or bill it pays, sales tax left out); credit memos, write-offs and vendor credits are left out;
+              everything else — bank postings, journal entries — counts as posted. Figures here do not drill into the (accrual)
+              account registers.
+            </p>
+          )}
           <ConsolidationWorksheet
             testid="consolidated-income-statement"
             members={is.members}
@@ -90,6 +109,7 @@ export default async function ConsolidatedIncomeStatementPage({
             drillFrom={from}
             drillTo={to}
             back={self}
+            drill={basis !== 'cash'}
           />
         </>
       )}
