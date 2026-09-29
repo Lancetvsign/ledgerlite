@@ -1467,6 +1467,109 @@ export async function deleteImportBatch(
   });
 }
 
+export interface BatchUndoBlocker {
+  readonly lineNumber: number;
+  readonly reason: string;
+}
+
+export interface BatchUndoPlan {
+  /** Posted lines this statement's "Undo posting" can reverse (or, when matched, return). */
+  readonly undoable: number;
+  /** Posted lines that must be undone on their own screens first. Empty = the whole statement can be undone. */
+  readonly blockers: readonly BatchUndoBlocker[];
+}
+
+/**
+ * LL-124: what "Undo all postings and delete" would do to a statement — how many of its posted lines
+ * it can undo here (LL-110), and which it cannot (with why, and where to undo them). A read; gated
+ * like the review (`journal.post`).
+ */
+export async function batchUndoPlan(actorUserId: string, companyId: string, batchId: string): Promise<BatchUndoPlan> {
+  await requirePermission(actorUserId, companyId, 'journal.post');
+  const company = (await getDb().select({ timezone: schema.companies.timezone }).from(schema.companies).where(eq(schema.companies.id, companyId)).limit(1))[0];
+  const today = todayInTimeZone(company?.timezone ?? 'UTC');
+  const rows = await getDb().execute<{
+    line_number: number;
+    status: string;
+    txn_date: string;
+    payment_id: string | null;
+    bill_payment_id: string | null;
+    mirror_of_line_id: string | null;
+    source_type: string | null;
+    reconciled_for: string | null;
+  }>(sql`
+    select l.line_number, l.status::text as status, l.txn_date::text as txn_date,
+           l.payment_id::text as payment_id, l.bill_payment_id::text as bill_payment_id,
+           l.mirror_of_line_id::text as mirror_of_line_id, e.source_type::text as source_type,
+           (select r.statement_date::text
+              from bank_reconciliation_lines rl
+              join bank_reconciliations r on r.company_id = rl.company_id and r.id = rl.reconciliation_id
+              join journal_lines jl on jl.company_id = rl.company_id and jl.id = rl.journal_line_id
+             where rl.company_id = l.company_id and jl.journal_entry_id = l.journal_entry_id and l.mirror_of_line_id is null
+             limit 1) as reconciled_for
+    from bank_import_lines l
+    left join journal_entries e on e.company_id = l.company_id and e.id = l.journal_entry_id
+    where l.company_id = ${companyId} and l.batch_id = ${batchId} and l.status::text in ('POSTED', 'PERSONAL', 'ASSIGNED')
+    order by l.line_number`);
+  const blockers: BatchUndoBlocker[] = [];
+  let undoable = 0;
+  for (const r of rows.rows) {
+    const reason =
+      r.status === 'ASSIGNED' ? 'taken by another company — it gives it back from its "Shared with you" page'
+      : r.payment_id !== null ? 'applied to an invoice — void the customer payment it created'
+      : r.bill_payment_id !== null ? 'applied to a bill — void the bill payment it created'
+      : r.source_type === 'INTERCOMPANY' ? 'an intercompany transfer — use "Undo transfer" on it'
+      : r.reconciled_for !== null ? `cleared in the reconciliation for ${r.reconciled_for}`
+      : r.mirror_of_line_id === null && r.txn_date > today ? 'dated after today — it cannot be reversed yet'
+      : null;
+    if (reason === null) undoable += 1;
+    else blockers.push({ lineNumber: r.line_number, reason });
+  }
+  return { undoable, blockers };
+}
+
+/**
+ * LL-124: "Undo all postings and delete" — for a statement imported wrongly. Refuses without changing
+ * anything when any posted line must be undone elsewhere (`batchUndoPlan`). Otherwise every posted
+ * line is undone exactly as its own "Undo posting" would (LL-110: its entry reversed — dated on its
+ * own date while that period is open, else today, LL-116 — or, when matched to another statement's
+ * posting, returned without a reversal; a line on another statement matched to it returns to review
+ * there), and then the statement is deleted (LL-087). Each undo is its own complete correction, so a
+ * failure part-way (a period closed meanwhile) leaves a consistent state that a retry continues. The
+ * reversals stay in the journal: the history shows the postings and their corrections.
+ */
+export async function undoPostingsAndDeleteImportBatch(
+  actorUserId: string,
+  companyId: string,
+  batchId: string,
+): Promise<{ undone: number; returnedElsewhere: number; deletedLines: number }> {
+  const plan = await batchUndoPlan(actorUserId, companyId, batchId);
+  if (plan.blockers.length > 0) {
+    throw new BankImportError(
+      'BATCH_UNDO_BLOCKED',
+      `Undo these first: ${plan.blockers.map((b) => `line ${String(b.lineNumber)} (${b.reason})`).join('; ')}. Nothing was changed.`,
+    );
+  }
+  const view = await getImportBatch(actorUserId, companyId, batchId);
+  if (view === null) throw new BankImportError('BATCH_NOT_FOUND', 'That import batch does not exist.');
+  const posted = view.lines.filter((l) => l.status === 'POSTED' || l.status === 'PERSONAL');
+  const dates = await undoDateDefaults(actorUserId, companyId, posted.filter((l) => l.mirrorOfLineId === null));
+  let undone = 0;
+  let returnedElsewhere = 0;
+  for (const l of posted) {
+    const date = dates.byLine.get(l.id);
+    const r = await unpostImportLine(actorUserId, companyId, batchId, l.id, date === undefined ? {} : { reversalDate: date });
+    if (r.unposted > 0) {
+      undone += 1;
+      returnedElsewhere += r.unposted - 1;
+    }
+  }
+  const { lines } = await deleteImportBatch(actorUserId, companyId, batchId);
+  // Counts only (§9).
+  log.info('bank-import: postings undone and batch deleted', { stage: 'delete', companyId, batchId, actorUserId, undone, returnedElsewhere, lines });
+  return { undone, returnedElsewhere, deletedLines: lines };
+}
+
 /** Sharing needs an organization and a CARD statement (a shared bank account has no single owner of the cash). */
 async function assertShareable(companyId: string, statementKind: 'credit_card' | 'bank'): Promise<void> {
   if (statementKind !== 'credit_card') {

@@ -2457,6 +2457,16 @@ An import should be archivable with its content retained, or per-line un-staging
 
 ---
 
+**Amendment (LL-124 — undo all postings and delete):** a statement that imported wrongly after some of its lines
+were posted can be removed in one step. The service first lists every posted line it cannot undo itself — applied to
+an invoice or bill (void the payment), an intercompany transfer (Undo transfer), taken by another company, cleared in a
+reconciliation, or dated after today — and changes nothing while any remain. Otherwise it undoes each posted line
+exactly as its own "Undo posting" does (LL-110: its entry reversed, dated on its own date while that period is open,
+else today — LL-116; a matched line returned without a reversal; a line on another statement matched to it back to
+review there), then deletes the statement as before (only STAGED / IGNORED lines remain). The reversals stay in the
+journal, so the history shows both. Each undo is its own complete correction, so a failure part-way leaves a
+consistent state that a retry continues. "Delete…" is reachable from the top of the review and from the imports list.
+
 ## ADR-043 — Organizations and the intercompany model
 
 **Status** Accepted · **Added by** LL-096 · **Decided by** product owner ("I want to create a hierarchy that allows multiple companies in an organization … split up a credit card bill to the appropriate company"; "make sure this will work for intercompany bank transfers … reconcile it in another company based on their bank statements and timing")

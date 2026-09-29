@@ -366,6 +366,31 @@ test('a misread date and description are corrected before posting; the entry car
   await expect(reg.first()).toContainText('OFFICE DEPOT #4471');
 });
 
+test('a statement imported wrongly after posting is undone and deleted in one step (LL-124)', async ({ page }) => {
+  await freshCompany(page);
+  await uploadStatement(page);
+  await page.getByTestId('post-import-lines').click();
+  await expect(page.getByTestId('notice')).toContainText('Posted 3', { timeout: 15_000 });
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('-620.50');
+
+  // From the imports list, "Delete…" leads to the statement's delete section.
+  await page.goto('/bank-import');
+  await page.getByTestId('batch-delete-link').first().click();
+  await expect(page).toHaveURL(/\/bank-import\/[0-9a-f-]{36}#delete-import$/);
+  await expect(page.getByTestId('delete-import-batch')).toHaveCount(0); // posted lines: the plain delete is not offered
+  await page.getByTestId('undo-all-delete').locator('summary').click();
+  await page.getByTestId('undo-all-confirm').check();
+  await page.getByTestId('undo-all-delete-submit').click();
+  await expect(page).toHaveURL(/\/bank-import\?ok=undone_deleted/, { timeout: 15_000 });
+  await expect(page.getByTestId('notice')).toContainText('3 posting(s) from it were reversed');
+  await expect(page.getByTestId('batch-link')).toHaveCount(0);
+
+  // The books are back where they were; the reversals remain in the journal.
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('dashboard-cash')).toHaveText('0.00');
+});
+
 test('a credit-card statement imports into the card account and increases what is owed (LL-088)', async ({ page }) => {
   await freshCompany(page);
   await page.goto('/bank-import');
