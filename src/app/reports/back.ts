@@ -24,6 +24,7 @@ export const BACK_TITLES = {
   // LL-122: the consolidated worksheets drill into the active company's registers.
   '/reports/consolidated-balance-sheet': 'Consolidated Balance Sheet',
   '/reports/consolidated-income-statement': 'Consolidated Income Statement',
+  '/reports/consolidated-cash-flow': 'Consolidated Cash-Flow Statement',
 } as const;
 export type BackPath = keyof typeof BACK_TITLES;
 

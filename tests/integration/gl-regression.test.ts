@@ -42,7 +42,7 @@ import {
 } from '@/server/ledger';
 import { addCompanyToOrganization, createOrganization } from '@/server/organizations';
 import { closePeriod } from '@/server/periods';
-import { getApAging, getArAging, getBalanceSheet, getConsolidatedBalanceSheet, getConsolidatedIncomeStatement, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
+import { getApAging, getArAging, getBalanceSheet, getConsolidatedBalanceSheet, getConsolidatedCashFlow, getConsolidatedIncomeStatement, getCustomerStatement, getIntercompanyReport, getTrialBalance, getVendorStatement } from '@/server/reports';
 import { ensureAppUser } from '@/server/users';
 import { createAccountInput } from '@/validation/account';
 import { createCompanyInput } from '@/validation/company';
@@ -1013,6 +1013,11 @@ describe('GL regression suite (release-blocking)', () => {
       expect(cbs.equity.byCompany[companyId]).toBe(own.equity.total);
     }
     expect(cbs.balanced).toBe(true);
+    // LL-125: the consolidated cash flow reconciles to the group's cash, every intercompany balance change cancelled.
+    const ccf = await getConsolidatedCashFlow(userId, a, '2026-01-01', '2026-12-31');
+    expect(ccf.reconciled).toBe(true);
+    expect(ccf.operating.rows.find((r) => r.key === 'ic:balances')?.total ?? '0.0000').toBe('0.0000');
+    expect(ccf.operating.rows.find((r) => r.key === 'ic:in-transit')).toBeUndefined();
     const cis = await getConsolidatedIncomeStatement(userId, a, '2026-01-01', '2026-12-31');
     expect(cis.netIncome.total).toBe(toMoney(cbs.equity.rows.find((r) => r.key === 'derived:current')!.total).toFixed(4));
     await assertLedgerIntegrity();
