@@ -41,6 +41,7 @@ export function ConsolidationWorksheet({
   drillTo,
   back,
   testid,
+  drill = true,
 }: {
   members: readonly ConsolidationMember[];
   activeCompanyId: string;
@@ -50,6 +51,8 @@ export function ConsolidationWorksheet({
   drillTo: string;
   back: string;
   testid: string;
+  /** LL-126: false on a cash basis — the registers are accrual, their totals would not match. */
+  drill?: boolean;
 }) {
   const row = (r: ConsolidatedRow) => (
     <tr key={r.key} data-testid="consolidated-row" data-key={r.key} className="border-b border-neutral-100 dark:border-neutral-800">
@@ -69,7 +72,7 @@ export function ConsolidationWorksheet({
       </td>
       {members.map((m) => (
         <td key={m.id} className={cell}>
-          {m.id === activeCompanyId && r.drillAccountId !== null && r.byCompany[m.id] !== undefined ? (
+          {drill && m.id === activeCompanyId && r.drillAccountId !== null && r.byCompany[m.id] !== undefined ? (
             <DrillLink href={registerHref(r.drillAccountId, drillFrom, drillTo, back)} amount={r.byCompany[m.id]!} />
           ) : (
             amount(r.byCompany[m.id])

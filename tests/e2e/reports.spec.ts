@@ -228,6 +228,27 @@ test('an action on a document opened from the register keeps the way back (LL-12
   await expect(back).toHaveText('← Back to Trial Balance');
 });
 
+test('the income statement switches between accrual and cash basis (LL-126)', async ({ page }) => {
+  await freshCompany(page);
+  await addCustomer(page, 'Cash Co');
+  await openInvoice(page, 'Cash Co', '200.00');
+  await receivePayment(page, 'Cash Co', '50.00');
+
+  await page.goto('/reports/income-statement');
+  await expect(page.getByTestId('is-basis-label')).toHaveText('(accrual basis)');
+  await expect(page.getByTestId('is-revenue-total')).toHaveText('200.00'); // invoiced
+  await page.getByTestId('is-basis').selectOption('cash');
+  await page.getByTestId('is-submit').click();
+  await expect(page).toHaveURL(/basis=cash/);
+  await expect(page.getByTestId('is-basis-label')).toHaveText('(cash basis)');
+  await expect(page.getByTestId('is-revenue-total')).toHaveText('50.00'); // collected
+  await expect(page.getByTestId('cash-basis-note')).toBeVisible();
+  await expect(page.getByTestId('is-drill')).toHaveCount(0); // the registers are accrual: no drill on a cash basis
+  // The basis survives a change of dates.
+  await page.getByTestId('is-submit').click();
+  await expect(page.getByTestId('is-basis-label')).toHaveText('(cash basis)');
+});
+
 test('a customer statement shows opening, activity and closing', async ({ page }) => {
   await freshCompany(page);
   await addCustomer(page, 'Beta Co');

@@ -9,7 +9,10 @@ import { moneyEquals, sumMoney, toMoney } from '@/lib/decimal';
 import { AuthorizationDenied, requirePermission } from '@/server/authorization';
 
 import { assembleRows, INTERCOMPANY_ROLES, numbersSharedAcrossTypes, type AmountedAccount, type ConsolidatedRow } from './consolidation-rows';
+import { cashBasisPnlQuery } from './cash-basis';
 import { getIntercompanyReport } from './intercompany';
+
+import type { ReportBasis } from './income-statement';
 
 /**
  * Consolidated organization statements — LL-122 (ADR-047). Reads only.
@@ -313,6 +316,8 @@ export async function getConsolidatedBalanceSheet(
 export interface ConsolidatedIncomeStatement {
   readonly fromDate: string;
   readonly toDate: string;
+  /** LL-126: accrual (as posted) or cash (invoices and bills when paid). */
+  readonly basis: ReportBasis;
   readonly organizationName: string;
   readonly members: readonly ConsolidationMember[];
   readonly revenue: ConsolidatedSection;
@@ -329,6 +334,7 @@ export async function getConsolidatedIncomeStatement(
   companyId: string,
   fromDate: string,
   toDate: string,
+  basis: ReportBasis = 'accrual',
 ): Promise<ConsolidatedIncomeStatement> {
   if (!isCalendarDate(fromDate) || !isCalendarDate(toDate)) {
     throw new Error(`Consolidated income statement dates must be calendar dates (YYYY-MM-DD): ${fromDate} – ${toDate}`);
@@ -336,8 +342,9 @@ export async function getConsolidatedIncomeStatement(
   if (fromDate > toDate) throw new Error(`Consolidated income statement fromDate (${fromDate}) must be on or before toDate (${toDate}).`);
   const { organizationName, members } = await consolidationScope(actorUserId, companyId);
 
-  // As `income-statement.ts`: natural direction, year-end CLOSING entries and their reversals excluded.
-  const perAccount = await getDb().execute<AccountSqlRow>(sql`
+  // As `income-statement.ts`: natural direction, year-end CLOSING entries and their reversals excluded;
+  // LL-126: on a cash basis, invoices and bills count when paid (cash-basis.ts).
+  const perAccount = basis === 'cash' ? await getDb().execute<AccountSqlRow>(cashBasisPnlQuery(members.map((m) => m.id), fromDate, toDate)) : await getDb().execute<AccountSqlRow>(sql`
     select
       a.company_id::text         as company_id,
       a.id::text                 as account_id,
@@ -377,6 +384,7 @@ export async function getConsolidatedIncomeStatement(
   return {
     fromDate,
     toDate,
+    basis,
     organizationName,
     members,
     revenue,
