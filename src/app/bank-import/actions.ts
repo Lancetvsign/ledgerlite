@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation';
 import { getAuth } from '@/lib/auth';
 import { AuthorizationDenied } from '@/server/authorization';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { amendImportLine, amendStatementSummary, BankImportError, deleteImportBatch, unpostImportLine, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
+import { amendImportLine, amendStatementSummary, BankImportError, deleteImportBatch, undoPostingsAndDeleteImportBatch, unpostImportLine, postImportLines, saveReviewDrafts, setBatchSharing, stageImport, unmarkIntercompanyTransfer } from '@/server/bank-import';
 import { AccountError } from '@/server/accounts';
 import { BillPaymentError } from '@/server/bill-payments';
 import { LedgerError } from '@/server/ledger';
@@ -271,6 +271,27 @@ export async function amendStatementSummaryAction(formData: FormData): Promise<v
     throw error;
   }
   redirect(withBack(`/bank-import/${batchId}?ok=summary_amended`, back));
+}
+
+/** Undoes every posting from a statement that imported wrongly, then deletes it — LL-124. */
+export async function undoPostingsAndDeleteImportBatchAction(formData: FormData): Promise<void> {
+  const { userId, companyId } = await requireContext();
+  const back = backFrom(formData); // LL-120: stay on the way back
+  const batchId = opt(formData.get('batchId')) ?? '';
+  if (!isUuid(batchId)) redirect('/bank-import?error=BATCH_NOT_FOUND');
+  if (formData.get('confirm') !== '1') redirect(withBack(`/bank-import/${batchId}?error=UNDO_CONFIRM_REQUIRED`, back));
+  let result: { undone: number; returnedElsewhere: number };
+  try {
+    result = await undoPostingsAndDeleteImportBatch(userId, companyId, batchId);
+  } catch (error) {
+    if (error instanceof AuthorizationDenied) redirect(withBack(`/bank-import/${batchId}?error=denied`, back));
+    if (error instanceof BankImportError && (error.code === 'BATCH_UNDO_BLOCKED' || error.code === 'UNPOST_ELSEWHERE' || error.code === 'LINE_RECONCILED' || error.code === 'UNDO_DATE_INVALID')) {
+      redirect(withBack(`/bank-import/${batchId}?error=${error.code}&detail=${encodeURIComponent(error.message)}`, back));
+    }
+    if (error instanceof BankImportError || error instanceof LedgerError) redirect(withBack(`/bank-import/${batchId}?error=${error.code}`, back));
+    throw error;
+  }
+  redirect(`/bank-import?ok=undone_deleted&undone=${String(result.undone)}&returned=${String(result.returnedElsewhere)}`);
 }
 
 /** Deletes an uploaded statement that has posted nothing — LL-087. */

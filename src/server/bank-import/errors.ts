@@ -30,6 +30,8 @@ export type BankImportErrorCode =
   | 'BATCH_NOT_FOUND'
   /** The batch has at least one POSTED line — it is part of the ledger's history now (LL-087). */
   | 'BATCH_HAS_POSTINGS'
+  /** LL-124: some posted lines must be undone on their own screens first (a payment's void, Undo transfer, …). */
+  | 'BATCH_UNDO_BLOCKED'
   | 'LINE_NOT_FOUND'
   /** LL-107: only a STAGED line can be corrected; a decided one is frozen. */
   | 'LINE_NOT_EDITABLE'

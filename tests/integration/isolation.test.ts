@@ -23,7 +23,7 @@ import { getVendorCredit, issueVendorCredit, listVendorCredits, voidVendorCredit
 import { getPayment, listPayments, receivePayment, voidPayment } from '@/server/payments';
 import { getWriteoff, listWriteoffs, voidWriteoff, writeOffInvoice } from '@/server/writeoffs';
 import { recordAuditEvent } from '@/server/audit';
-import { amendImportLine, amendStatementSummary, assignSharedLines, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine, undoDateDefaults, unpostImportLine } from '@/server/bank-import';
+import { amendImportLine, amendStatementSummary, assignSharedLines, batchUndoPlan, getImportBatch, getSharedImportBatch, listImportBatches, listSharedImports, postImportLines, saveReviewDrafts, saveSharedDrafts, setBatchSharing, stageImport, unassignSharedLine, undoDateDefaults, undoPostingsAndDeleteImportBatch, unpostImportLine } from '@/server/bank-import';
 import { closePeriod, getAccountingPeriod, listPeriods } from '@/server/periods';
 import { clearImportedLines, completeReconciliation, getReconciliation, listReconciliations, reconciliationDefaultsFromImport, setCleared, startReconciliation } from '@/server/reconciliation';
 import { createAccountInput, updateAccountInput } from '@/validation/account';
@@ -931,6 +931,22 @@ const REGISTRY: IsolationDescriptor[] = [
         run: async (attacker, victim, recordId) => {
           const [, lineId] = recordId.split(':');
           return await undoDateDefaults(attacker, victim.companyId, [{ id: lineId ?? '', txnDate: '2026-06-01' }]);
+        },
+      },
+      {
+        operation: 'undo all postings and delete a statement (LL-124)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId] = recordId.split(':');
+          return await undoPostingsAndDeleteImportBatch(attacker, victim.companyId, batchId ?? '');
+        },
+      },
+      {
+        operation: 'read what undoing a whole statement would do (LL-124)',
+        expect: 'denied',
+        run: async (attacker, victim, recordId) => {
+          const [batchId] = recordId.split(':');
+          return await batchUndoPlan(attacker, victim.companyId, batchId ?? '');
         },
       },
       {

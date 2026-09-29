@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic';
 export default async function BankImportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; ok?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; undone?: string; returned?: string }>;
 }) {
   const session = await getAuth().api.getSession({ headers: await headers() });
   if (session === null) redirect('/sign-in');
@@ -38,7 +38,12 @@ export default async function BankImportPage({
 
   const params = await searchParams;
   const notice = uploadNoticeFrom(params.error);
-  const ok = params.ok === 'deleted' ? 'Import deleted. Nothing had posted from it.' : null;
+  const ok =
+    params.ok === 'deleted'
+      ? 'Import deleted. Nothing had posted from it.'
+      : params.ok === 'undone_deleted'
+        ? `Import deleted. ${params.undone ?? '0'} posting(s) from it were reversed — the reversals stay in your journal.${params.returned !== undefined && params.returned !== '0' ? ` ${params.returned} matched line(s) on other statements went back to review.` : ''}`
+        : null;
   const configured = isExtractionConfigured();
 
   const accounts = await listAccounts(user.id, membership.companyId);
@@ -149,6 +154,10 @@ export default async function BankImportPage({
                     totals mismatch
                   </span>
                 )}
+                {/* LL-124: the delete lives on the review (it shows what would be undone); this finds it. */}
+                <Link href={`/bank-import/${b.id}#delete-import`} data-testid="batch-delete-link" className="text-xs text-red-700 underline dark:text-red-300">
+                  Delete…
+                </Link>
               </li>
             ))}
           </ul>

@@ -9,7 +9,7 @@ import { toMoney } from '@/lib/decimal';
 import { isUuid } from '@/lib/uuid';
 import { listAccounts } from '@/server/accounts';
 import { getActiveCompanyMembership } from '@/server/authorization/company-context';
-import { getImportBatch, reviewStatusOf, transferCounterparts, type ImportLineView, undoDateDefaults } from '@/server/bank-import';
+import { batchUndoPlan, getImportBatch, type ImportLineView, reviewStatusOf, transferCounterparts, undoDateDefaults } from '@/server/bank-import';
 import { listOrganizationCompanies } from '@/server/organizations';
 import { listReconciliations } from '@/server/reconciliation';
 import { listOpenBills } from '@/server/bill-payments';
@@ -20,7 +20,7 @@ import { ensureAppUser } from '@/server/users';
 import { listVendors } from '@/server/vendors';
 import { BackField, BackTo } from '@/app/reports/drill';
 
-import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction } from '../actions';
+import { amendImportLineAction, deleteImportBatchAction, unpostImportLineAction, postImportLinesAction, saveReviewDraftsAction, setBatchSharingAction, unmarkIntercompanyTransferAction, undoPostingsAndDeleteImportBatchAction } from '../actions';
 import { REVIEW_STATUS_CLASS, REVIEW_STATUS_TEXT } from '../review-status';
 import { addImportedLinesAction } from '../../reconciliation/actions';
 import { Autosave } from './autosave';
@@ -203,6 +203,8 @@ export default async function ReviewImportPage({
   const assigned = view.lines.filter((l) => l.status === 'ASSIGNED').length;
   const ignored = view.lines.filter((l) => l.status === 'IGNORED').length;
   const decided = posted + personal + assigned;
+  // LL-124: what "Undo all postings and delete" would do (only asked once something has posted).
+  const undoPlan = decided > 0 ? await batchUndoPlan(user.id, companyId, view.batch.id) : null;
   // LL-111: an open reconciliation of this statement's account, if any (one at a time per account).
   const canReconcile = roleHasCapability(membership.role, 'reconciliation.complete');
   const openReconciliation = canReconcile
@@ -223,6 +225,8 @@ export default async function ReviewImportPage({
         </h1>
         <span className="flex items-center gap-4">
           <BackTo back={sp.back} />
+          {/* LL-124: the way out of a statement that imported wrongly, findable from the top. */}
+          <a href="#delete-import" data-testid="delete-import-jump" className="text-sm text-red-700 underline dark:text-red-300">Delete…</a>
           <Link href="/bank-import" className="text-sm text-neutral-500 underline">← Imports</Link>
         </span>
       </header>
@@ -577,10 +581,49 @@ export default async function ReviewImportPage({
           </form>
         ))}
 
+      {undoPlan !== null && (
+        // LL-124: a statement that imported wrongly after lines were posted — every posting undone as its own
+        // "Undo posting" would, then the statement deleted. Lines that must be undone elsewhere are listed first.
+        <details className="self-start" id="delete-import" data-testid="undo-all-delete">
+          <summary className="cursor-pointer list-none rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 dark:border-red-800 dark:text-red-300">
+            Undo all postings and delete this import…
+          </summary>
+          <form action={undoPostingsAndDeleteImportBatchAction} className="mt-2 flex flex-col gap-2 rounded border border-neutral-300 p-3 text-sm dark:border-neutral-700">
+            <BackField back={sp.back} />
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            {undoPlan.blockers.length > 0 ? (
+              <div className="text-xs" data-testid="undo-all-blockers">
+                <p className="font-medium">Undo these lines on their own screens first:</p>
+                <ul className="list-disc pl-5">
+                  {undoPlan.blockers.map((b) => (
+                    <li key={b.lineNumber}>Line {String(b.lineNumber)}: {b.reason}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                  Undoes the {String(undoPlan.undoable)} posting(s) from this statement — each entry is reversed on its own date while
+                  its period is open, otherwise today, exactly as “Undo posting” does — then removes the statement and its lines. The
+                  reversals stay in your journal, so the history shows both. A line on another statement that was matched to one of
+                  these goes back to review there. You can upload the statement again afterwards.
+                </p>
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" name="confirm" value="1" required data-testid="undo-all-confirm" />
+                  Reverse {String(undoPlan.undoable)} posting(s) and delete this import
+                </label>
+                <button type="submit" data-testid="undo-all-delete-submit" className="self-start rounded bg-red-700 px-3 py-1.5 text-sm text-white hover:bg-red-800">
+                  Undo all postings and delete
+                </button>
+              </>
+            )}
+          </form>
+        </details>
+      )}
       {decided === 0 && (
         // Nothing from this upload has posted, so it is still a staging artifact and can be
         // removed outright (LL-087 / ADR-042). Once any line posts, the service refuses.
-        <details className="self-start">
+        <details className="self-start" id="delete-import">
           <summary className="cursor-pointer list-none rounded border border-red-300 px-3 py-1.5 text-sm text-red-700 dark:border-red-800 dark:text-red-300">
             Delete this import…
           </summary>
@@ -624,6 +667,8 @@ function noticeFrom(sp: { error?: string; ok?: string; posted?: string; ignored?
   if (sp.ok === 'amended') return 'Line corrected. The suggestions and matches were recomputed for the new values.';
   if (sp.error === 'AMOUNT_INVALID') return 'Enter the signed statement amount, e.g. -120.50 for money out, 1500.00 for money in.';
   if (sp.error === 'DATE_INVALID') return 'Enter the date as printed on the statement.';
+  if (sp.error === 'BATCH_UNDO_BLOCKED') return sp.detail ?? 'Some lines must be undone on their own screens first.';
+  if (sp.error === 'UNDO_CONFIRM_REQUIRED') return 'Tick the box to confirm reversing the postings and deleting this import.';
   if (sp.ok === 'summary_amended') return 'Statement figures corrected. The checks below use them now.';
   if (sp.error === 'SUMMARY_INVALID') return 'Enter the four figures as the statement prints them, e.g. 3,814.15 — money in and money out without a minus sign.';
   if (sp.error === 'DESCRIPTION_INVALID') return 'Enter the description as printed on the statement (up to 500 characters).';

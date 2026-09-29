@@ -16,7 +16,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { schema } from '@/db';
 import { getAuth } from '@/lib/auth';
 import { createAccount, listAccounts } from '@/server/accounts';
-import { amendImportLine, BankImportError, getImportBatch, postImportLines, stageImport, undoDateDefaults, unpostImportLine } from '@/server/bank-import';
+import { amendImportLine, BankImportError, batchUndoPlan, getImportBatch, postImportLines, stageImport, undoDateDefaults, undoPostingsAndDeleteImportBatch, unpostImportLine } from '@/server/bank-import';
+import { AuthorizationDenied } from '@/server/authorization';
 import { type TransactionExtractor } from '@/server/bank-import/extract';
 import { createCompanyWithOwner } from '@/server/companies';
 import { createCustomer } from '@/server/customers';
@@ -341,5 +342,110 @@ describe('closed-date lookup for proposals (LL-119)', () => {
     expect([...closed].sort()).toEqual(['2026-06-02', '2026-06-30']);
     expect(await periods()).toBe(before); // 2026-07 and 2031-03 were read, not created
     expect(await closedDates(c.companyId, [])).toEqual(new Set());
+  });
+});
+
+describe('undo all postings and delete a statement (LL-124)', () => {
+  const entryDates = async (id: string) => {
+    const db = await getTestDb();
+    return (await db.select({ p: schema.journalEntries.postingDate }).from(schema.journalEntries).where(eq(schema.journalEntries.reversalOfId, id)))[0]?.p;
+  };
+  const batchExists = async (batchId: string) => {
+    const db = await getTestDb();
+    return (await db.select({ id: schema.bankImportBatches.id }).from(schema.bankImportBatches).where(eq(schema.bankImportBatches.id, batchId))).length === 1;
+  };
+
+  it('reverses every posting on its own date, keeps the history, and deletes the statement', async () => {
+    const c = await setup();
+    const { batchId, lines } = await stage(c, c.bankId, [
+      { date: '2026-06-02', description: 'RENT', amount: '-2000.00' },
+      { date: '2026-06-03', description: 'OWNER', amount: '-50.00' },
+      { date: '2026-06-04', description: 'SUBTOTAL', amount: '-1.00' },
+      { date: '2026-06-05', description: 'SALE', amount: '300.00' },
+    ]);
+    await postImportLines(c.owner, c.companyId, batchId, { decisions: [
+      { lineId: lines[0]!.id, action: 'post', accountId: c.suppliesId },
+      { lineId: lines[1]!.id, action: 'personal', accountId: c.ownerDistId },
+      { lineId: lines[2]!.id, action: 'ignore' },
+    ] }); // the sale stays staged
+    const rent = (await lineOf(c, batchId, 0)).journalEntryId!;
+    const owner = (await lineOf(c, batchId, 1)).journalEntryId!;
+    expect(await batchUndoPlan(c.owner, c.companyId, batchId)).toEqual({ undoable: 2, blockers: [] });
+
+    expect(await undoPostingsAndDeleteImportBatch(c.owner, c.companyId, batchId)).toEqual({ undone: 2, returnedElsewhere: 0, deletedLines: 4 });
+    expect(await batchExists(batchId)).toBe(false);
+    expect([await entryStatus(rent), await entryStatus(owner)]).toEqual(['REVERSED', 'REVERSED']);
+    expect([await entryDates(rent), await entryDates(owner)]).toEqual(['2026-06-02', '2026-06-03']); // each on its own date (June open)
+    expect(await balance(c, c.suppliesId)).toBe('0.0000');
+    expect(await balance(c, c.ownerDistId)).toBe('0.0000');
+    expect(await balance(c, c.bankId)).toBe('0.0000');
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('refuses, changing nothing, while a line must be undone elsewhere — and says which and where', async () => {
+    const c = await setup();
+    const customer = await createCustomer(c.owner, c.companyId, createCustomerInput.parse({ name: 'Acme' }));
+    const { invoice } = await createInvoice(c.owner, c.companyId, createInvoiceInput.parse({ customerId: customer.id, invoiceDate: '2026-05-20', lines: [{ accountId: c.salesId, quantity: '1', unitPrice: '1500.00' }] }));
+    await finalizeInvoice(c.owner, c.companyId, invoice.id);
+    const { batchId, lines } = await stage(c, c.bankId, [
+      { date: '2026-06-01', description: 'DEPOSIT ACME', amount: '1500.00' },
+      { date: '2026-06-02', description: 'RENT', amount: '-2000.00' },
+    ]);
+    await postImportLines(c.owner, c.companyId, batchId, { decisions: [
+      { lineId: lines[0]!.id, action: 'apply_invoice', documentId: invoice.id },
+      { lineId: lines[1]!.id, action: 'post', accountId: c.rentId },
+    ] });
+    const plan = await batchUndoPlan(c.owner, c.companyId, batchId);
+    expect(plan.undoable).toBe(1);
+    expect(plan.blockers.map((b) => b.lineNumber)).toEqual([1]);
+    expect(plan.blockers[0]!.reason).toContain('void the customer payment');
+    const err = await undoPostingsAndDeleteImportBatch(c.owner, c.companyId, batchId).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(BankImportError);
+    expect((err as BankImportError).code).toBe('BATCH_UNDO_BLOCKED');
+    expect((err as BankImportError).message).toContain('line 1');
+    expect(await batchExists(batchId)).toBe(true);
+    expect((await lineOf(c, batchId, 1)).status).toBe('POSTED'); // the rent was not undone either
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('a posting cleared in a reconciliation blocks it', async () => {
+    const c = await setup();
+    const { batchId, lines } = await stage(c, c.bankId, [{ date: '2026-06-02', description: 'RENT', amount: '-2000.00' }]);
+    await postImportLines(c.owner, c.companyId, batchId, { decisions: [{ lineId: lines[0]!.id, action: 'post', accountId: c.rentId }] });
+    const entryId = (await lineOf(c, batchId, 0)).journalEntryId!;
+    const db = await getTestDb();
+    const bankLine = (await db.execute<{ id: string }>(sql`select id from journal_lines where journal_entry_id = ${entryId} and account_id = ${c.bankId}`)).rows[0]!.id;
+    const rec = await startReconciliation(c.owner, c.companyId, { bankAccountId: c.bankId, statementDate: '2026-06-30', statementEndingAmount: '-2000.00' });
+    await setCleared(c.owner, c.companyId, rec.id, { journalLineIds: [bankLine] });
+    expect((await batchUndoPlan(c.owner, c.companyId, batchId)).blockers).toEqual([{ lineNumber: 1, reason: 'cleared in the reconciliation for 2026-06-30' }]);
+    expect(await codeOf(undoPostingsAndDeleteImportBatch(c.owner, c.companyId, batchId), BankImportError)).toBe('BATCH_UNDO_BLOCKED');
+  });
+
+  it('a line matched to it on another statement goes back to review there; a matched line here returns without a reversal', async () => {
+    const c = await setup();
+    const bank = await stage(c, c.bankId, [{ date: '2026-06-03', description: 'PAY VISA', amount: '-2000.00' }]);
+    await postImportLines(c.owner, c.companyId, bank.batchId, { decisions: [{ lineId: bank.lines[0]!.id, action: 'post', accountId: c.cardId }] });
+    const card = await stage(c, c.cardId, [{ date: '2026-06-04', description: 'PAYMENT THANK YOU', amount: '2000.00' }]);
+    await postImportLines(c.owner, c.companyId, card.batchId, { decisions: [{ lineId: card.lines[0]!.id, action: 'match_transfer', counterpartLineId: card.lines[0]!.transferCandidate!.lineId }] });
+    // Deleting the card statement: its matched line simply returns (the bank posting stands).
+    expect(await undoPostingsAndDeleteImportBatch(c.owner, c.companyId, card.batchId)).toEqual({ undone: 1, returnedElsewhere: 0, deletedLines: 1 });
+    expect(await entryStatus((await lineOf(c, bank.batchId, 0)).journalEntryId!)).toBe('POSTED');
+    // Matched again from a fresh card upload, then deleting the BANK statement returns the card line to review.
+    const card2 = await stage(c, c.cardId, [{ date: '2026-06-04', description: 'PAYMENT THANK YOU', amount: '2000.00' }]);
+    await postImportLines(c.owner, c.companyId, card2.batchId, { decisions: [{ lineId: card2.lines[0]!.id, action: 'match_transfer', counterpartLineId: card2.lines[0]!.transferCandidate!.lineId }] });
+    expect(await undoPostingsAndDeleteImportBatch(c.owner, c.companyId, bank.batchId)).toEqual({ undone: 1, returnedElsewhere: 1, deletedLines: 1 });
+    expect((await lineOf(c, card2.batchId, 0)).status).toBe('STAGED');
+    expect(await balance(c, c.cardId)).toBe('0.0000');
+    await assertLedgerIntegrity(c.companyId);
+  });
+
+  it('with nothing posted it simply deletes; another company\'s user is denied', async () => {
+    const c = await setup();
+    const { batchId } = await stage(c, c.bankId, [{ date: '2026-06-02', description: 'RENT', amount: '-2000.00' }]);
+    const other = await setup();
+    await expect(undoPostingsAndDeleteImportBatch(other.owner, c.companyId, batchId)).rejects.toBeInstanceOf(AuthorizationDenied);
+    await expect(batchUndoPlan(other.owner, c.companyId, batchId)).rejects.toBeInstanceOf(AuthorizationDenied);
+    expect(await undoPostingsAndDeleteImportBatch(c.owner, c.companyId, batchId)).toEqual({ undone: 0, returnedElsewhere: 0, deletedLines: 1 });
+    expect(await batchExists(batchId)).toBe(false);
   });
 });
