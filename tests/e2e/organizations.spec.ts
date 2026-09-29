@@ -97,4 +97,12 @@ test('the consolidated statements show every member side by side and balance', a
   await page.goto('/reports/consolidated-income-statement');
   await expect(page.getByTestId('consolidated-company-column')).toHaveText([beta, alpha]);
   await expect(page.getByTestId('cis-net-income')).toHaveText('100.00');
+
+  // LL-125: the consolidated cash flow — the sale's cash, reconciled to the group's cash.
+  await page.goto('/reports');
+  await page.getByTestId('consolidated-cash-flow-link').click();
+  await expect(page.getByTestId('consolidated-company-column')).toHaveText([beta, alpha]);
+  await expect(page.getByTestId('consolidated-reconciled')).toHaveText('Reconciled to cash');
+  await expect(page.getByTestId('ccf-net-change')).toHaveText('100.00');
+  await expect(page.getByTestId('ccf-ending-cash')).toHaveText('100.00');
 });

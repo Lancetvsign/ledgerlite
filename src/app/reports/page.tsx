@@ -23,6 +23,7 @@ const REPORTS = [
   { href: '/reports/intercompany', testid: 'intercompany-link', title: 'Intercompany Balances', blurb: 'What each company of your organization owes this one and is owed by it, checked against the other company’s books.' },
   { href: '/reports/consolidated-balance-sheet', testid: 'consolidated-balance-sheet-link', title: 'Consolidated Balance Sheet', blurb: 'Your whole organization’s position: every company side by side, intercompany balances eliminated.' },
   { href: '/reports/consolidated-income-statement', testid: 'consolidated-income-statement-link', title: 'Consolidated Income Statement', blurb: 'Your whole organization’s income and expenses over a period, every company side by side.' },
+  { href: '/reports/consolidated-cash-flow', testid: 'consolidated-cash-flow-link', title: 'Consolidated Cash-Flow Statement', blurb: 'Your whole organization’s cash in and out over a period, every company side by side, transfers between them cancelled out.' },
 ] as const;
 
 export default async function ReportsPage() {

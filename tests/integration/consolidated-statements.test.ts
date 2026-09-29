@@ -26,7 +26,9 @@ import { addCompanyToOrganization, createOrganization } from '@/server/organizat
 import {
   ConsolidationError,
   getBalanceSheet,
+  getCashFlowStatement,
   getConsolidatedBalanceSheet,
+  getConsolidatedCashFlow,
   getConsolidatedIncomeStatement,
   getIncomeStatement,
   type ConsolidatedRow,
@@ -184,6 +186,45 @@ describe('consolidated income statement', () => {
     expect(cis.netIncome.total).toBe('300.0000');
     expect(cis.netIncome.byCompany[g.a]).toBe(own[0]!.netIncome);
     for (const section of [cis.revenue, cis.cogs, cis.expenses]) expect(section.elimination).toBe('0.0000');
+  });
+});
+
+describe('consolidated cash flow (LL-125)', () => {
+  it('each column is the company\'s own cash flow; a matched transfer cancels out; the group reconciles to its cash', async () => {
+    const g = await group();
+    await transfer(g, true);
+    const cf = await getConsolidatedCashFlow(g.owner, g.a, '2026-01-01', AS_OF);
+    for (const id of [g.a, g.b]) {
+      const own = await getCashFlowStatement(g.owner, id, '2026-01-01', AS_OF);
+      expect(cf.operating.byCompany[id]).toBe(own.operatingTotal);
+      expect(cf.netChangeInCash.byCompany[id]).toBe(own.netChangeInCash);
+      expect(cf.endingCash.byCompany[id]).toBe(own.endingCash);
+    }
+    const ic = row(cf.operating.rows, 'ic:balances')!;
+    expect(ic.byCompany).toEqual({ [g.a]: '-300.0000', [g.b]: '300.0000' });
+    expect([ic.elimination, ic.total]).toEqual(['0.0000', '0.0000']);
+    expect(row(cf.operating.rows, 'ic:in-transit')).toBeUndefined();
+    expect(row(cf.operating.rows, 'derived:net-income')!.total).toBe('300.0000'); // 500 − 200
+    expect(cf.netChangeInCash.total).toBe('300.0000'); // Alpha 200 + Beta 100
+    expect(cf.reconciled).toBe(true);
+  });
+
+  it('a transfer one side has not recorded yet is cash in transit — it reduces the group\'s cash until it lands', async () => {
+    const g = await group();
+    await transfer(g, false);
+    const cf = await getConsolidatedCashFlow(g.owner, g.a, '2026-01-01', AS_OF);
+    expect(row(cf.operating.rows, 'ic:balances')).toMatchObject({ elimination: '300.0000', total: '0.0000' });
+    expect(row(cf.operating.rows, 'ic:in-transit')).toMatchObject({ elimination: '-300.0000', total: '-300.0000' });
+    expect(cf.netChangeInCash.total).toBe('0.0000'); // Alpha +500 −300, Beta −200: the 300 is on its way
+    expect(cf.endingCash.total).toBe('0.0000');
+    expect(cf.reconciled).toBe(true);
+  });
+
+  it('needs every member, like the other consolidated statements', async () => {
+    const g = await group();
+    const viewer = await makeUser();
+    await insertMembership(g.a, viewer, 'READ_ONLY');
+    await expect(getConsolidatedCashFlow(viewer, g.a, '2026-01-01', AS_OF)).rejects.toMatchObject({ code: 'MEMBER_ACCESS_REQUIRED', companies: ['Beta Co'] });
   });
 });
 

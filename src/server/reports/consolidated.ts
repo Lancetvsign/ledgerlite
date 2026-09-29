@@ -386,3 +386,147 @@ export async function getConsolidatedIncomeStatement(
     netIncome: { byCompany: ni, total: gpTotal.minus(toMoney(expenses.total)).toFixed(4) },
   };
 }
+
+export interface ConsolidatedCashFlow {
+  readonly fromDate: string;
+  readonly toDate: string;
+  readonly organizationName: string;
+  readonly members: readonly ConsolidationMember[];
+  /** Net income (first row) + working-capital adjustments + the intercompany rows. */
+  readonly operating: ConsolidatedSection;
+  readonly investing: ConsolidatedSection;
+  readonly financing: ConsolidatedSection;
+  /** Balance-sheet accounts without a cash-flow category — should be empty on a well-classified chart. */
+  readonly uncategorized: ConsolidatedSection;
+  readonly netChangeInCash: { readonly byCompany: Readonly<Record<string, string>>; readonly total: string };
+  readonly beginningCash: { readonly byCompany: Readonly<Record<string, string>>; readonly total: string };
+  readonly endingCash: { readonly byCompany: Readonly<Record<string, string>>; readonly total: string };
+  /** For the group and every company: net change = ending − beginning cash, exactly. */
+  readonly reconciled: boolean;
+}
+
+type DeltaSqlRow = AccountSqlRow & { cash_flow_category: string | null };
+
+/**
+ * LL-125 — the consolidated cash-flow statement (indirect method, as `cash-flow.ts`): per company,
+ * net income + the cash effect of every non-cash balance-sheet account's change (−Δ(debit − credit)),
+ * by the account's cash-flow category; cash accounts are the reconciliation target. Intercompany pair
+ * accounts (all OPERATING) move in opposite directions in the two companies of a transfer, so across
+ * the group their effects cancel: they are eliminated, and whatever does not cancel — a transfer one
+ * side has posted and the other not yet (LL-099) — is the change in cash in transit, shown on its own
+ * line. The consolidated column therefore equals the sum of the companies' columns, and it reconciles
+ * to the group's cash.
+ */
+export async function getConsolidatedCashFlow(
+  actorUserId: string,
+  companyId: string,
+  fromDate: string,
+  toDate: string,
+): Promise<ConsolidatedCashFlow> {
+  if (!isCalendarDate(fromDate) || !isCalendarDate(toDate)) {
+    throw new Error(`Consolidated cash flow dates must be calendar dates (YYYY-MM-DD): ${fromDate} – ${toDate}`);
+  }
+  if (fromDate > toDate) throw new Error(`Consolidated cash flow fromDate (${fromDate}) must be on or before toDate (${toDate}).`);
+  const { organizationName, members } = await consolidationScope(actorUserId, companyId);
+  const income = await getConsolidatedIncomeStatement(actorUserId, companyId, fromDate, toDate);
+  const db = getDb();
+
+  // As `cash-flow.ts`: balance-sheet deltas over the period, CLOSING entries and their reversals excluded.
+  const deltas = await db.execute<DeltaSqlRow>(sql`
+    select
+      a.company_id::text          as company_id,
+      a.id::text                  as account_id,
+      a.account_number            as account_number,
+      a.name                      as account_name,
+      a.account_type::text        as account_type,
+      a.system_account_type       as system_account_type,
+      a.cash_flow_category::text  as cash_flow_category,
+      (sum(l.debit) - sum(l.credit))::numeric(19,4)::text as amount
+    from accounts a
+    join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+    join journal_entries e on e.id = l.journal_entry_id
+    where a.company_id in (${memberIdsSql(members)})
+      and a.account_type in ('ASSET', 'LIABILITY', 'EQUITY')
+      and e.status in ('POSTED', 'REVERSED')
+      and e.source_type <> 'CLOSING'
+      and not exists (select 1 from journal_entries oe where oe.id = e.reversal_of_id and oe.source_type = 'CLOSING')
+      and e.posting_date between ${fromDate} and ${toDate}
+    group by a.company_id, a.id, a.account_number, a.name, a.account_type, a.system_account_type, a.cash_flow_category
+    having (sum(l.debit) - sum(l.credit)) <> 0`);
+
+  const shared = await sharedNumbersOf(members);
+  // The cash effect of a non-cash account is −Δ(debit − credit).
+  const adjustments = deltas.rows
+    .filter((r) => !(r.account_type === 'ASSET' && r.cash_flow_category === 'CASH'))
+    .map((r) => ({ ...toAmounted(r), amount: toMoney(r.amount).negated().toFixed(4), category: r.cash_flow_category }));
+  const isIntercompany = (a: { systemAccountType: string | null }) => a.systemAccountType !== null && INTERCOMPANY_ROLES.has(a.systemAccountType);
+  const rowsOf = (category: string) => assembleRows(adjustments.filter((a) => a.category === category), members, companyId, shared);
+
+  const icByCompany: Record<string, string> = {};
+  for (const a of adjustments.filter(isIntercompany)) {
+    icByCompany[a.companyId] = toMoney(icByCompany[a.companyId] ?? '0').plus(toMoney(a.amount)).toFixed(4);
+  }
+  const icTotal = sumMoney(Object.values(icByCompany));
+  const operatingRows: ConsolidatedRow[] = [
+    syntheticRow('derived:net-income', 'Net income', { ...income.netIncome.byCompany }, '0.0000'),
+    ...rowsOf('OPERATING'),
+  ];
+  if (Object.keys(icByCompany).length > 0) {
+    operatingRows.push(syntheticRow('ic:balances', 'Intercompany balances (change)', icByCompany, icTotal.negated().toFixed(4)));
+    if (!icTotal.isZero()) operatingRows.push(syntheticRow('ic:in-transit', 'Intercompany transfers in transit (change)', {}, icTotal.toFixed(4)));
+  }
+  const operating = sectionOf(operatingRows, members);
+  const investing = sectionOf(rowsOf('INVESTING'), members);
+  const financing = sectionOf(rowsOf('FINANCING'), members);
+  const uncategorized = sectionOf(
+    assembleRows(adjustments.filter((a) => !['OPERATING', 'INVESTING', 'FINANCING'].includes(a.category ?? '')), members, companyId, shared),
+    members,
+  );
+
+  const cash = await db.execute<{ company_id: string; beginning: string; ending: string }>(sql`
+    select
+      a.company_id::text as company_id,
+      coalesce(sum(case when e.posting_date <  ${fromDate} then l.debit - l.credit else 0 end), 0)::numeric(19,4)::text as beginning,
+      coalesce(sum(case when e.posting_date <= ${toDate}   then l.debit - l.credit else 0 end), 0)::numeric(19,4)::text as ending
+    from accounts a
+    join journal_lines l on l.company_id = a.company_id and l.account_id = a.id
+    join journal_entries e on e.id = l.journal_entry_id
+    where a.company_id in (${memberIdsSql(members)})
+      and a.account_type = 'ASSET'
+      and a.cash_flow_category = 'CASH'
+      and e.status in ('POSTED', 'REVERSED')
+    group by a.company_id`);
+
+  const change: Record<string, string> = {};
+  const beginning: Record<string, string> = {};
+  const ending: Record<string, string> = {};
+  for (const m of members) {
+    change[m.id] = [operating, investing, financing, uncategorized]
+      .reduce((sum, s) => sum.plus(toMoney(s.byCompany[m.id] ?? '0')), toMoney('0'))
+      .toFixed(4);
+    const c = cash.rows.find((r) => r.company_id === m.id);
+    beginning[m.id] = c?.beginning ?? '0.0000';
+    ending[m.id] = c?.ending ?? '0.0000';
+  }
+  const changeTotal = sumMoney([operating.total, investing.total, financing.total, uncategorized.total]);
+  const beginningTotal = sumMoney(Object.values(beginning));
+  const endingTotal = sumMoney(Object.values(ending));
+  const reconciled =
+    moneyEquals(changeTotal, endingTotal.minus(beginningTotal)) &&
+    members.every((m) => moneyEquals(toMoney(change[m.id] ?? '0'), toMoney(ending[m.id] ?? '0').minus(toMoney(beginning[m.id] ?? '0'))));
+
+  return {
+    fromDate,
+    toDate,
+    organizationName,
+    members,
+    operating,
+    investing,
+    financing,
+    uncategorized,
+    netChangeInCash: { byCompany: change, total: changeTotal.toFixed(4) },
+    beginningCash: { byCompany: beginning, total: beginningTotal.toFixed(4) },
+    endingCash: { byCompany: ending, total: endingTotal.toFixed(4) },
+    reconciled,
+  };
+}

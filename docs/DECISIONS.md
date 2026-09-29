@@ -2854,3 +2854,10 @@ per company — there is no organization-level role — and account numbers can 
 - Revisit if: organization-level roles arrive (access), intercompany P&L appears (income-statement eliminations), or
   multi-currency groups are allowed (translation).
 
+**Amendment (LL-125 — the consolidated cash-flow statement):** the same scope, access and worksheet, by the indirect
+method of the single-company statement (net income + the cash effect of every non-cash balance-sheet account's change,
+by cash-flow category; cash accounts are the reconciliation target; CLOSING entries excluded). The intercompany pair
+accounts' changes are eliminated — across the group they cancel, since a transfer moves both companies' pairs in
+opposite directions — and whatever does not cancel is the change in cash in transit, on its own line. The
+consolidated column therefore equals the sum of the companies' columns and reconciles to the group's cash.
+
