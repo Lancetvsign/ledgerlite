@@ -366,7 +366,8 @@ function statusOf(error: unknown): number | undefined {
  * "insufficient_quota"). Deliberately specific phrases: a 400 body can echo prompt text, and a
  * statement may well say "billing".
  */
-const CREDIT_REFUSAL = /credit balance is too low|insufficient_quota|exceeded your current quota/i;
+// LL-128: the AI Gateway's free tier refuses paid models with a 403 "Free tier users do not have access to this model" — a credit problem, not a key problem.
+const CREDIT_REFUSAL = /credit balance is too low|insufficient_quota|exceeded your current quota|free tier users do not have access/i;
 
 export type ModelFailureCode = Extract<
   BankImportErrorCode,

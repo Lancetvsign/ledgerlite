@@ -381,6 +381,9 @@ describe('classifyModelFailure (LL-113): the AI service, or the statement', () =
   it('recognises the providers\' credit refusals whatever their status', () => {
     expect(classifyModelFailure(apiError(400, 'Your credit balance is too low to access the Anthropic API.'))).toBe('EXTRACTION_OUT_OF_CREDIT');
     expect(classifyModelFailure(apiError(429, 'You exceeded your current quota (insufficient_quota).'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    // LL-128: the gateway's free tier refuses a paid model with a 403 — credits, not a rejected key.
+    expect(classifyModelFailure(apiError(403, 'Free tier users do not have access to this model'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    expect(classifyModelFailure(apiError(403, 'Forbidden'))).toBe('EXTRACTION_KEY_REJECTED');
     // A 400 that merely echoes statement text mentioning billing is still the statement's problem.
     expect(classifyModelFailure(apiError(400, 'invalid request near "BILLING STATEMENT — CREDIT BALANCE"'))).toBe('EXTRACTION_FAILED');
   });
