@@ -2892,3 +2892,37 @@ already exist (`payment_applications`, `bill_payment_applications`), and every d
 - An invoice paid before the report's range but invoiced inside it shows no revenue in the range (by design).
 - Revisit if: a cash-basis balance sheet is wanted, or unapplied payments / customer refunds arrive (they would need a rule).
 
+
+---
+
+## ADR-049 — Statement extraction runs at low effort inside a time budget
+
+**Status** Accepted · **Added by** LL-127 · **Decided by** product owner (2026-09-30: fix both, Sonnet 5 at low effort)
+
+### Context
+
+Uploading statement_05312025.pdf ended on the framework's "This page couldn't load". Production logs showed the PDF text read in
+1 s, then the model call (`claude-sonnet-5`, direct Anthropic route, no `effort` set — so the model's default, high, with adaptive
+thinking) taking 4 min 9 s for 44 rows. The lines then did not match the statement's totals, the LL-109 re-check began, and the
+platform's 300 s function limit killed the request. LL-114's "keep the first pass if the re-check fails" could not help: the
+function never got to run it.
+
+### Decision
+
+1. **Low effort.** Model calls send `output_config.effort = "low"` for the models that accept one (Sonnet 5 and later, Opus 4.5+,
+   Fable 5, Sonnet 4.6). Reading a statement is transcription; accuracy is guarded by the label/math checks (LL-109,
+   LL-123), not by extra reasoning. Models that would reject the setting (Haiku 4.5, Sonnet 4.5) are sent none.
+2. **A time budget.** The upload page declares `maxDuration = 300`; the extractor gives its model calls 240 s between them (the
+   rest is categorising, the staging transaction and the redirect). Each call carries an abort signal for what is left.
+3. **Nothing is lost to the clock.**
+   - A first pass that outlasts the budget fails the upload with `EXTRACTION_TIMED_OUT` and a notice (nothing imported).
+   - A re-check is started only if at least 60 s remain; if not, or if it is cut off, the first pass is staged and the review
+     says the re-check ran out of time (`reanalysis_failure = 'EXTRACTION_TIMED_OUT'`, LL-118's note).
+4. **Schema.** `bank_import_batches_reanalysis_failure_known` gains the seventh code (migration 0052; widens only).
+
+### Consequences
+
+- If low effort proves to misread lines on real statements, the LL-109 re-check catches a mismatch; raise effort per model via
+  this one setting.
+- The model call's duration and output-token count are now logged (counts only, §9), so the effect is visible in the logs.
+- The budget assumes the 300 s function limit; a plan with a different limit needs the two constants revisited together.

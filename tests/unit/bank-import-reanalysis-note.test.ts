@@ -12,6 +12,7 @@ describe('reanalysisNote', () => {
     }
     expect(new Set(notes).size).toBe(MODEL_FAILURE_CODES.length);
     expect(reanalysisNote('EXTRACTION_RATE_LIMITED')).toContain('busy');
+    expect(reanalysisNote('EXTRACTION_TIMED_OUT')).toContain('ran out of time'); // LL-127
   });
 
   it('says nothing when no re-check failed, or for a value it does not know', () => {

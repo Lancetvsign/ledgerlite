@@ -178,6 +178,68 @@ describe('createAiExtractor', () => {
     expect(err.code).toBe('EXTRACTION_KEY_REJECTED');
   });
 
+  describe('LL-127: effort and the time budget', () => {
+    const MISMATCHED = JSON.stringify({
+      summary: SUMMARY_5000,
+      transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1050.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }],
+    });
+    const answer = (text: string) => Promise.resolve({ content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] });
+    /** A model call that never answers; it ends only when the caller's abort signal fires. */
+    const hangsUntilAborted = (signal: AbortSignal | undefined) =>
+      new Promise<never>((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError'))));
+
+    it('asks the model for LOW effort where the model accepts one, and sends none where it would be rejected', async () => {
+      const seen: unknown[] = [];
+      const withId = (modelId: string) =>
+        new MockLanguageModelV4({
+          modelId,
+          doGenerate: (options) => {
+            seen.push((options.providerOptions as { anthropic?: { effort?: string } } | undefined)?.anthropic?.effort);
+            return answer(JSON.stringify({ summary: SUMMARY_5000, transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }] }));
+          },
+        });
+      await createAiExtractor({ model: withId('claude-sonnet-5'), readText: readStatement })({ bytes: BYTES });
+      await createAiExtractor({ model: withId('claude-sonnet-5-5'), readText: readStatement })({ bytes: BYTES });
+      await createAiExtractor({ model: withId('claude-haiku-4-5'), readText: readStatement })({ bytes: BYTES });
+      await createAiExtractor({ model: withId('claude-sonnet-4-5'), readText: readStatement })({ bytes: BYTES });
+      expect(seen).toEqual(['low', 'low', undefined, undefined]);
+    });
+
+    it('a FIRST pass that outlasts the budget is aborted and fails the upload with EXTRACTION_TIMED_OUT — no second call, no crash page', async () => {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: (options) => { calls += 1; return hangsUntilAborted(options.abortSignal); } });
+      const err = await errOf(createAiExtractor({ model, readText: readStatement, budgetMs: 40 })({ bytes: BYTES }));
+      expect(err.code).toBe('EXTRACTION_TIMED_OUT');
+      expect(err.message).not.toContain('DEPOSIT'); // §9: no statement text
+      expect(calls).toBe(1);
+    });
+
+    it('with too little time left for a re-check, the first pass is staged with its gap and the reason is recorded', async () => {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: () => { calls += 1; return answer(MISMATCHED); } });
+      // 5 s budget but a re-check needs 60 s: never started.
+      const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement, budgetMs: 5_000 })({ bytes: BYTES }));
+      expect(calls).toBe(1);
+      expect(out.attempts).toBe(1);
+      expect(out.transactions[0]!.amount).toBe('1050.00');
+      expect(out.reanalysisFailure).toBe('EXTRACTION_TIMED_OUT');
+    });
+
+    it('a re-check cut off by the budget keeps the first pass, recorded as timed out', async () => {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doGenerate: (options) => (++calls === 1 ? answer(MISMATCHED) : hangsUntilAborted(options.abortSignal)) });
+      const out = toExtractionOutput(await createAiExtractor({ model, readText: readStatement, budgetMs: 300, minRecheckMs: 50 })({ bytes: BYTES }));
+      expect(calls).toBe(2);
+      expect(out.attempts).toBe(1);
+      expect(out.transactions[0]!.amount).toBe('1050.00');
+      expect(out.reanalysisFailure).toBe('EXTRACTION_TIMED_OUT');
+    });
+
+    it('a timeout is not confused with a service failure: status-based classification is unchanged', () => {
+      expect(classifyModelFailure(new DOMException('aborted', 'AbortError'))).toBe('EXTRACTION_FAILED');
+    });
+  });
+
   it('never throws on a malformed figure: a bad row or summary is left for staging to report (LL-109); a figure not on the statement asks for one re-read (LL-123)', async () => {
     const { model, calls } = modelSaying(
       JSON.stringify({

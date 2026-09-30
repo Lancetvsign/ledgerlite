@@ -100,7 +100,7 @@ export const bankImportBatches = pgTable(
     index('bank_import_batches_company_idx').on(table.companyId, table.createdAt),
     check(
       'bank_import_batches_reanalysis_failure_known',
-      sql`${table.reanalysisFailure} is null or ${table.reanalysisFailure} in ('EXTRACTION_FAILED', 'EXTRACTION_KEY_REJECTED', 'EXTRACTION_OUT_OF_CREDIT', 'EXTRACTION_MODEL_UNAVAILABLE', 'EXTRACTION_RATE_LIMITED', 'EXTRACTION_SERVICE_UNAVAILABLE')`,
+      sql`${table.reanalysisFailure} is null or ${table.reanalysisFailure} in ('EXTRACTION_FAILED', 'EXTRACTION_KEY_REJECTED', 'EXTRACTION_OUT_OF_CREDIT', 'EXTRACTION_MODEL_UNAVAILABLE', 'EXTRACTION_RATE_LIMITED', 'EXTRACTION_SERVICE_UNAVAILABLE', 'EXTRACTION_TIMED_OUT')`,
     ),
   ],
 );

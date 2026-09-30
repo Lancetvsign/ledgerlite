@@ -15,6 +15,7 @@ export function uploadNoticeFrom(error: string | undefined): string | null {
   if (error === 'EXTRACTION_MODEL_UNAVAILABLE') return 'The AI model configured for reading statements was not found. Your statement is not the problem: an administrator needs to check the model setting.';
   if (error === 'EXTRACTION_RATE_LIMITED') return 'The AI service that reads statements is busy right now. Your statement is not the problem: wait a minute, then upload it again.';
   if (error === 'EXTRACTION_SERVICE_UNAVAILABLE') return 'The AI service that reads statements is temporarily unavailable. Your statement is not the problem: try again in a few minutes.';
+  if (error === 'EXTRACTION_TIMED_OUT') return 'The AI took too long reading this statement and was stopped, so nothing was imported. Try uploading it again in a few minutes.';
   if (error === 'SCANNED_PDF') return 'That PDF appears to be a scanned image; a text-based statement is needed.';
   if (error === 'INVALID_BANK_ACCOUNT') return 'Choose an active bank account or credit card.';
   if (error === 'ONLY_CARDS_SHAREABLE') return 'Only a credit-card statement can be shared with the organization — upload it without sharing, or choose the card account.';
