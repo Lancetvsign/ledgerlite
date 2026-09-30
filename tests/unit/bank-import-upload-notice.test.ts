@@ -17,6 +17,13 @@ describe('upload notices', () => {
     expect(uploadNoticeFrom('EXTRACTION_OUT_OF_CREDIT')).toContain('out of credit');
   });
 
+  it('LL-127: a timed-out read says nothing was imported and to try again — never that the statement had no transactions', () => {
+    const text = uploadNoticeFrom('EXTRACTION_TIMED_OUT');
+    expect(text).toContain('too long');
+    expect(text).toContain('nothing was imported');
+    expect(text).not.toContain('No usable transactions');
+  });
+
   it('keeps the statement-side messages as they were', () => {
     expect(uploadNoticeFrom(undefined)).toBeNull();
     expect(uploadNoticeFrom('EXTRACTION_FAILED')).toBe('No usable transactions could be extracted from that statement.');

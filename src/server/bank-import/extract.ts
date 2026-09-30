@@ -239,13 +239,31 @@ export interface AiExtractorOptions {
   readonly model?: LanguageModel;
   /** PDF → text; injectable so unit tests need neither a PDF nor pdf.js. */
   readonly readText?: (bytes: Uint8Array) => Promise<string>;
+  /** Total time the model calls may take (default `EXTRACTION_TIME_BUDGET_MS`); injectable for tests. */
+  readonly budgetMs?: number;
+  /** The least time that must remain for the re-check to start (default `MIN_RECHECK_MS`). */
+  readonly minRecheckMs?: number;
 }
+
+/**
+ * LL-127: the upload runs inside one 300 s serverless request (`maxDuration` on the upload page).
+ * The model calls get 240 s between them; the rest is for categorising, the staging transaction and
+ * the redirect. Past it the call is aborted and reported (EXTRACTION_TIMED_OUT) instead of the
+ * platform killing the request and showing the reviewer a crash page.
+ */
+export const EXTRACTION_TIME_BUDGET_MS = 240_000;
+/** A re-check that cannot have at least this long is not started — the first pass is staged instead. */
+export const MIN_RECHECK_MS = 60_000;
 
 export function createAiExtractor(options: AiExtractorOptions = {}): TransactionExtractor {
   const readText = options.readText ?? extractPdfText;
   const model: LanguageModel = options.model ?? resolveModel();
+  const budgetMs = options.budgetMs ?? EXTRACTION_TIME_BUDGET_MS;
+  const minRecheckMs = options.minRecheckMs ?? MIN_RECHECK_MS;
 
   return async ({ bytes, context }) => {
+    const startedAt = Date.now();
+    const remaining = (): number => budgetMs - (Date.now() - startedAt);
     const text = await readText(bytes); // throws SCANNED_PDF / EXTRACTION_FAILED itself
     const contextPrompt = buildContextPrompt(context);
     const kind = context?.statementKind ?? 'bank';
@@ -257,15 +275,21 @@ export function createAiExtractor(options: AiExtractorOptions = {}): Transaction
     // LL-114: the second pass is an attempt to improve a sound first answer, never a condition
     // of it — if it fails (the AI service refused or was unreachable, or answered unusably),
     // the first pass is staged and the review shows its gap, rather than losing the upload.
-    const first = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`), text, kind);
+    // LL-127: each call is bounded by what is left of the time budget; a re-check that cannot have
+    // `minRecheckMs` is not started, and one that is cut off falls back to the first pass the same way.
+    const first = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}`, remaining()), text, kind);
     const checked = verify(first);
     const problems = summaryProblems(first, checked);
     if (problems.length === 0) return { ...first, attempts: 1 };
     log.info('bank-import: statement figures do not hold — re-analysing', { stage: 'verify', attempt: 1, ...figures(checked), ...figureCounts(first) });
+    if (remaining() < minRecheckMs) {
+      log.warn('bank-import: no time left for a re-analysis — staging the first pass', { stage: 'verify', attempt: 2, outcome: 'EXTRACTION_TIMED_OUT', remainingMs: Math.max(0, remaining()) });
+      return { ...first, attempts: 1, reanalysisFailure: 'EXTRACTION_TIMED_OUT' };
+    }
     const feedback = `\n\nYour previous answer did not hold together: ${problems.join(' ')} Re-read the statement: copy EVERY line of its account summary with its label and amount exactly as printed, and EVERY transaction line (look for a line you dropped, merged, split or misread, and for a subtotal you included by mistake). Do not invent lines or figures.`;
     let second: ExtractionOutput;
     try {
-      second = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`), text, kind);
+      second = withFigures(await callModel(model, SYSTEM_PROMPT, `${contextPrompt}Statement text:\n\n${text}${feedback}`, remaining()), text, kind);
     } catch (error) {
       if (!(error instanceof BankImportError)) throw error;
       // callModel has already logged the failure (stage, status, outcome); say what happens next.
@@ -352,9 +376,10 @@ export type ModelFailureCode = Extract<
   | 'EXTRACTION_MODEL_UNAVAILABLE'
   | 'EXTRACTION_RATE_LIMITED'
   | 'EXTRACTION_SERVICE_UNAVAILABLE'
+  | 'EXTRACTION_TIMED_OUT'
 >;
 
-/** LL-118: every model-failure code, in one place — the database CHECK on `reanalysis_failure` lists the same six. */
+/** LL-118: every model-failure code, in one place — the database CHECK on `reanalysis_failure` lists the same seven. */
 export const MODEL_FAILURE_CODES: readonly ModelFailureCode[] = [
   'EXTRACTION_FAILED',
   'EXTRACTION_KEY_REJECTED',
@@ -362,6 +387,7 @@ export const MODEL_FAILURE_CODES: readonly ModelFailureCode[] = [
   'EXTRACTION_MODEL_UNAVAILABLE',
   'EXTRACTION_RATE_LIMITED',
   'EXTRACTION_SERVICE_UNAVAILABLE',
+  'EXTRACTION_TIMED_OUT',
 ];
 
 export function isModelFailureCode(value: unknown): value is ModelFailureCode {
@@ -396,21 +422,45 @@ const MODEL_FAILURE_MESSAGE: Record<ModelFailureCode, string> = {
   EXTRACTION_MODEL_UNAVAILABLE: 'The configured AI model was not found.',
   EXTRACTION_RATE_LIMITED: 'The AI service is rate-limiting requests.',
   EXTRACTION_SERVICE_UNAVAILABLE: 'The AI service is unavailable.',
+  EXTRACTION_TIMED_OUT: 'The AI took too long reading the statement.',
 };
 
-async function callModel(model: LanguageModel, system: string, prompt: string): Promise<ModelAnswer> {
+/**
+ * LL-127: models that take an `effort` setting (Sonnet 5 and later, Opus 4.5+, Fable 5, Sonnet 4.6).
+ * Haiku 4.5 and Sonnet 4.5 reject it with a 400, so it is sent only where it is accepted.
+ */
+const EFFORT_MODELS = /claude-(sonnet-5|sonnet-4-6|opus-4-[5-8]|opus-5|fable-5)/;
+
+function modelIdOf(model: LanguageModel): string {
+  return typeof model === 'string' ? model : model.modelId;
+}
+
+async function callModel(model: LanguageModel, system: string, prompt: string, timeoutMs: number): Promise<ModelAnswer> {
     let output: z.infer<typeof modelOutputSchema>;
+    let outputTokens: number | undefined;
+    // LL-127: bounded by the caller's time budget — an aborted call is reported, not left to the platform's kill.
+    const signal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
+    const startedAt = Date.now();
     try {
       const result = await generateText({
         model,
         system,
         prompt,
         output: Output.object({ schema: modelOutputSchema }),
+        abortSignal: signal,
+        // LL-127: reading a statement is transcription, not reasoning. The default effort ran a 44-row
+        // statement for over four minutes; low effort keeps the same model and finishes far sooner.
+        ...(EFFORT_MODELS.test(modelIdOf(model)) ? { providerOptions: { anthropic: { effort: 'low' } } } : {}),
         // No explicit temperature: some models reject one in structured-output mode, and
         // the gateway surfaces that as an opaque internal error.
       });
       output = result.output;
+      outputTokens = result.usage.outputTokens;
     } catch (thrown) {
+      if (signal.aborted) {
+        log.warn('bank-import: model extraction timed out', { stage: 'model', route: describeExtractionRoute(), outcome: 'EXTRACTION_TIMED_OUT', ms: Date.now() - startedAt });
+        throw new BankImportError('EXTRACTION_TIMED_OUT', MODEL_FAILURE_MESSAGE.EXTRACTION_TIMED_OUT);
+      }
       // No model output, provider message or file text in the error (§9) — the reviewer
       // only needs to know the extraction did not succeed, and (LL-113) whether that was the
       // statement or the AI service. Operators need to know WHICH stage failed: log the error
@@ -438,7 +488,7 @@ async function callModel(model: LanguageModel, system: string, prompt: string): 
       });
       throw new BankImportError(outcome, MODEL_FAILURE_MESSAGE[outcome]);
     }
-    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined, figures: output.summary?.figures.length ?? 0 });
+    log.info('bank-import: model extraction succeeded', { stage: 'model', route: describeExtractionRoute(), rows: output.transactions.length, summary: output.summary !== undefined, figures: output.summary?.figures.length ?? 0, ms: Date.now() - startedAt, outputTokens });
     // Canonicalise the common notations ($1,500.00, (120.50), 06/03/2026) before the strict
     // validator sees them; anything else passes through untouched and is rejected there.
     const transactions = output.transactions.map(normalizeExtractedRow) as ExtractedTransaction[];

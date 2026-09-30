@@ -23,6 +23,8 @@ import { UploadSubmitButton } from './upload-submit-button';
  */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// LL-127: the upload Server Action runs the AI read; the extractor budgets 240 s of this (EXTRACTION_TIME_BUDGET_MS).
+export const maxDuration = 300;
 
 export default async function BankImportPage({
   searchParams,

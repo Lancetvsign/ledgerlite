@@ -12,6 +12,7 @@ const REASON: Record<ModelFailureCode, string> = {
   EXTRACTION_OUT_OF_CREDIT: 'the AI service account was out of credit',
   EXTRACTION_MODEL_UNAVAILABLE: 'the configured AI model was not found',
   EXTRACTION_FAILED: 'its second answer could not be used',
+  EXTRACTION_TIMED_OUT: 'it ran out of time',
 };
 
 export function reanalysisNote(code: string | null): string | null {

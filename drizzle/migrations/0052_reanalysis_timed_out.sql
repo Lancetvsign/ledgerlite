@@ -1,0 +1,2 @@
+ALTER TABLE "bank_import_batches" DROP CONSTRAINT "bank_import_batches_reanalysis_failure_known";--> statement-breakpoint
+ALTER TABLE "bank_import_batches" ADD CONSTRAINT "bank_import_batches_reanalysis_failure_known" CHECK ("bank_import_batches"."reanalysis_failure" is null or "bank_import_batches"."reanalysis_failure" in ('EXTRACTION_FAILED', 'EXTRACTION_KEY_REJECTED', 'EXTRACTION_OUT_OF_CREDIT', 'EXTRACTION_MODEL_UNAVAILABLE', 'EXTRACTION_RATE_LIMITED', 'EXTRACTION_SERVICE_UNAVAILABLE', 'EXTRACTION_TIMED_OUT'));

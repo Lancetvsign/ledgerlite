@@ -23,6 +23,8 @@ export type BankImportErrorCode =
   | 'EXTRACTION_RATE_LIMITED'
   /** The service is down or unreachable (5xx, overloaded, network) — try again later. */
   | 'EXTRACTION_SERVICE_UNAVAILABLE'
+  /** LL-127: the AI did not answer within the upload's time budget and was stopped — nothing was imported. */
+  | 'EXTRACTION_TIMED_OUT'
   /** The uploaded PDF has no text layer (a scan/image) — unsupported in v1. */
   | 'SCANNED_PDF'
   /** The chosen bank account is missing, inactive, not an asset, or not a cash account. */
