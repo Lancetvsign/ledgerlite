@@ -212,16 +212,18 @@ committed (§9); migrations are never run against production by hand — the wor
 | `BETTER_AUTH_SECRET` | `.env.local` | distinct value | distinct value |
 | `BETTER_AUTH_URL` | `http://localhost:3000` | the preview URL | the production domain |
 | `AI_GATEWAY_API_KEY` | `.env.local` (optional) | not needed — Vercel OIDC | not needed — Vercel OIDC |
-| `ANTHROPIC_API_KEY` | optional | optional | optional — when set, extraction calls Anthropic directly instead of the gateway |
-| `BANK_IMPORT_MODEL` | optional | optional | optional (`provider/model` id) |
+| `ANTHROPIC_API_KEY` | optional | optional | optional — used only when `BANK_IMPORT_MODEL` names an Anthropic model (LL-128); then extraction calls Anthropic directly |
+| `BANK_IMPORT_MODEL` | optional | optional | optional (`provider/model` id; default `openai/gpt-5.6-sol`) |
 | `BANK_IMPORT_TEST_EXTRACTOR` | e2e only (`playwright.config.ts`) | never | never |
 
 Bank-statement extraction (LL-076, ADR-034) calls a model through **Vercel AI Gateway**. On
 Vercel the gateway authenticates with the deployment's OIDC token, so nothing is provisioned
 per environment beyond enabling AI Gateway on the Vercel team (usage is billed there); locally a
-gateway API key is needed. **Or bypass the gateway:** set `ANTHROPIC_API_KEY` (Production scope) and the
-extractor calls Anthropic directly — no gateway tier or credit rules, usage billed on that Anthropic
-account. Without any credential the upload page reports "extraction not configured" and the rest of
+gateway API key is needed. **The default model is `openai/gpt-5.6-sol` (LL-128), read through the gateway** — the
+gateway needs purchased credits (its free tier refuses paid models, see the go-live notes above) or an OpenAI key
+added under the team's AI Gateway settings (bring-your-own-key). **To use an Anthropic model instead:** set
+`BANK_IMPORT_MODEL=anthropic/claude-sonnet-5` and `ANTHROPIC_API_KEY` (Production scope) and the extractor calls
+Anthropic directly — no gateway tier or credit rules, usage billed on that Anthropic account. Without any credential the upload page reports "extraction not configured" and the rest of
 the app is unaffected. Note that Preview deployments also carry the
 OIDC token, so a statement uploaded on a preview URL performs real, billed extraction.
 

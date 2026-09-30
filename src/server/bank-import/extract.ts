@@ -155,8 +155,8 @@ export const cannedExtractor: TransactionExtractor = (input) =>
 // AI extractor
 // ---------------------------------------------------------------------------------------
 
-/** Default model, overridable per environment (a `provider/model` id routed by the gateway). */
-export const DEFAULT_BANK_IMPORT_MODEL = 'anthropic/claude-sonnet-5';
+/** Default model, overridable per environment (a `provider/model` id routed by the gateway). LL-128: was `anthropic/claude-sonnet-5`. */
+export const DEFAULT_BANK_IMPORT_MODEL = 'openai/gpt-5.6-sol';
 
 /**
  * What the model is asked to produce. Amounts are STRINGS (a JSON number would lose
@@ -431,8 +431,27 @@ const MODEL_FAILURE_MESSAGE: Record<ModelFailureCode, string> = {
  */
 const EFFORT_MODELS = /claude-(sonnet-5|sonnet-4-6|opus-4-[5-8]|opus-5|fable-5)/;
 
+/**
+ * LL-128: OpenAI reasoning models (gpt-5.x / gpt-6 / the o-series) take `reasoningEffort`; older chat models
+ * (gpt-4o …) reject it with a 400, so it is sent only where it is accepted.
+ */
+const OPENAI_REASONING_MODELS = /^openai\/(gpt-[56]|o[1-9])/;
+
 function modelIdOf(model: LanguageModel): string {
   return typeof model === 'string' ? model : model.modelId;
+}
+
+/**
+ * Per-provider request options for reading a statement (LL-127 effort, LL-128 OpenAI). Keyed by the provider's
+ * own name, which the gateway forwards. OpenAI is also told NOT to force strict JSON-schema mode: strict mode
+ * requires every property to be required, and this request schema has optional ones (summary, category, role).
+ */
+function providerOptionsFor(modelId: string): { providerOptions?: Record<string, Record<string, string | boolean>> } {
+  if (EFFORT_MODELS.test(modelId)) return { providerOptions: { anthropic: { effort: 'low' } } };
+  if (modelId.startsWith('openai/')) {
+    return { providerOptions: { openai: { strictJsonSchema: false, ...(OPENAI_REASONING_MODELS.test(modelId) ? { reasoningEffort: 'low' } : {}) } } };
+  }
+  return {};
 }
 
 async function callModel(model: LanguageModel, system: string, prompt: string, timeoutMs: number): Promise<ModelAnswer> {
@@ -450,7 +469,7 @@ async function callModel(model: LanguageModel, system: string, prompt: string, t
         abortSignal: signal,
         // LL-127: reading a statement is transcription, not reasoning. The default effort ran a 44-row
         // statement for over four minutes; low effort keeps the same model and finishes far sooner.
-        ...(EFFORT_MODELS.test(modelIdOf(model)) ? { providerOptions: { anthropic: { effort: 'low' } } } : {}),
+        ...providerOptionsFor(modelIdOf(model)),
         // No explicit temperature: some models reject one in structured-output mode, and
         // the gateway surfaces that as an opaque internal error.
       });
@@ -531,9 +550,18 @@ function nonEmpty(v: string | undefined): string | undefined {
   return t === undefined || t === '' ? undefined : t;
 }
 
-/** A direct Anthropic API key bypasses the gateway entirely (billed on the Anthropic account). */
+/** A direct Anthropic API key bypasses the gateway — for an Anthropic model only (LL-128). */
 function anthropicKey(): string | undefined {
   return nonEmpty(process.env.ANTHROPIC_API_KEY);
+}
+
+/** The configured `provider/model` id: `BANK_IMPORT_MODEL`, else the default. */
+function configuredModelId(): string {
+  return nonEmpty(process.env.BANK_IMPORT_MODEL) ?? DEFAULT_BANK_IMPORT_MODEL;
+}
+
+function isAnthropicModelId(id: string): boolean {
+  return id.startsWith('anthropic/') || id.startsWith('claude-');
 }
 
 /**
@@ -551,37 +579,28 @@ export type ExtractionRoute = 'test' | 'anthropic' | 'gateway' | 'none';
 /**
  * Which way statement extraction will go in this environment, in priority order:
  *   test    — BANK_IMPORT_TEST_EXTRACTOR=1 (canned statement; e2e/dev only)
- *   anthropic — ANTHROPIC_API_KEY set: the model is called directly (no gateway, no
- *               gateway tier rules; usage billed on that Anthropic account)
- *   gateway — a Vercel AI Gateway credential (API key or the deployment's OIDC token)
+ *   anthropic — the configured model is an Anthropic one AND ANTHROPIC_API_KEY is set: called directly
+ *               (no gateway, no gateway tier rules; usage billed on that Anthropic account)
+ *   gateway — a Vercel AI Gateway credential (API key or the deployment's OIDC token): any other model,
+ *               e.g. the default `openai/gpt-5.6-sol` (LL-128)
  *   none    — nothing configured; the upload page says so
+ * LL-128: the MODEL decides — an `ANTHROPIC_API_KEY` left in place no longer captures a non-Anthropic model.
  */
 export function describeExtractionRoute(): ExtractionRoute {
   if (testExtractorEnabled()) return 'test';
-  if (anthropicKey() !== undefined) return 'anthropic';
+  if (anthropicKey() !== undefined && isAnthropicModelId(configuredModelId())) return 'anthropic';
   if (gatewayCredentialPresent()) return 'gateway';
   return 'none';
 }
 
 /**
- * The model for this environment. `BANK_IMPORT_MODEL` is a gateway-style `provider/model`
- * id; on the direct-Anthropic route only Anthropic models make sense, so a non-Anthropic
- * override falls back to the default and says so.
+ * The model for this environment. `BANK_IMPORT_MODEL` is a gateway-style `provider/model` id; a plain
+ * string routes through the gateway, and on the direct-Anthropic route the id is handed to `@ai-sdk/anthropic`.
  */
 function resolveModel(): LanguageModel {
-  const configured = nonEmpty(process.env.BANK_IMPORT_MODEL) ?? DEFAULT_BANK_IMPORT_MODEL;
-  const key = anthropicKey();
-  if (key === undefined) return configured; // a plain string routes through the gateway
-  const [provider, ...rest] = configured.split('/');
-  const modelId = rest.length === 0 ? configured : rest.join('/');
-  if (rest.length > 0 && provider !== 'anthropic') {
-    log.warn('bank-import: BANK_IMPORT_MODEL is not an Anthropic model; using the default on the direct route', {
-      configured,
-      using: DEFAULT_BANK_IMPORT_MODEL,
-    });
-    return createAnthropic({ apiKey: key })(DEFAULT_BANK_IMPORT_MODEL.replace(/^anthropic\//, ''));
-  }
-  return createAnthropic({ apiKey: key })(modelId);
+  const configured = configuredModelId();
+  if (describeExtractionRoute() !== 'anthropic') return configured;
+  return createAnthropic({ apiKey: anthropicKey() ?? '' })(configured.replace(/^anthropic\//, ''));
 }
 
 /** Whether an extractor is available (drives the upload page's "not configured" state). */

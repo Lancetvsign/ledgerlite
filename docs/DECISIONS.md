@@ -2926,3 +2926,41 @@ function never got to run it.
   this one setting.
 - The model call's duration and output-token count are now logged (counts only, §9), so the effect is visible in the logs.
 - The budget assumes the 300 s function limit; a plan with a different limit needs the two constants revisited together.
+
+---
+
+## ADR-050 — Statement extraction moves to OpenAI GPT-5.6 Sol through the AI Gateway
+
+**Status** Accepted · **Added by** LL-128 · **Decided by** product owner (2026-09-30: "stop using the current AI model … switch to GPT-5.6 Sol") · Amends ADR-034 and ADR-049
+
+### Context
+
+Statement extraction read with Anthropic `claude-sonnet-5`, called directly with `ANTHROPIC_API_KEY` (ADR-034's go-live
+amendment; the gateway's free tier had refused the model). Reads were slow (ADR-049). The owner chose OpenAI GPT-5.6 Sol.
+
+### Decision
+
+1. **Default model** `openai/gpt-5.6-sol` (`DEFAULT_BANK_IMPORT_MODEL`), still overridable by `BANK_IMPORT_MODEL`. It is
+   called through **Vercel AI Gateway** (already a dependency) — no new package, no new architecture.
+2. **The model decides the route.** A direct-Anthropic call happens only when the configured model is an Anthropic one
+   *and* `ANTHROPIC_API_KEY` is set; any other model goes through the gateway. A leftover `ANTHROPIC_API_KEY` no longer
+   captures a non-Anthropic model (previously it silently fell back to Sonnet with a warning). Rolling back is
+   `BANK_IMPORT_MODEL=anthropic/claude-sonnet-5` with the key still set.
+3. **Request options per provider.** OpenAI reasoning models (gpt-5.x, gpt-6, o-series) are sent `reasoningEffort: "low"`
+   (ADR-049's reasoning: transcription, not reasoning); every OpenAI model is sent `strictJsonSchema: false`, because strict
+   mode requires all properties required and the request schema has optional ones. Anthropic keeps `effort: "low"`.
+4. **§9 exception (AGENTS.md), restated.** The statement's extracted text — payees, amounts, dates — is now transmitted to
+   OpenAI via the gateway instead of Anthropic. Nothing else changes: it is not logged, not persisted, not included in errors;
+   output is re-validated strictly and every line is reviewed by a person before posting. Retention and training terms are
+   those of the owner's AI Gateway / OpenAI arrangement and must be confirmed by the owner.
+5. **Everything downstream is unchanged:** the time budget (ADR-049), the label/math verification, the re-check, LL-113's
+   failure codes (a gateway credit refusal reads as "out of credit", a rejected credential as "key rejected").
+
+### Consequences
+
+- The gateway needs **purchased credits** (or an OpenAI key added to the team's gateway settings); its free tier refuses paid
+  models — the reason production used the direct Anthropic key originally.
+- Not exercised in CI (no real model, ADR-034). The first real upload is the acceptance test; the log lines carry the model
+  call's duration and any status code (`vercel logs`).
+- Revisit if: low reasoning effort misreads lines, or the gateway rejects `reasoningEffort` for this model (a 400 shows in the
+  logs as `statusCode: 400` on "model extraction failed").
