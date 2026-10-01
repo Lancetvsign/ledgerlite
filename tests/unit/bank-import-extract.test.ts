@@ -9,7 +9,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BankImportError } from '@/server/bank-import/errors';
-import { buildContextPrompt, cannedExtractor, classifyModelFailure, createAiExtractor, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor, toExtractionOutput } from '@/server/bank-import/extract';
+import { buildContextPrompt, cannedExtractor, classifyModelFailure, createAiExtractor, DEFAULT_BANK_IMPORT_MODEL, describeExtractionRoute, isExtractionConfigured, notConfiguredExtractor, resolveExtractor, toExtractionOutput } from '@/server/bank-import/extract';
 import { extractPdfText } from '@/server/bank-import/pdf-text';
 
 const usage = {
@@ -205,6 +205,28 @@ describe('createAiExtractor', () => {
       expect(seen).toEqual(['low', 'low', undefined, undefined]);
     });
 
+    it('LL-128: OpenAI models get low reasoning effort (reasoning models only) and are not forced into strict JSON-schema mode', async () => {
+      const seen: unknown[] = [];
+      const withId = (modelId: string) =>
+        new MockLanguageModelV4({
+          modelId,
+          doGenerate: (options) => {
+            seen.push(options.providerOptions);
+            return answer(JSON.stringify({ summary: SUMMARY_5000, transactions: [{ date: '2026-06-01', description: 'DEPOSIT ACME CORP', amount: '1500.00' }, { date: '2026-06-03', description: 'OFFICE DEPOT #1234', amount: '-120.50' }] }));
+          },
+        });
+      for (const id of ['openai/gpt-5.6-sol', 'openai/gpt-6.1-sol', 'openai/o4-mini', 'openai/gpt-4o', 'google/gemini-x']) {
+        await createAiExtractor({ model: withId(id), readText: readStatement })({ bytes: BYTES });
+      }
+      expect(seen).toEqual([
+        { openai: { strictJsonSchema: false, reasoningEffort: 'low' } },
+        { openai: { strictJsonSchema: false, reasoningEffort: 'low' } },
+        { openai: { strictJsonSchema: false, reasoningEffort: 'low' } },
+        { openai: { strictJsonSchema: false } }, // a non-reasoning chat model would 400 on reasoningEffort
+        undefined, // another provider: nothing Anthropic- or OpenAI-specific is sent
+      ]);
+    });
+
     it('a FIRST pass that outlasts the budget is aborted and fails the upload with EXTRACTION_TIMED_OUT — no second call, no crash page', async () => {
       let calls = 0;
       const model = new MockLanguageModelV4({ doGenerate: (options) => { calls += 1; return hangsUntilAborted(options.abortSignal); } });
@@ -359,6 +381,9 @@ describe('classifyModelFailure (LL-113): the AI service, or the statement', () =
   it('recognises the providers\' credit refusals whatever their status', () => {
     expect(classifyModelFailure(apiError(400, 'Your credit balance is too low to access the Anthropic API.'))).toBe('EXTRACTION_OUT_OF_CREDIT');
     expect(classifyModelFailure(apiError(429, 'You exceeded your current quota (insufficient_quota).'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    // LL-128: the gateway's free tier refuses a paid model with a 403 — credits, not a rejected key.
+    expect(classifyModelFailure(apiError(403, 'Free tier users do not have access to this model'))).toBe('EXTRACTION_OUT_OF_CREDIT');
+    expect(classifyModelFailure(apiError(403, 'Forbidden'))).toBe('EXTRACTION_KEY_REJECTED');
     // A 400 that merely echoes statement text mentioning billing is still the statement's problem.
     expect(classifyModelFailure(apiError(400, 'invalid request near "BILLING STATEMENT — CREDIT BALANCE"'))).toBe('EXTRACTION_FAILED');
   });
@@ -419,8 +444,25 @@ describe('resolveExtractor / isExtractionConfigured', () => {
     expect(resolveExtractor()).toBe(notConfiguredExtractor);
   });
 
-  it('a direct Anthropic key wins over the gateway (bypasses gateway tier rules)', () => {
+  it('LL-128: the default model is GPT-5.6 Sol, read through the gateway — a leftover Anthropic key does not capture it', () => {
+    expect(DEFAULT_BANK_IMPORT_MODEL).toBe('openai/gpt-5.6-sol');
     vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '');
+    vi.stubEnv('BANK_IMPORT_MODEL', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-synthetic-not-a-real-key');
+    vi.stubEnv('AI_GATEWAY_API_KEY', '');
+    vi.stubEnv('VERCEL_OIDC_TOKEN', '');
+    vi.stubEnv('VERCEL', '1'); // Vercel: the deployment's OIDC token reaches the gateway
+    expect(describeExtractionRoute()).toBe('gateway');
+    expect(isExtractionConfigured()).toBe(true);
+    // Locally with the Anthropic key but no gateway credential: the OpenAI model has nothing to reach it with.
+    vi.stubEnv('VERCEL', '');
+    expect(describeExtractionRoute()).toBe('none');
+    expect(isExtractionConfigured()).toBe(false);
+  });
+
+  it('a direct Anthropic key is used when an Anthropic model is chosen (bypasses gateway tier rules)', () => {
+    vi.stubEnv('BANK_IMPORT_TEST_EXTRACTOR', '');
+    vi.stubEnv('BANK_IMPORT_MODEL', 'anthropic/claude-sonnet-5');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-synthetic-not-a-real-key');
     vi.stubEnv('AI_GATEWAY_API_KEY', 'synthetic-not-a-real-key');
     vi.stubEnv('VERCEL', '1');
@@ -428,6 +470,9 @@ describe('resolveExtractor / isExtractionConfigured', () => {
     expect(isExtractionConfigured()).toBe(true);
     expect(resolveExtractor()).not.toBe(cannedExtractor);
     expect(resolveExtractor()).not.toBe(notConfiguredExtractor);
+    // An Anthropic model without its key goes through the gateway instead.
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    expect(describeExtractionRoute()).toBe('gateway');
   });
 
   it('uses the canned extractor when the test flag is set, even with credentials', () => {
